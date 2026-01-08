@@ -70,18 +70,55 @@ ADMIN_BEARER_TOKEN=your-admin-token-here-change-in-production
 
 ## Database Setup
 
+### 로컬 개발 환경
+
 ```bash
-# 마이그레이션 파일 생성
+# PostgreSQL이 설치되어 있어야 합니다
+# 데이터베이스 생성
+$ psql -U postgres -c "CREATE DATABASE ziggle_chatbot;"
+
+# 마이그레이션 파일 생성 (스키마 변경 시)
 $ bun run db:generate
 
-# 마이그레이션 실행 (스키마 적용)
+# 스키마를 데이터베이스에 적용
 $ bun run db:push
 
 # Drizzle Studio 실행 (데이터베이스 GUI)
 $ bun run db:studio
 ```
 
+### Docker 환경
+
+```bash
+# Docker Compose로 PostgreSQL + 애플리케이션 실행
+$ docker-compose up -d
+
+# 로그 확인
+$ docker-compose logs -f app
+
+# 서비스 중지
+$ docker-compose down
+
+# 데이터베이스 포함 전체 삭제
+$ docker-compose down -v
+```
+
+### Docker 마이그레이션 수동 실행
+
+```bash
+# 애플리케이션 컨테이너에서 마이그레이션 실행
+$ docker-compose exec app bun run db:push
+
+# 마이그레이션 파일 생성
+$ docker-compose exec app bun run db:generate
+
+# Drizzle Studio 실행 (로컬에서 Docker DB 접속)
+$ bun run db:studio
+```
+
 ## Compile and run the project
+
+### 로컬 환경
 
 ```bash
 # development
@@ -92,6 +129,20 @@ $ bun run start:dev
 
 # production mode
 $ bun run start:prod
+```
+
+### Docker 환경
+
+```bash
+# 개발 모드 (docker-compose.yml 수정 필요)
+$ docker-compose up
+
+# 백그라운드 실행
+$ docker-compose up -d
+
+# 프로덕션 빌드
+$ docker build -t ziggle-chatbot-be .
+$ docker run -p 3000:3000 --env-file .env ziggle-chatbot-be
 ```
 
 서버 실행 후 다음 URL에서 확인할 수 있습니다:
@@ -113,6 +164,44 @@ $ bun run start:prod
 - `PATCH /api/v1/admin/widget-keys/:widgetKeyId/revoke` - 위젯 키 폐기
 
 자세한 API 스펙은 Swagger 문서를 참고하세요.
+
+## 테스트
+
+### 유닛 테스트
+
+```bash
+# 모든 유닛 테스트 실행
+$ bun test
+
+# watch 모드
+$ bun run test:watch
+
+# 커버리지 확인
+$ bun run test:cov
+
+# 특정 파일만 테스트
+$ bun test src/admin/admin.service.spec.ts
+```
+
+### E2E 테스트
+
+```bash
+# E2E 테스트 실행
+$ bun run test:e2e
+
+# 모든 테스트 실행 (unit + e2e)
+$ bun run test:all
+```
+
+### 테스트 커버리지
+
+```bash
+# 커버리지 리포트 생성
+$ bun run test:cov
+
+# coverage/ 폴더에 HTML 리포트 생성됨
+$ open coverage/lcov-report/index.html
+```
 
 ## Run tests
 

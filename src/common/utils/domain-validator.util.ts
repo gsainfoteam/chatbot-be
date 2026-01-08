@@ -26,10 +26,11 @@ export function extractDomain(url: string): string {
  */
 function patternToRegex(pattern: string): RegExp {
   // 특수 문자 이스케이프 (단, * 제외)
-  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  let escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
   // * 를 정규식 패턴으로 변환 (하나 이상의 서브도메인)
-  const regex = escaped.replace(/\\\*/g, '[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*');
-  return new RegExp(`^${regex}$`, 'i');
+  // \\* 를 찾아서 서브도메인 패턴으로 변경
+  escaped = escaped.replace(/\*/g, '[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*');
+  return new RegExp(`^${escaped}$`, 'i');
 }
 
 /**

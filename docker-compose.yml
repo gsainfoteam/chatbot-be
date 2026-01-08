@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 데이터베이스
+  postgres:
+    image: postgres:16-alpine
+    container_name: ziggle-chatbot-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ziggle_chatbot
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # NestJS 애플리케이션
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ziggle-chatbot-app
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: ziggle_chatbot
+      DB_SSL: false
+      # Application
+      PORT: 3000
+      NODE_ENV: production
+      # JWT
+      JWT_SECRET: your-production-jwt-secret-change-me
+      JWT_EXPIRES_IN: 3600
+      # Admin
+      ADMIN_BEARER_TOKEN: your-production-admin-token-change-me
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo 'Waiting for database...' &&
+        sleep 5 &&
+        echo 'Running migrations...' &&
+        bun run db:push &&
+        echo 'Starting application...' &&
+        bun run start:prod
+      "
+
+volumes:
+  postgres_data:

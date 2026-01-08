@@ -1,0 +1,33 @@
+# Bun을 사용하는 Dockerfile
+FROM oven/bun:1 AS base
+WORKDIR /app
+
+# 의존성 설치 단계
+FROM base AS install
+RUN mkdir -p /temp/dev
+COPY package.json bun.lock /temp/dev/
+RUN cd /temp/dev && bun install --frozen-lockfile
+
+# 프로덕션 의존성만 설치
+RUN mkdir -p /temp/prod
+COPY package.json bun.lock /temp/prod/
+RUN cd /temp/prod && bun install --frozen-lockfile --production
+
+# 빌드 단계
+FROM base AS build
+COPY --from=install /temp/dev/node_modules node_modules
+COPY . .
+RUN bun run build
+
+# 프로덕션 단계
+FROM base AS release
+COPY --from=install /temp/prod/node_modules node_modules
+COPY --from=build /app/dist dist
+COPY --from=build /app/drizzle.config.ts .
+COPY --from=build /app/package.json .
+
+# 포트 노출
+EXPOSE 3000
+
+# 애플리케이션 실행
+CMD ["bun", "run", "start:prod"]

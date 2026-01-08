@@ -82,7 +82,7 @@ export class WidgetMessagesService {
       id: newMessage.id,
       role: newMessage.role as MessageRole,
       content: newMessage.content,
-      metadata: newMessage.metadata as Record<string, any> | undefined,
+      metadata: (newMessage.metadata as Record<string, any> | null) || undefined,
       createdAt: newMessage.createdAt,
     };
   }

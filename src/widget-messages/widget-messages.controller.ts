@@ -17,10 +17,8 @@ import {
 } from '@nestjs/swagger';
 import { WidgetMessagesService } from './widget-messages.service';
 import { WidgetSessionGuard } from '../auth/guards/widget-session.guard';
-import {
-  CurrentSession,
-  SessionPayload,
-} from '../auth/decorators/current-session.decorator';
+import { CurrentSession } from '../auth/decorators/current-session.decorator';
+import type { SessionPayload } from '../auth/decorators/current-session.decorator';
 import { ChatMessageInputDto } from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';

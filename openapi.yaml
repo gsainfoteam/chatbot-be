@@ -264,6 +264,9 @@ components:
           enum: [user, assistant]
         content:
           type: string
+        metadata:
+          type: object
+          description: "토큰 사용량 등 부가 정보"
         createdAt:
           type: string
           format: date-time

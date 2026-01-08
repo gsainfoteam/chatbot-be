@@ -7,8 +7,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { DB_CONNECTION } from '../db/db.module';
-import { type Database, widgetKeys, sessions } from '../db';
+import { DB_CONNECTION, type Database, widgetKeys, sessions } from '../db';
 import { eq } from 'drizzle-orm';
 import {
   validateOriginAndPageUrl,

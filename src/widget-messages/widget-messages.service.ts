@@ -1,6 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import { DB_CONNECTION } from '../db/db.module';
-import { type Database, messages } from '../db';
+import { DB_CONNECTION, type Database, messages } from '../db';
 import { eq, and, lt, desc } from 'drizzle-orm';
 import { ChatMessageInputDto, MessageRole } from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';

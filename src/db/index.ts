@@ -2,6 +2,9 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema';
 
+// Database connection token
+export const DB_CONNECTION = Symbol('DB_CONNECTION');
+
 // Database connection factory
 export const createDatabaseConnection = (connectionString: string) => {
   const client = postgres(connectionString, {

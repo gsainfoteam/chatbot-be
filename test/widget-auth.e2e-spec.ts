@@ -5,7 +5,7 @@ import {
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import { AppModule } from '../src/app.module';
-import { DB_CONNECTION } from '../src/db/db.module';
+import { DB_CONNECTION } from '../src/db';
 
 describe('Widget Auth (e2e)', () => {
   let app: INestApplication;

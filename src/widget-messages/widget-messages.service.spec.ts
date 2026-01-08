@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { WidgetMessagesService } from './widget-messages.service';
-import { DB_CONNECTION } from '../db/db.module';
+import { DB_CONNECTION } from '../db';
 import { MessageRole } from '../common/dto/chat-message-input.dto';
 
 describe('WidgetMessagesService', () => {

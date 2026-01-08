@@ -1,8 +1,6 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { createDatabaseConnection, type Database } from './index';
-
-export const DB_CONNECTION = Symbol('DB_CONNECTION');
+import { DB_CONNECTION, createDatabaseConnection, type Database } from './index';
 
 @Global()
 @Module({

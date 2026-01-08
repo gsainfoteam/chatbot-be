@@ -41,10 +41,12 @@ services:
       PORT: 3000
       NODE_ENV: production
       # JWT
-      JWT_SECRET: your-production-jwt-secret-change-me
+      # ⚠️ 프로덕션 배포 시 반드시 변경하세요 (최소 32자 이상)
+      JWT_SECRET: your-production-jwt-secret-change-me-minimum-32-characters-required
       JWT_EXPIRES_IN: 3600
       # Admin
-      ADMIN_BEARER_TOKEN: your-production-admin-token-change-me
+      # ⚠️ 프로덕션 배포 시 반드시 변경하세요 (최소 16자 이상)
+      ADMIN_BEARER_TOKEN: your-production-admin-token-change-me-min-16
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,7 +55,7 @@ services:
         echo 'Waiting for database...' &&
         sleep 5 &&
         echo 'Running migrations...' &&
-        bun run db:push &&
+        bun run db:migrate &&
         echo 'Starting application...' &&
         bun run start:prod
       "

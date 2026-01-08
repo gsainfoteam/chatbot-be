@@ -7,7 +7,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { WidgetAuthService } from './widget-auth.service';
-import { DB_CONNECTION } from '../db/db.module';
+import { DB_CONNECTION } from '../db';
 
 describe('WidgetAuthService', () => {
   let service: WidgetAuthService;

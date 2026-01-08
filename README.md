@@ -61,11 +61,35 @@ PORT=3000
 NODE_ENV=development
 
 # JWT (세션 토큰용)
-JWT_SECRET=your-secret-key-here-change-in-production
+# ⚠️ 보안 요구사항: 최소 32자 이상의 강력한 시크릿 키 필요
+# 프로덕션에서는 반드시 안전한 랜덤 문자열로 변경하세요
+# 생성 방법: openssl rand -base64 32
+JWT_SECRET=your-secret-key-here-change-in-production-min-32-chars
 JWT_EXPIRES_IN=3600
 
 # Admin Authentication
-ADMIN_BEARER_TOKEN=your-admin-token-here-change-in-production
+# ⚠️ 보안 요구사항: 최소 16자 이상의 강력한 토큰 필요
+# 프로덕션에서는 반드시 안전한 랜덤 문자열로 변경하세요
+# 생성 방법: openssl rand -base64 24
+ADMIN_BEARER_TOKEN=your-admin-token-here-change-in-production-min-16-chars
+```
+
+### 🔒 보안 주의사항
+
+**프로덕션 배포 전 필수 체크리스트:**
+
+1. **JWT_SECRET**: 최소 32자 이상의 강력한 랜덤 문자열 사용
+2. **ADMIN_BEARER_TOKEN**: 최소 16자 이상의 강력한 랜덤 토큰 사용
+3. 취약한 기본값(`default-secret-key`, `secret`, `test` 등) 사용 금지
+4. 환경 변수가 올바르게 설정되지 않으면 애플리케이션이 시작되지 않습니다
+
+**안전한 시크릿 생성 방법:**
+```bash
+# JWT Secret 생성 (최소 32자)
+openssl rand -base64 32
+
+# Admin Token 생성 (최소 16자)
+openssl rand -base64 24
 ```
 
 ## Database Setup

@@ -4,8 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
 } from '@nestjs/common';
-import { DB_CONNECTION } from '../db/db.module';
-import { type Database, widgetKeys } from '../db';
+import { DB_CONNECTION, type Database, widgetKeys } from '../db';
 import { eq } from 'drizzle-orm';
 import { generateWidgetKey } from '../common/utils/widget-key-generator.util';
 import { CreateWidgetKeyDto } from '../common/dto/create-widget-key.dto';

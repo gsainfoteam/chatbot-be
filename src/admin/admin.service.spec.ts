@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AdminService } from './admin.service';
-import { DB_CONNECTION } from '../db/db.module';
+import { DB_CONNECTION } from '../db';
 
 describe('AdminService', () => {
   let service: AdminService;

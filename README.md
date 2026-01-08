@@ -113,7 +113,15 @@ $ bun run db:studio
 
 ### Docker 환경
 
+**Docker는 로컬의 `.env` 파일을 자동으로 읽습니다.**
+- `DB_HOST`는 자동으로 `postgres`로 오버라이드 (Docker 네트워크용)
+- `NODE_ENV`는 자동으로 `production`으로 오버라이드
+- 나머지 값들은 `.env` 파일에서 그대로 사용됩니다
+
 ```bash
+# .env 파일이 있는지 확인
+$ ls -la .env
+
 # Docker Compose로 PostgreSQL + 애플리케이션 실행
 $ docker-compose up -d
 

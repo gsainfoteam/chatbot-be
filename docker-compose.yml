@@ -7,9 +7,9 @@ services:
     container_name: ziggle-chatbot-db
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: ziggle_chatbot
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-ziggle_chatbot}
     ports:
       - '5432:5432'
     volumes:
@@ -30,23 +30,19 @@ services:
     ports:
       - '3000:3000'
     environment:
-      # Database
-      DB_HOST: postgres
-      DB_PORT: 5432
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: ziggle_chatbot
-      DB_SSL: false
-      # Application
-      PORT: 3000
-      NODE_ENV: production
-      # JWT
-      # ⚠️ 프로덕션 배포 시 반드시 변경하세요 (최소 32자 이상)
-      JWT_SECRET: your-production-jwt-secret-change-me-minimum-32-characters-required
-      JWT_EXPIRES_IN: 3600
-      # Admin
-      # ⚠️ 프로덕션 배포 시 반드시 변경하세요 (최소 16자 이상)
-      ADMIN_BEARER_TOKEN: your-production-admin-token-change-me-min-16
+      # Database (Docker에서만 다른 값)
+      DB_HOST: postgres  # Docker 네트워크 내 서비스 이름
+      NODE_ENV: production  # Docker는 프로덕션 모드
+      # 나머지는 .env 파일에서 가져옴
+      DB_PORT: ${DB_PORT:-5432}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_NAME: ${DB_NAME:-ziggle_chatbot}
+      DB_SSL: ${DB_SSL:-false}
+      PORT: ${PORT:-3000}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-3600}
+      ADMIN_BEARER_TOKEN: ${ADMIN_BEARER_TOKEN}
     depends_on:
       postgres:
         condition: service_healthy

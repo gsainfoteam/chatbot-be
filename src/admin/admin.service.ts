@@ -22,7 +22,7 @@ export class AdminService {
       name: key.name,
       secretKey: key.secretKey,
       status: key.status as WidgetKeyStatus,
-      allowedDomains: key.allowedDomains as string[],
+      allowedDomains: key.allowedDomains,
       createdAt: key.createdAt,
     }));
   }
@@ -31,7 +31,9 @@ export class AdminService {
     // 도메인에 https:// 가 포함되어 있는지 검증
     const invalidDomains = dto.allowedDomains.filter(
       (domain) =>
-        domain.includes('://') || domain.startsWith('http') || domain.startsWith('https'),
+        domain.includes('://') ||
+        domain.startsWith('http') ||
+        domain.startsWith('https'),
     );
 
     if (invalidDomains.length > 0) {
@@ -82,7 +84,7 @@ export class AdminService {
       name: newKey.name,
       secretKey: newKey.secretKey,
       status: newKey.status as WidgetKeyStatus,
-      allowedDomains: newKey.allowedDomains as string[],
+      allowedDomains: newKey.allowedDomains,
       createdAt: newKey.createdAt,
     };
   }
@@ -114,7 +116,7 @@ export class AdminService {
       name: updatedKey.name,
       secretKey: updatedKey.secretKey,
       status: updatedKey.status as WidgetKeyStatus,
-      allowedDomains: updatedKey.allowedDomains as string[],
+      allowedDomains: updatedKey.allowedDomains,
       createdAt: updatedKey.createdAt,
     };
   }

@@ -53,7 +53,7 @@ export class WidgetAuthService {
     }
 
     // 4. 도메인 검증
-    const allowedDomains = widgetKey.allowedDomains as string[];
+    const allowedDomains = widgetKey.allowedDomains || [];
     if (!isDomainAllowed(domain, allowedDomains)) {
       throw new ForbiddenException('Domain not allowed for this widget key');
     }

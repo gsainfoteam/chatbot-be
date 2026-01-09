@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { validate, EnvironmentVariables } from './env.validation';
+import { validate } from './env.validation';
 
 describe('Environment Validation', () => {
   const validConfig = {

@@ -72,7 +72,8 @@ export class EnvironmentVariables {
   // Admin Authentication (Legacy - Optional)
   @IsString()
   @MinLength(16, {
-    message: 'ADMIN_BEARER_TOKEN must be at least 16 characters long for security',
+    message:
+      'ADMIN_BEARER_TOKEN must be at least 16 characters long for security',
   })
   ADMIN_BEARER_TOKEN?: string;
 

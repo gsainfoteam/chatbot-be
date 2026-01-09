@@ -28,9 +28,7 @@ import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';
 @UseGuards(WidgetSessionGuard)
 @ApiBearerAuth('widgetSessionAuth')
 export class WidgetMessagesController {
-  constructor(
-    private readonly widgetMessagesService: WidgetMessagesService,
-  ) {}
+  constructor(private readonly widgetMessagesService: WidgetMessagesService) {}
 
   @Get()
   @ApiOperation({

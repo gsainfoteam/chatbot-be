@@ -1,7 +1,10 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { DB_CONNECTION, type Database, messages } from '../db';
 import { eq, and, lt, desc } from 'drizzle-orm';
-import { ChatMessageInputDto, MessageRole } from '../common/dto/chat-message-input.dto';
+import {
+  ChatMessageInputDto,
+  MessageRole,
+} from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';
 
@@ -81,7 +84,7 @@ export class WidgetMessagesService {
       id: newMessage.id,
       role: newMessage.role as MessageRole,
       content: newMessage.content,
-      metadata: (newMessage.metadata as Record<string, any> | null) || undefined,
+      metadata: (newMessage.metadata as Record<string, any>) || undefined,
       createdAt: newMessage.createdAt,
     };
   }

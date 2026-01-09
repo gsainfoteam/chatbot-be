@@ -61,9 +61,7 @@ export const sessions = pgTable(
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
   (table) => ({
-    sessionTokenIdx: index('sessions_session_token_idx').on(
-      table.sessionToken,
-    ),
+    sessionTokenIdx: index('sessions_session_token_idx').on(table.sessionToken),
     widgetKeyIdIdx: index('sessions_widget_key_id_idx').on(table.widgetKeyId),
     expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
   }),

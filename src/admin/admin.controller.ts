@@ -15,13 +15,15 @@ import {
   ApiParam,
 } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
-import { AdminBearerGuard } from '../auth/guards/admin-bearer.guard';
+import { AdminJwtGuard } from '../auth/guards/admin-jwt.guard';
 import { CreateWidgetKeyDto } from '../common/dto/create-widget-key.dto';
 import { WidgetKeyDto } from '../common/dto/widget-key.dto';
+import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
+import { AdminContext } from '../auth/context/admin-context.entity';
 
 @ApiTags('Admin Management')
 @Controller('api/v1/admin')
-@UseGuards(AdminBearerGuard)
+@UseGuards(AdminJwtGuard)
 @ApiBearerAuth('bearerAuth')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}
@@ -29,7 +31,7 @@ export class AdminController {
   @Get('widget-keys')
   @ApiOperation({
     summary: '위젯 키 목록 조회',
-    description: '모든 위젯 키 목록을 조회합니다.',
+    description: '모든 위젯 키 목록을 조회합니다. Admin JWT 인증이 필요합니다.',
   })
   @ApiResponse({
     status: 200,
@@ -40,7 +42,9 @@ export class AdminController {
     status: 401,
     description: '인증 실패',
   })
-  async getAllWidgetKeys(): Promise<WidgetKeyDto[]> {
+  async getAllWidgetKeys(
+    @CurrentAdmin() admin: AdminContext,
+  ): Promise<WidgetKeyDto[]> {
     return this.adminService.getAllWidgetKeys();
   }
 
@@ -51,7 +55,9 @@ export class AdminController {
 
 **도메인 등록 규칙:**
 - 프로토콜(https://)은 제외하고 입력하세요.
-- *.example.com 와일드카드 지원.`,
+- *.example.com 와일드카드 지원.
+
+**인증:** Admin JWT 인증이 필요합니다.`,
   })
   @ApiResponse({
     status: 201,
@@ -67,6 +73,7 @@ export class AdminController {
     description: '인증 실패',
   })
   async createWidgetKey(
+    @CurrentAdmin() admin: AdminContext,
     @Body() dto: CreateWidgetKeyDto,
   ): Promise<WidgetKeyDto> {
     return this.adminService.createWidgetKey(dto);
@@ -76,7 +83,7 @@ export class AdminController {
   @ApiOperation({
     summary: '위젯 키 폐기 (Revoke)',
     description:
-      '특정 키를 REVOKED 상태로 변경하여 더 이상 세션 발급이 불가능하게 만듭니다.',
+      '특정 키를 REVOKED 상태로 변경하여 더 이상 세션 발급이 불가능하게 만듭니다. Admin JWT 인증이 필요합니다.',
   })
   @ApiParam({
     name: 'widgetKeyId',
@@ -97,6 +104,7 @@ export class AdminController {
     description: '인증 실패',
   })
   async revokeWidgetKey(
+    @CurrentAdmin() admin: AdminContext,
     @Param('widgetKeyId') widgetKeyId: string,
   ): Promise<WidgetKeyDto> {
     return this.adminService.revokeWidgetKey(widgetKeyId);

@@ -3,6 +3,21 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "tsConfigPath": "tsconfig.json",
+    "webpack": false,
+    "assets": [],
+    "watchAssets": false
+  },
+  "projects": {
+    "infoteam-idp": {
+      "type": "library",
+      "root": "libs/infoteam-idp",
+      "entryFile": "index",
+      "sourceRoot": "libs/infoteam-idp/src",
+      "compilerOptions": {
+        "tsConfigPath": "libs/infoteam-idp/tsconfig.lib.json"
+      }
+    }
   }
 }

@@ -1,6 +1,11 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
+import { InfoteamIdpModule } from '@lib/infoteam-idp';
+import { AdminJwtStrategy } from './strategies/admin-jwt.strategy';
+import { AdminJwtGuard } from './guards/admin-jwt.guard';
+import { AdminAuthService } from './admin-auth.service';
+import { AuthController } from './auth.controller';
 
 @Module({
   imports: [
@@ -49,7 +54,10 @@ import { ConfigService } from '@nestjs/config';
         };
       },
     }),
+    InfoteamIdpModule,
   ],
-  exports: [JwtModule],
+  controllers: [AuthController],
+  providers: [AdminAuthService, AdminJwtStrategy, AdminJwtGuard],
+  exports: [JwtModule, AdminAuthService, AdminJwtStrategy, AdminJwtGuard],
 })
 export class AuthModule {}

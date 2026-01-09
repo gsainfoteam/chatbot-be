@@ -67,21 +67,25 @@ NODE_ENV=development
 JWT_SECRET=your-secret-key-here-change-in-production-min-32-chars
 JWT_EXPIRES_IN=3600
 
-# Admin Authentication
-# 보안 요구사항: 최소 16자 이상의 강력한 토큰 필요
-# 프로덕션에서는 반드시 안전한 랜덤 문자열로 변경하세요
-# 생성 방법: openssl rand -base64 24
-ADMIN_BEARER_TOKEN=your-admin-token-here-change-in-production-min-16-chars
+# Infoteam IDP Configuration (Admin 인증용)
+IDP_URL=https://idp.infoteam.kr
+IDP_CLIENT_ID=your_client_id
+IDP_CLIENT_SECRET=your_client_secret
+
+# Admin Authentication (Legacy - Optional, 더 이상 사용되지 않음)
+# ADMIN_BEARER_TOKEN=your-admin-token-here-change-in-production-min-16-chars
 ```
 
 **안전한 시크릿 생성 방법:**
 ```bash
 # JWT Secret 생성 (최소 32자)
 openssl rand -base64 32
-
-# Admin Token 생성 (최소 16자)
-openssl rand -base64 24
 ```
+
+**Admin 인증 변경사항:**
+- 기존의 `ADMIN_BEARER_TOKEN` 방식에서 **Infoteam IDP OAuth 2.0** 인증으로 변경되었습니다.
+- Admin API 접근 시 `@gistory.me` 이메일로 IDP 인증이 필요합니다.
+- 자세한 마이그레이션 가이드는 [ADMIN_IDP_MIGRATION.md](./ADMIN_IDP_MIGRATION.md)를 참고하세요.
 
 ## Database Setup
 
@@ -181,10 +185,12 @@ $ docker run -p 3000:3000 --env-file .env ziggle-chatbot-be
 - `GET /api/v1/widget/messages` - 대화 내역 조회 (커서 기반 페이징)
 - `POST /api/v1/widget/messages` - 대화 메시지 저장
 
-### 3. Admin Management (Private, 관리자 토큰 필요)
+### 3. Admin Management (Private, IDP 인증 필요)
 - `GET /api/v1/admin/widget-keys` - 위젯 키 목록 조회
 - `POST /api/v1/admin/widget-keys` - 위젯 키 생성
 - `PATCH /api/v1/admin/widget-keys/:widgetKeyId/revoke` - 위젯 키 폐기
+
+**인증 방식:** Infoteam IDP OAuth 2.0 (`@gistory.me` 이메일 필수)
 
 자세한 API 스펙은 Swagger 문서를 참고하세요.
 

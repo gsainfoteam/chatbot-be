@@ -20,6 +20,10 @@
     "forceConsistentCasingInFileNames": true,
     "noImplicitAny": false,
     "strictBindCallApply": false,
-    "noFallthroughCasesInSwitch": false
+    "noFallthroughCasesInSwitch": false,
+    "paths": {
+      "@lib/infoteam-idp": ["libs/infoteam-idp/src"],
+      "@lib/infoteam-idp/*": ["libs/infoteam-idp/src/*"]
+    }
   }
 }

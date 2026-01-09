@@ -69,14 +69,25 @@ export class EnvironmentVariables {
   @Max(86400) // 최대 24시간
   JWT_EXPIRES_IN: number;
 
-  // Admin Authentication
+  // Admin Authentication (Legacy - Optional)
+  @IsString()
+  @MinLength(16, {
+    message: 'ADMIN_BEARER_TOKEN must be at least 16 characters long for security',
+  })
+  ADMIN_BEARER_TOKEN?: string;
+
+  // Infoteam IDP Configuration
   @IsString()
   @IsNotEmpty()
-  @MinLength(16, {
-    message:
-      'ADMIN_BEARER_TOKEN must be at least 16 characters long for security',
-  })
-  ADMIN_BEARER_TOKEN: string;
+  IDP_URL: string;
+
+  @IsString()
+  @IsNotEmpty()
+  IDP_CLIENT_ID: string;
+
+  @IsString()
+  @IsNotEmpty()
+  IDP_CLIENT_SECRET: string;
 }
 
 /**

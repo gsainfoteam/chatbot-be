@@ -14,6 +14,9 @@ describe('Environment Validation', () => {
     JWT_SECRET: 'this-is-a-very-long-secret-key-with-at-least-32-characters',
     JWT_EXPIRES_IN: '3600',
     ADMIN_BEARER_TOKEN: 'admin-token-with-at-least-16-chars',
+    IDP_URL: 'https://idp.test.com',
+    IDP_CLIENT_ID: 'test-client-id',
+    IDP_CLIENT_SECRET: 'test-client-secret',
   };
 
   it('should validate correct environment variables', () => {

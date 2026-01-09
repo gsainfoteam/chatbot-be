@@ -23,9 +23,11 @@ RUN bun run build
 FROM base AS release
 COPY --from=install /temp/prod/node_modules node_modules
 COPY --from=build /app/dist dist
+COPY --from=build /app/libs libs
 COPY --from=build /app/drizzle drizzle
 COPY --from=build /app/drizzle.config.ts .
 COPY --from=build /app/package.json .
+COPY --from=build /app/tsconfig.json .
 
 # 포트 노출
 EXPOSE 3000

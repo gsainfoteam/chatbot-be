@@ -1,6 +1,10 @@
 import { Module, Global } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DB_CONNECTION, createDatabaseConnection, type Database } from './index';
+import {
+  DB_CONNECTION,
+  createDatabaseConnection,
+  type Database,
+} from './index';
 
 @Global()
 @Module({

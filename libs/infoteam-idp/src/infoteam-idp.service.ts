@@ -147,7 +147,6 @@ export class InfoteamIdpService implements OnModuleInit {
   async getUserInfo(userUuid: string): Promise<UserInfo | null> {
     // Client access token이 만료되었으면 갱신
     await this.updateClientAccessToken();
-    
     const userInfoResponse = await firstValueFrom(
       this.httpService
         .get<IdpUserInfoRes>(this.idpUrl + '/oauth/userinfo', {

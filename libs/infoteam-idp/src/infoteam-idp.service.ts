@@ -251,12 +251,6 @@ export class InfoteamIdpService implements OnModuleInit {
           catchError((err: AxiosError) => {
             this.logger.error('Error exchanging authorization code');
             this.logger.error('Status:', err.response?.status);
-            this.logger.error(
-              'Response data:',
-              JSON.stringify(err.response?.data),
-            );
-            this.logger.error('Request URL:', err.config?.url);
-            this.logger.error('Request data:', err.config?.data);
             if (err.response?.status === 400 || err.response?.status === 401) {
               throw new UnauthorizedException(
                 'Invalid authorization code or redirect URI',

@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  AuthorizationCodeResponse,
   ClientAccessTokenRequest,
   ClientAccessTokenResponse,
   IdpUserInfoRes,
@@ -213,5 +214,61 @@ export class InfoteamIdpService implements OnModuleInit {
     this.clientAccessTokenExpireAt = new Date(
       Date.now() + clientTokenResponse.data.expires_in * 1000,
     );
+  }
+
+  /**
+   * Exchange authorization code for tokens
+   * @param code Authorization code from IDP
+   * @param redirectUri Redirect URI used in the authorization request
+   * @param codeVerifier PKCE code_verifier (optional, required if code_challenge was used)
+   * @returns Token response with access_token, refresh_token (optional), expires_in
+   */
+  async exchangeCodeForToken(
+    code: string,
+    redirectUri: string,
+    codeVerifier?: string,
+  ): Promise<AuthorizationCodeResponse> {
+    const requestBody: Record<string, string> = {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      client_id: this.configService.getOrThrow<string>('IDP_CLIENT_ID'),
+      client_secret: this.configService.getOrThrow<string>('IDP_CLIENT_SECRET'),
+    };
+
+    // PKCE: code_verifier가 있으면 추가
+    if (codeVerifier) {
+      requestBody.code_verifier = codeVerifier;
+    }
+
+    const tokenResponse = await firstValueFrom(
+      this.httpService
+        .post<AuthorizationCodeResponse>(
+          this.idpUrl + '/oauth/token',
+          requestBody,
+        )
+        .pipe(
+          catchError((err: AxiosError) => {
+            this.logger.error('Error exchanging authorization code');
+            this.logger.error('Status:', err.response?.status);
+            this.logger.error(
+              'Response data:',
+              JSON.stringify(err.response?.data),
+            );
+            this.logger.error('Request URL:', err.config?.url);
+            this.logger.error('Request data:', err.config?.data);
+            if (err.response?.status === 400 || err.response?.status === 401) {
+              throw new UnauthorizedException(
+                'Invalid authorization code or redirect URI',
+              );
+            }
+            throw new InternalServerErrorException(
+              'Failed to exchange authorization code',
+            );
+          }),
+        ),
+    );
+
+    return tokenResponse.data;
   }
 }

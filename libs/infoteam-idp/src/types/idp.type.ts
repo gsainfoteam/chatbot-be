@@ -36,3 +36,20 @@ export type ClientAccessTokenResponse = {
   expires_in: number;
   scope: string;
 };
+
+/** Authorization code exchange request type to infoteam idp */
+export type AuthorizationCodeRequest = {
+  grant_type: 'authorization_code';
+  code: string;
+  redirect_uri: string;
+};
+
+/** Authorization code exchange response type from infoteam idp */
+export type AuthorizationCodeResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  refresh_token?: string;
+  scope: string;
+  id_token?: string;
+};

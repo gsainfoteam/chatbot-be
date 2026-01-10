@@ -49,3 +49,42 @@ export class AdminLoginResponseDto {
   })
   expires_in: number;
 }
+
+export class AdminVerifyResponseDto {
+  @ApiProperty({
+    description: 'Admin UUID (IDP)',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  uuid: string;
+
+  @ApiProperty({
+    description: 'Admin 이메일',
+    example: 'admin@gistory.me',
+  })
+  email: string;
+
+  @ApiProperty({
+    description: 'Admin 이름',
+    example: '홍길동',
+  })
+  name: string;
+}
+
+export class LogoutRequestDto {
+  @ApiProperty({
+    description: 'IDP에서 발급받은 refresh token (선택사항)',
+    example: 'D43f5y0ahjqew82jZ4NViEr2YafMKhue',
+    required: false,
+  })
+  @IsString()
+  @IsOptional()
+  refresh_token?: string;
+}
+
+export class LogoutResponseDto {
+  @ApiProperty({
+    description: '로그아웃 성공 메시지',
+    example: 'Successfully logged out',
+  })
+  message: string;
+}

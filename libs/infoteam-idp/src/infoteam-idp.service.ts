@@ -271,4 +271,49 @@ export class InfoteamIdpService implements OnModuleInit {
 
     return tokenResponse.data;
   }
+
+  /**
+   * Revoke access token or refresh token
+   * @param token Token to revoke (access_token or refresh_token)
+   * @param tokenTypeHint Optional hint about token type
+   */
+  async revokeToken(
+    token: string,
+    tokenTypeHint?: 'access_token' | 'refresh_token',
+  ): Promise<void> {
+    const clientId = this.configService.getOrThrow<string>('IDP_CLIENT_ID');
+    const clientSecret =
+      this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
+
+    // HTTP Basic Auth header 생성
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
+      'base64',
+    );
+
+    // application/x-www-form-urlencoded 형식으로 데이터 생성
+    const formData = new URLSearchParams({
+      token,
+      ...(tokenTypeHint && { token_type_hint: tokenTypeHint }),
+    }).toString();
+
+    await firstValueFrom(
+      this.httpService
+        .post(this.idpUrl + '/oauth/revoke', formData, {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${basicAuth}`,
+          },
+        })
+        .pipe(
+          catchError((err: AxiosError) => {
+            // Revocation 실패는 로깅만 하고 에러를 throw하지 않음
+            // (이미 만료된 토큰 등의 경우)
+            this.logger.warn('Token revocation failed', err.response?.data);
+            return [];
+          }),
+        ),
+    );
+
+    this.logger.log('Token revoked successfully');
+  }
 }

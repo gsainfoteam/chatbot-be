@@ -13,7 +13,6 @@ import {
 } from '@lib/infoteam-idp';
 import { DB_CONNECTION, admins } from '../db';
 import type { Database } from '../db';
-import { eq } from 'drizzle-orm';
 
 export interface LoginResult {
   accessToken: string;
@@ -92,38 +91,28 @@ export class AdminAuthService {
     email: string,
     name: string,
   ): Promise<void> {
-    const existingAdmin = await this.db
-      .select()
-      .from(admins)
-      .where(eq(admins.idpUuid, idpUuid))
-      .limit(1);
-
     const now = new Date();
-
-    if (existingAdmin.length > 0) {
-      // 기존 Admin: lastLoginAt, name, email 업데이트
-      await this.db
-        .update(admins)
-        .set({
-          lastLoginAt: now,
-          updatedAt: now,
-          name,
-          email,
-        })
-        .where(eq(admins.idpUuid, idpUuid));
-
-      this.logger.log(`Admin logged in: ${email}`);
-    } else {
-      // 새 Admin 생성
-      await this.db.insert(admins).values({
+    // DB-level upsert으로 race condition 방지
+    await this.db
+      .insert(admins)
+      .values({
         idpUuid,
         email,
         name,
         lastLoginAt: now,
+      })
+      .onConflictDoUpdate({
+        target: admins.idpUuid,
+        set: {
+          lastLoginAt: now,
+          updatedAt: now,
+          name,
+          email,
+        },
       });
 
-      this.logger.log(`New admin created: ${email}`);
-    }
+    // PII 최소화: email 대신 idpUuid 로깅
+    this.logger.log(`Admin login processed: ${idpUuid}`);
   }
 
   /**

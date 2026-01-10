@@ -241,11 +241,18 @@ export class InfoteamIdpService implements OnModuleInit {
       requestBody.code_verifier = codeVerifier;
     }
 
+    const formData = new URLSearchParams(requestBody).toString();
+
     const tokenResponse = await firstValueFrom(
       this.httpService
         .post<AuthorizationCodeResponse>(
           this.idpUrl + '/oauth/token',
-          requestBody,
+          formData,
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+          },
         )
         .pipe(
           catchError((err: AxiosError) => {

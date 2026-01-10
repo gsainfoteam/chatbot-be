@@ -308,12 +308,12 @@ export class InfoteamIdpService implements OnModuleInit {
           catchError((err: AxiosError) => {
             // Revocation 실패는 로깅만 하고 에러를 throw하지 않음
             // (이미 만료된 토큰 등의 경우)
+            console.log('err', err);
             this.logger.warn('Token revocation failed', err.response?.data);
             return [];
           }),
         ),
     );
-
     this.logger.log('Token revoked successfully');
   }
 }

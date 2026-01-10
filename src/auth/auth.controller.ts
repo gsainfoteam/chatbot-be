@@ -111,11 +111,20 @@ export class AuthController {
     status: 401,
     description: '토큰이 유효하지 않음',
   })
-  async logout(@Body() dto: LogoutRequestDto): Promise<LogoutResponseDto> {
-    // refresh_token이 제공된 경우 IDP에 revoke 요청
-    if (dto.refresh_token) {
-      await this.idpService.revokeToken(dto.refresh_token, 'refresh_token');
-    }
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async logout(@Body() _dto: LogoutRequestDto): Promise<LogoutResponseDto> {
+    // 임시 조치 : Dto 출력
+    console.log('=== LOGOUT REQUEST ===');
+    console.log('Request body:', _dto);
+    // TODO: IDP의 token revoke 엔드포인트 확인 필요
+    // - 문서에는 /oauth2/revoke로 되어 있지만 404 발생
+    // - /oauth/revoke도 404 발생
+    // - IDP 관리자에게 올바른 revoke 엔드포인트 확인 필요
+
+    // refresh_token이 제공된 경우 IDP에 revoke 요청 (현재 비활성화)
+    // if (_dto.refresh_token) {
+    //   await this.idpService.revokeToken(_dto.refresh_token, 'refresh_token');
+    // }
 
     return {
       message: 'Successfully logged out',

@@ -29,11 +29,6 @@ export class AdminAuthService {
     // IDP에서 토큰 검증 및 사용자 정보 가져오기
     const userInfo = await this.idpService.validateAccessToken(idpToken);
 
-    // @gistory.me 이메일만 허용
-    if (!userInfo.email.endsWith('@gistory.me')) {
-      throw new UnauthorizedException('Admin access denied');
-    }
-
     // 자체 JWT 토큰 생성
     const payload: AdminAccessTokenJwtPayload = {
       email: userInfo.email,
@@ -58,7 +53,7 @@ export class AdminAuthService {
   ): Promise<AdminAccessTokenJwtPayload> {
     try {
       const payload =
-        this.jwtService.verify<AdminAccessTokenJwtPayload>(accessToken);
+        this.jwtService.verifyAsync<AdminAccessTokenJwtPayload>(accessToken);
       return payload;
     } catch (e) {
       this.logger.error('Invalid access token:', e);

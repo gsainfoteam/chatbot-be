@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
+  AuthorizationCodeResponse,
   ClientAccessTokenRequest,
   ClientAccessTokenResponse,
   IdpUserInfoRes,
@@ -213,5 +214,106 @@ export class InfoteamIdpService implements OnModuleInit {
     this.clientAccessTokenExpireAt = new Date(
       Date.now() + clientTokenResponse.data.expires_in * 1000,
     );
+  }
+
+  /**
+   * Exchange authorization code for tokens
+   * @param code Authorization code from IDP
+   * @param redirectUri Redirect URI used in the authorization request
+   * @param codeVerifier PKCE code_verifier (optional, required if code_challenge was used)
+   * @returns Token response with access_token, refresh_token (optional), expires_in
+   */
+  async exchangeCodeForToken(
+    code: string,
+    redirectUri: string,
+    codeVerifier?: string,
+  ): Promise<AuthorizationCodeResponse> {
+    const requestBody: Record<string, string> = {
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      client_id: this.configService.getOrThrow<string>('IDP_CLIENT_ID'),
+      client_secret: this.configService.getOrThrow<string>('IDP_CLIENT_SECRET'),
+    };
+
+    // PKCE: code_verifier가 있으면 추가
+    if (codeVerifier) {
+      requestBody.code_verifier = codeVerifier;
+    }
+
+    const formData = new URLSearchParams(requestBody).toString();
+
+    const tokenResponse = await firstValueFrom(
+      this.httpService
+        .post<AuthorizationCodeResponse>(
+          this.idpUrl + '/oauth/token',
+          formData,
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+          },
+        )
+        .pipe(
+          catchError((err: AxiosError) => {
+            this.logger.error('Error exchanging authorization code');
+            this.logger.error('Status:', err.response?.status);
+            if (err.response?.status === 400 || err.response?.status === 401) {
+              throw new UnauthorizedException(
+                'Invalid authorization code or redirect URI',
+              );
+            }
+            throw new InternalServerErrorException(
+              'Failed to exchange authorization code',
+            );
+          }),
+        ),
+    );
+
+    return tokenResponse.data;
+  }
+
+  /**
+   * Revoke access token or refresh token
+   * @param token Token to revoke (access_token or refresh_token)
+   * @param tokenTypeHint Optional hint about token type
+   */
+  async revokeToken(
+    token: string,
+    tokenTypeHint?: 'access_token' | 'refresh_token',
+  ): Promise<void> {
+    const clientId = this.configService.getOrThrow<string>('IDP_CLIENT_ID');
+    const clientSecret =
+      this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
+
+    // HTTP Basic Auth header 생성
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
+      'base64',
+    );
+
+    // application/x-www-form-urlencoded 형식으로 데이터 생성
+    const formData = new URLSearchParams({
+      token,
+      ...(tokenTypeHint && { token_type_hint: tokenTypeHint }),
+    }).toString();
+
+    await firstValueFrom(
+      this.httpService
+        .post(this.idpUrl + '/oauth/revoke', formData, {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${basicAuth}`,
+          },
+        })
+        .pipe(
+          catchError((err: AxiosError) => {
+            // Revocation 실패는 로깅만 하고 에러를 throw하지 않음
+            // (이미 만료된 토큰 등의 경우)
+            this.logger.warn('Token revocation failed', err.response?.data);
+            return [];
+          }),
+        ),
+    );
+    this.logger.log('Token revoked successfully');
   }
 }

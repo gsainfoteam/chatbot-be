@@ -31,10 +31,48 @@ export class AdminAuthService {
     private readonly idpService: InfoteamIdpService,
     @Inject(DB_CONNECTION) private readonly db: Database,
   ) {
-    this.accessTokenExpiresInSeconds = this.configService.get<number>(
+    this.accessTokenExpiresInSeconds = this.getJwtExpiresIn();
+  }
+
+  /**
+   * JWT 만료 시간을 안전하게 파싱하고 검증
+   * @returns JWT 만료 시간 (초 단위)
+   */
+  private getJwtExpiresIn(): number {
+    const value = this.configService.get<string | number>(
       'JWT_EXPIRES_IN',
-      3600,
+      '3600',
     );
+
+    if (typeof value === 'number') {
+      if (value < 60 || value > 86400) {
+        this.logger.warn(
+          `JWT_EXPIRES_IN value ${value} is out of range (60-86400), using default 3600`,
+        );
+        return 3600;
+      }
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isNaN(parsed)) {
+        this.logger.warn(
+          `JWT_EXPIRES_IN value "${value}" is not a valid number, using default 3600`,
+        );
+        return 3600;
+      }
+      if (parsed < 60 || parsed > 86400) {
+        this.logger.warn(
+          `JWT_EXPIRES_IN value ${parsed} is out of range (60-86400), using default 3600`,
+        );
+        return 3600;
+      }
+      return parsed;
+    }
+
+    this.logger.warn(`JWT_EXPIRES_IN has unexpected type, using default 3600`);
+    return 3600;
   }
 
   /**
@@ -125,7 +163,9 @@ export class AdminAuthService {
   ): Promise<AdminAccessTokenJwtPayload> {
     try {
       const payload =
-        this.jwtService.verifyAsync<AdminAccessTokenJwtPayload>(accessToken);
+        await this.jwtService.verifyAsync<AdminAccessTokenJwtPayload>(
+          accessToken,
+        );
       return payload;
     } catch (e) {
       this.logger.error('Invalid access token:', e);

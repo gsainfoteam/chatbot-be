@@ -11,7 +11,8 @@ import {
   InfoteamIdpService,
   AuthorizationCodeResponse,
 } from '@lib/infoteam-idp';
-import { DB_CONNECTION, Database, admins } from '../db';
+import { DB_CONNECTION, admins } from '../db';
+import type { Database } from '../db';
 import { eq } from 'drizzle-orm';
 
 export interface LoginResult {
@@ -62,7 +63,10 @@ export class AdminAuthService {
       tokenResponse.access_token,
     );
 
-    // 3. 자체 JWT 토큰 생성
+    // 3. Admin 정보 upsert (없으면 생성, 있으면 업데이트)
+    await this.upsertAdmin(userInfo.uuid, userInfo.email, userInfo.name);
+
+    // 4. 자체 JWT 토큰 생성
     const payload: AdminAccessTokenJwtPayload = {
       email: userInfo.email,
       uuid: userInfo.uuid,
@@ -78,6 +82,48 @@ export class AdminAuthService {
       refreshToken: tokenResponse.refresh_token,
       expiresIn: this.accessTokenExpiresInSeconds,
     };
+  }
+
+  /**
+   * Admin 정보 upsert (없으면 생성, 있으면 lastLoginAt 업데이트)
+   */
+  private async upsertAdmin(
+    idpUuid: string,
+    email: string,
+    name: string,
+  ): Promise<void> {
+    const existingAdmin = await this.db
+      .select()
+      .from(admins)
+      .where(eq(admins.idpUuid, idpUuid))
+      .limit(1);
+
+    const now = new Date();
+
+    if (existingAdmin.length > 0) {
+      // 기존 Admin: lastLoginAt, name, email 업데이트
+      await this.db
+        .update(admins)
+        .set({
+          lastLoginAt: now,
+          updatedAt: now,
+          name,
+          email,
+        })
+        .where(eq(admins.idpUuid, idpUuid));
+
+      this.logger.log(`Admin logged in: ${email}`);
+    } else {
+      // 새 Admin 생성
+      await this.db.insert(admins).values({
+        idpUuid,
+        email,
+        name,
+        lastLoginAt: now,
+      });
+
+      this.logger.log(`New admin created: ${email}`);
+    }
   }
 
   /**

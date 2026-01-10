@@ -18,7 +18,31 @@ export const widgetKeyStatusEnum = pgEnum('widget_key_status', [
 
 export const messageRoleEnum = pgEnum('message_role', ['user', 'assistant']);
 
+export const adminRoleEnum = pgEnum('admin_role', ['SUPER_ADMIN', 'ADMIN']);
+
 // Tables
+
+/**
+ * Admin 유저 테이블
+ * - IDP 인증된 Admin 사용자 정보를 저장
+ */
+export const admins = pgTable(
+  'admins',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    idpUuid: varchar('idp_uuid', { length: 255 }).notNull().unique(),
+    email: varchar('email', { length: 255 }).notNull().unique(),
+    name: varchar('name', { length: 255 }).notNull(),
+    role: adminRoleEnum('role').notNull().default('ADMIN'),
+    lastLoginAt: timestamp('last_login_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    idpUuidIdx: index('admins_idp_uuid_idx').on(table.idpUuid),
+    emailIdx: index('admins_email_idx').on(table.email),
+  }),
+);
 /**
  * 위젯 키 테이블
  * - 위젯 인증에 사용되는 키 정보를 저장
@@ -114,6 +138,9 @@ export const messagesRelations = relations(messages, ({ one }) => ({
 }));
 
 // Types
+export type Admin = typeof admins.$inferSelect;
+export type NewAdmin = typeof admins.$inferInsert;
+
 export type WidgetKey = typeof widgetKeys.$inferSelect;
 export type NewWidgetKey = typeof widgetKeys.$inferInsert;
 

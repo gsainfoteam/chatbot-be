@@ -6,9 +6,11 @@ import { AdminJwtStrategy } from './strategies/admin-jwt.strategy';
 import { AdminJwtGuard } from './guards/admin-jwt.guard';
 import { AdminAuthService } from './admin-auth.service';
 import { AuthController } from './auth.controller';
+import { DbModule } from '../db/db.module';
 
 @Module({
   imports: [
+    DbModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {

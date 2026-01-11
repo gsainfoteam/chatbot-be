@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsArray, IsNotEmpty, IsString, ArrayMinSize } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
 
 export class CreateWidgetKeyDto {
   @ApiProperty({
@@ -9,14 +9,4 @@ export class CreateWidgetKeyDto {
   @IsString()
   @IsNotEmpty()
   name: string;
-
-  @ApiProperty({
-    description: '허용된 도메인 목록 (프로토콜 제외)',
-    type: [String],
-    example: ['*.myshop.com', 'myshop.com'],
-  })
-  @IsArray()
-  @ArrayMinSize(1)
-  @IsString({ each: true })
-  allowedDomains: string[];
 }

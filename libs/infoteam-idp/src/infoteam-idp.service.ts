@@ -279,14 +279,21 @@ export class InfoteamIdpService implements OnModuleInit {
    * @returns New token response with access_token, refresh_token (optional), expires_in
    */
   async refreshToken(refreshToken: string): Promise<AuthorizationCodeResponse> {
-    const requestBody: Record<string, string> = {
+    const clientId = this.configService.getOrThrow<string>('IDP_CLIENT_ID');
+    const clientSecret =
+      this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
+
+    // HTTP Basic Auth header 생성
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
+      'base64',
+    );
+
+    // application/x-www-form-urlencoded 형식으로 데이터 생성
+    // body에는 grant_type과 refresh_token만 포함
+    const formData = new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
-      client_id: this.configService.getOrThrow<string>('IDP_CLIENT_ID'),
-      client_secret: this.configService.getOrThrow<string>('IDP_CLIENT_SECRET'),
-    };
-
-    const formData = new URLSearchParams(requestBody).toString();
+    }).toString();
 
     const tokenResponse = await firstValueFrom(
       this.httpService
@@ -296,6 +303,7 @@ export class InfoteamIdpService implements OnModuleInit {
           {
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
+              Authorization: `Basic ${basicAuth}`,
             },
           },
         )
@@ -347,7 +355,6 @@ export class InfoteamIdpService implements OnModuleInit {
         .post(this.idpUrl + '/oauth/revoke', formData, {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
-            Authorization: `Basic ${basicAuth}`,
           },
         })
         .pipe(

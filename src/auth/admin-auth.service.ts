@@ -122,6 +122,42 @@ export class AdminAuthService {
   }
 
   /**
+   * Refresh token을 사용하여 새로운 access token 발급
+   * @param refreshToken IDP에서 발급받은 refresh token
+   * @returns 새로운 자체 JWT access token, refresh token (optional), expires_in
+   */
+  async refresh(refreshToken: string): Promise<LoginResult> {
+    // 1. Refresh token으로 IDP 토큰 교환
+    const tokenResponse: AuthorizationCodeResponse =
+      await this.idpService.refreshToken(refreshToken);
+
+    // 2. IDP access token으로 사용자 정보 가져오기
+    const userInfo = await this.idpService.validateAccessToken(
+      tokenResponse.access_token,
+    );
+
+    // 3. Admin 정보 업데이트 (lastLoginAt)
+    await this.upsertAdmin(userInfo.uuid, userInfo.email, userInfo.name);
+
+    // 4. 자체 JWT 토큰 생성
+    const payload: AdminAccessTokenJwtPayload = {
+      email: userInfo.email,
+      uuid: userInfo.uuid,
+      name: userInfo.name,
+    };
+
+    const accessToken = this.jwtService.sign(payload, {
+      expiresIn: this.accessTokenExpiresInSeconds,
+    });
+
+    return {
+      accessToken,
+      refreshToken: tokenResponse.refresh_token,
+      expiresIn: this.accessTokenExpiresInSeconds,
+    };
+  }
+
+  /**
    * Admin 정보 upsert (없으면 생성, 있으면 lastLoginAt 업데이트)
    */
   private async upsertAdmin(

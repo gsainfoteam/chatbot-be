@@ -10,6 +10,8 @@ import {
   AdminLoginRequestDto,
   AdminLoginResponseDto,
   AdminVerifyResponseDto,
+  RefreshTokenRequestDto,
+  RefreshTokenResponseDto,
   LogoutRequestDto,
   LogoutResponseDto,
 } from './dto/admin-login.dto';
@@ -88,6 +90,42 @@ export class AuthController {
       uuid: admin.uuid,
       email: admin.email,
       name: admin.name,
+    };
+  }
+
+  @Post('admin/refresh')
+  @ApiOperation({
+    summary: 'Admin 토큰 갱신',
+    description: `Refresh token을 사용하여 새로운 access token을 발급받습니다.
+
+**요청 흐름:**
+1. 프론트엔드에서 refresh_token 전송
+2. 백엔드가 IDP /oauth/token에 refresh_token 교환 요청
+3. IDP에서 새로운 idp_token 받아 검증
+4. 새로운 자체 access_token 발급 후 반환
+
+**응답:**
+- access_token: 새로운 자체 JWT access token
+- refresh_token: 새로운 refresh token (IDP에서 발급된 경우)
+- expires_in: access token 만료 시간 (초)`,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '토큰 갱신 성공',
+    type: RefreshTokenResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Refresh token 검증 실패',
+  })
+  async refresh(
+    @Body() dto: RefreshTokenRequestDto,
+  ): Promise<RefreshTokenResponseDto> {
+    const result = await this.adminAuthService.refresh(dto.refresh_token);
+    return {
+      access_token: result.accessToken,
+      refresh_token: result.refreshToken,
+      expires_in: result.expiresIn,
     };
   }
 

@@ -274,6 +274,51 @@ export class InfoteamIdpService implements OnModuleInit {
   }
 
   /**
+   * Refresh access token using refresh token
+   * @param refreshToken Refresh token from IDP
+   * @returns New token response with access_token, refresh_token (optional), expires_in
+   */
+  async refreshToken(refreshToken: string): Promise<AuthorizationCodeResponse> {
+    const requestBody: Record<string, string> = {
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: this.configService.getOrThrow<string>('IDP_CLIENT_ID'),
+      client_secret: this.configService.getOrThrow<string>('IDP_CLIENT_SECRET'),
+    };
+
+    const formData = new URLSearchParams(requestBody).toString();
+
+    const tokenResponse = await firstValueFrom(
+      this.httpService
+        .post<AuthorizationCodeResponse>(
+          this.idpUrl + '/oauth/token',
+          formData,
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+          },
+        )
+        .pipe(
+          catchError((err: AxiosError) => {
+            this.logger.error('Error refreshing token');
+            this.logger.error('Status:', err.response?.status);
+            this.logger.error(
+              'Response data:',
+              JSON.stringify(err.response?.data),
+            );
+            if (err.response?.status === 400 || err.response?.status === 401) {
+              throw new UnauthorizedException('Invalid refresh token');
+            }
+            throw new InternalServerErrorException('Failed to refresh token');
+          }),
+        ),
+    );
+
+    return tokenResponse.data;
+  }
+
+  /**
    * Revoke access token or refresh token
    * @param token Token to revoke (access_token or refresh_token)
    * @param tokenTypeHint Optional hint about token type

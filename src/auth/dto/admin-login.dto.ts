@@ -70,6 +70,37 @@ export class AdminVerifyResponseDto {
   name: string;
 }
 
+export class RefreshTokenRequestDto {
+  @ApiProperty({
+    description: 'IDP에서 발급받은 refresh token',
+    example: 'D43f5y0ahjqew82jZ4NViEr2YafMKhue',
+  })
+  @IsString()
+  @IsNotEmpty()
+  refresh_token: string;
+}
+
+export class RefreshTokenResponseDto {
+  @ApiProperty({
+    description: '새로 발급된 JWT access token',
+    example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+  })
+  access_token: string;
+
+  @ApiProperty({
+    description: '새로 발급된 refresh token (IDP에서 발급된 경우)',
+    example: 'D43f5y0ahjqew82jZ4NViEr2YafMKhue',
+    required: false,
+  })
+  refresh_token?: string;
+
+  @ApiProperty({
+    description: 'Access token 만료 시간 (초 단위)',
+    example: 3600,
+  })
+  expires_in: number;
+}
+
 export class LogoutRequestDto {
   @ApiProperty({
     description: 'IDP에서 발급받은 refresh token (선택사항)',

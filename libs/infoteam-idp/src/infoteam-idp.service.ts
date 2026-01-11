@@ -228,20 +228,29 @@ export class InfoteamIdpService implements OnModuleInit {
     redirectUri: string,
     codeVerifier?: string,
   ): Promise<AuthorizationCodeResponse> {
-    const requestBody: Record<string, string> = {
+    const clientId = this.configService.getOrThrow<string>('IDP_CLIENT_ID');
+    const clientSecret =
+      this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
+
+    // HTTP Basic Auth header 생성
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
+      'base64',
+    );
+
+    // application/x-www-form-urlencoded 형식으로 데이터 생성
+    // body에는 grant_type과 관련 파라미터만 포함
+    const formBody: Record<string, string> = {
       grant_type: 'authorization_code',
       code,
       redirect_uri: redirectUri,
-      client_id: this.configService.getOrThrow<string>('IDP_CLIENT_ID'),
-      client_secret: this.configService.getOrThrow<string>('IDP_CLIENT_SECRET'),
     };
 
     // PKCE: code_verifier가 있으면 추가
     if (codeVerifier) {
-      requestBody.code_verifier = codeVerifier;
+      formBody.code_verifier = codeVerifier;
     }
 
-    const formData = new URLSearchParams(requestBody).toString();
+    const formData = new URLSearchParams(formBody).toString();
 
     const tokenResponse = await firstValueFrom(
       this.httpService
@@ -251,6 +260,7 @@ export class InfoteamIdpService implements OnModuleInit {
           {
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
+              Authorization: `Basic ${basicAuth}`,
             },
           },
         )
@@ -335,15 +345,6 @@ export class InfoteamIdpService implements OnModuleInit {
     token: string,
     tokenTypeHint?: 'access_token' | 'refresh_token',
   ): Promise<void> {
-    const clientId = this.configService.getOrThrow<string>('IDP_CLIENT_ID');
-    const clientSecret =
-      this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
-
-    // HTTP Basic Auth header 생성
-    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
-      'base64',
-    );
-
     // application/x-www-form-urlencoded 형식으로 데이터 생성
     const formData = new URLSearchParams({
       token,

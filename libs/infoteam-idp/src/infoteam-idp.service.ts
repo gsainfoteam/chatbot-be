@@ -228,20 +228,29 @@ export class InfoteamIdpService implements OnModuleInit {
     redirectUri: string,
     codeVerifier?: string,
   ): Promise<AuthorizationCodeResponse> {
-    const requestBody: Record<string, string> = {
+    const clientId = this.configService.getOrThrow<string>('IDP_CLIENT_ID');
+    const clientSecret =
+      this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
+
+    // HTTP Basic Auth header 생성
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
+      'base64',
+    );
+
+    // application/x-www-form-urlencoded 형식으로 데이터 생성
+    // body에는 grant_type과 관련 파라미터만 포함
+    const formBody: Record<string, string> = {
       grant_type: 'authorization_code',
       code,
       redirect_uri: redirectUri,
-      client_id: this.configService.getOrThrow<string>('IDP_CLIENT_ID'),
-      client_secret: this.configService.getOrThrow<string>('IDP_CLIENT_SECRET'),
     };
 
     // PKCE: code_verifier가 있으면 추가
     if (codeVerifier) {
-      requestBody.code_verifier = codeVerifier;
+      formBody.code_verifier = codeVerifier;
     }
 
-    const formData = new URLSearchParams(requestBody).toString();
+    const formData = new URLSearchParams(formBody).toString();
 
     const tokenResponse = await firstValueFrom(
       this.httpService
@@ -251,6 +260,7 @@ export class InfoteamIdpService implements OnModuleInit {
           {
             headers: {
               'Content-Type': 'application/x-www-form-urlencoded',
+              Authorization: `Basic ${basicAuth}`,
             },
           },
         )
@@ -274,14 +284,11 @@ export class InfoteamIdpService implements OnModuleInit {
   }
 
   /**
-   * Revoke access token or refresh token
-   * @param token Token to revoke (access_token or refresh_token)
-   * @param tokenTypeHint Optional hint about token type
+   * Refresh access token using refresh token
+   * @param refreshToken Refresh token from IDP
+   * @returns New token response with access_token, refresh_token (optional), expires_in
    */
-  async revokeToken(
-    token: string,
-    tokenTypeHint?: 'access_token' | 'refresh_token',
-  ): Promise<void> {
+  async refreshToken(refreshToken: string): Promise<AuthorizationCodeResponse> {
     const clientId = this.configService.getOrThrow<string>('IDP_CLIENT_ID');
     const clientSecret =
       this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
@@ -291,6 +298,49 @@ export class InfoteamIdpService implements OnModuleInit {
       'base64',
     );
 
+    // application/x-www-form-urlencoded 형식으로 데이터 생성
+    // body에는 grant_type과 refresh_token만 포함
+    const formData = new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    }).toString();
+
+    const tokenResponse = await firstValueFrom(
+      this.httpService
+        .post<AuthorizationCodeResponse>(
+          this.idpUrl + '/oauth/token',
+          formData,
+          {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Authorization: `Basic ${basicAuth}`,
+            },
+          },
+        )
+        .pipe(
+          catchError((err: AxiosError) => {
+            this.logger.error('Error refreshing token');
+            this.logger.error('Status:', err.response?.status);
+            if (err.response?.status === 400 || err.response?.status === 401) {
+              throw new UnauthorizedException('Invalid refresh token');
+            }
+            throw new InternalServerErrorException('Failed to refresh token');
+          }),
+        ),
+    );
+
+    return tokenResponse.data;
+  }
+
+  /**
+   * Revoke access token or refresh token
+   * @param token Token to revoke (access_token or refresh_token)
+   * @param tokenTypeHint Optional hint about token type
+   */
+  async revokeToken(
+    token: string,
+    tokenTypeHint?: 'access_token' | 'refresh_token',
+  ): Promise<void> {
     // application/x-www-form-urlencoded 형식으로 데이터 생성
     const formData = new URLSearchParams({
       token,
@@ -302,7 +352,6 @@ export class InfoteamIdpService implements OnModuleInit {
         .post(this.idpUrl + '/oauth/revoke', formData, {
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
-            Authorization: `Basic ${basicAuth}`,
           },
         })
         .pipe(

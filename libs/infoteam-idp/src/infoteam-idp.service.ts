@@ -321,10 +321,6 @@ export class InfoteamIdpService implements OnModuleInit {
           catchError((err: AxiosError) => {
             this.logger.error('Error refreshing token');
             this.logger.error('Status:', err.response?.status);
-            this.logger.error(
-              'Response data:',
-              JSON.stringify(err.response?.data),
-            );
             if (err.response?.status === 400 || err.response?.status === 401) {
               throw new UnauthorizedException('Invalid refresh token');
             }

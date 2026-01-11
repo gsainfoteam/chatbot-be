@@ -106,12 +106,8 @@ export class AdminService {
       );
     }
 
-    // 도메인에 https:// 가 포함되어 있는지 검증
-    if (
-      dto.domain.includes('://') ||
-      dto.domain.startsWith('http') ||
-      dto.domain.startsWith('https')
-    ) {
+    // 도메인에 프로토콜이 포함되어 있는지 검증
+    if (dto.domain.includes('://')) {
       throw new BadRequestException(
         'Domain should not include protocol (https://). Please remove the protocol.',
       );

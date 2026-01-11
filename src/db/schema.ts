@@ -58,12 +58,16 @@ export const widgetKeys = pgTable(
       .notNull()
       .$type<string[]>()
       .default([]),
+    createdByIdpUuid: varchar('created_by_idp_uuid', { length: 255 }),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
   (table) => ({
     secretKeyIdx: index('widget_keys_secret_key_idx').on(table.secretKey),
     statusIdx: index('widget_keys_status_idx').on(table.status),
+    createdByIdpUuidIdx: index('widget_keys_created_by_idp_uuid_idx').on(
+      table.createdByIdpUuid,
+    ),
   }),
 );
 

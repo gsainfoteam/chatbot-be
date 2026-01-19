@@ -70,7 +70,7 @@ export class AuthController {
 
   @Get('admin/verify')
   @UseGuards(AdminJwtGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('bearerAuth')
   @ApiOperation({
     summary: 'Admin 토큰 검증',
     description:
@@ -131,7 +131,7 @@ export class AuthController {
 
   @Post('admin/logout')
   @UseGuards(AdminJwtGuard)
-  @ApiBearerAuth()
+  @ApiBearerAuth('bearerAuth')
   @ApiOperation({
     summary: 'Admin 로그아웃',
     description: `로그아웃 처리합니다.
@@ -149,7 +149,6 @@ export class AuthController {
     status: 401,
     description: '토큰이 유효하지 않음',
   })
-  // eslint-disable-next-line @typescript-eslint/require-await
   async logout(@Body() _dto: LogoutRequestDto): Promise<LogoutResponseDto> {
     // 임시 조치 : Dto 출력
     console.log('=== LOGOUT REQUEST ===');

@@ -13,8 +13,10 @@ export function extractDomain(url: string): string {
     const urlObj = new URL(url);
     return urlObj.hostname;
   } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.log(errorMessage);
     // URL 파싱 실패 시 수동으로 추출 시도
-    const match = url.match(/^(?:https?:\/\/)?([^\/\?#]+)/i);
+    const match = url.match(/^(?:https?:\/\/)?([^/\\?#]+)/i);
     return match ? match[1] : '';
   }
 }

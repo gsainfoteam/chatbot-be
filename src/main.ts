@@ -50,6 +50,8 @@ async function bootstrap() {
     .addTag('Widget Auth', '(Public) 위젯 초기화 및 세션 발급')
     .addTag('Widget Messages', '(Public) 대화 내역 저장 및 조회')
     .addTag('Admin Management', '(Private) 위젯 키 관리')
+    .addTag('Authentication', '(Private) Admin 인증 및 토큰 관리')
+    .addTag('Health', '(Public) 서버 상태 확인')
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
@@ -66,10 +68,12 @@ async function bootstrap() {
       `https://${configService.get<string>('DOMAIN_NAME') ?? ''}`,
     ],
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Origin'],
   });
 
   await app.listen(port, '0.0.0.0');
   console.log(`Application is running on: http://localhost:${port}`);
   console.log(`Swagger documentation: http://localhost:${port}/api/docs`);
 }
-bootstrap();
+void bootstrap();

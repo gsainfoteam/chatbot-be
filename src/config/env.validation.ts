@@ -89,6 +89,11 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   IDP_CLIENT_SECRET: string;
+
+  // Open Router Configuration
+  @IsString()
+  @IsNotEmpty()
+  OPEN_ROUTER_API_KEY: string;
 }
 
 /**

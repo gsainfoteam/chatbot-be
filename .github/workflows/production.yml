@@ -65,12 +65,20 @@ jobs:
           fetch-depth: 0
 
       - name: Update Kubernetes Manifest
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          REPOSITORY: ${{ env.REPOSITORY }}
+          IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
-          sed -i "s|image:.*|image: $REGISTRY\/$REPOSITORY:$IMAGE_TAG|g" infoteam/service/chatbot/prod.yaml
+          echo "Updating image to: $REGISTRY/$REPOSITORY:$IMAGE_TAG"
+          ls -la infoteam/service/chatbot/
+          sed -i "s|image:.*|image: $REGISTRY/$REPOSITORY:$IMAGE_TAG|g" infoteam/service/chatbot/prod.yaml
+          cat infoteam/service/chatbot/prod.yaml | grep "image:"
 
       - name: Commit and Push
         run: |
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "GitHub Actions"
-          git commit -am "Update image $REPOSITORY:$IMAGE_TAG"
+          git add infoteam/service/chatbot/prod.yaml
+          git commit -m "Update image ${{ env.REPOSITORY }}:${{ env.IMAGE_TAG }}"
           git push -u origin master

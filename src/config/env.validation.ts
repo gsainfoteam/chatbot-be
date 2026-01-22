@@ -89,6 +89,11 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   IDP_CLIENT_SECRET: string;
+
+  // Client Domain Configuration
+  @IsString()
+  @IsNotEmpty()
+  DOMAIN_NAME: string;
 }
 
 /**

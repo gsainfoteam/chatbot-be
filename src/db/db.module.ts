@@ -17,7 +17,7 @@ import {
         const user = configService.get<string>('DB_USER', 'postgres');
         const password = configService.get<string>('DB_PASSWORD', 'postgres');
         const database = configService.get<string>('DB_NAME', 'ziggle_chatbot');
-        const ssl = configService.get<string>('DB_SSL', 'false') === 'true';
+        const ssl = configService.get<boolean>('DB_SSL', false);
 
         const connectionString = `postgres://${user}:${password}@${host}:${port}/${database}${ssl ? '?sslmode=require' : ''}`;
 

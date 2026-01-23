@@ -72,13 +72,21 @@ jobs:
         run: |
           echo "Updating image to: $REGISTRY/$REPOSITORY:$IMAGE_TAG"
           ls -la infoteam/service/chatbot/
-          sed -i "s|image:.*|image: $REGISTRY/$REPOSITORY:$IMAGE_TAG|g" infoteam/service/chatbot/prod.yaml
+          echo "Before sed:"
           cat infoteam/service/chatbot/prod.yaml | grep "image:"
+          sed -i "s|image: .*|image: $REGISTRY/$REPOSITORY:$IMAGE_TAG|g" infoteam/service/chatbot/prod.yaml
+          echo "After sed:"
+          cat infoteam/service/chatbot/prod.yaml | grep "image:"
+          git diff infoteam/service/chatbot/prod.yaml
 
       - name: Commit and Push
         run: |
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "GitHub Actions"
           git add infoteam/service/chatbot/prod.yaml
-          git commit -m "Update image ${{ env.REPOSITORY }}:${{ env.IMAGE_TAG }}"
-          git push -u origin master
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update image ${{ env.REPOSITORY }}:${{ env.IMAGE_TAG }}"
+            git push -u origin master
+          fi

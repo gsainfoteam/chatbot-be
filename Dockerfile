@@ -28,9 +28,13 @@ COPY --from=build /app/drizzle drizzle
 COPY --from=build /app/drizzle.config.ts .
 COPY --from=build /app/package.json .
 COPY --from=build /app/tsconfig.json .
+COPY --from=build /app/scripts scripts
+
+# 스크립트 실행 권한 부여
+RUN chmod +x /app/scripts/start.sh
 
 # 포트 노출
 EXPOSE 3000
 
-# 애플리케이션 실행
-CMD ["bun", "run", "start:prod"]
+# 애플리케이션 실행 (migration 후 start)
+CMD ["/app/scripts/start.sh"]

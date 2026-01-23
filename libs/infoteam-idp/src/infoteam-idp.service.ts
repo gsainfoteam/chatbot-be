@@ -232,6 +232,14 @@ export class InfoteamIdpService implements OnModuleInit {
     const clientSecret =
       this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
 
+    // 디버깅을 위한 로그 추가
+    this.logger.log('=== Exchange Code for Token ===');
+    this.logger.log(`IDP URL: ${this.idpUrl}`);
+    this.logger.log(`Client ID: ${clientId}`);
+    this.logger.log(`Redirect URI: ${redirectUri}`);
+    this.logger.log(`Code length: ${code.length}`);
+    this.logger.log(`Code verifier present: ${!!codeVerifier}`);
+
     // HTTP Basic Auth header 생성
     const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
       'base64',
@@ -266,8 +274,12 @@ export class InfoteamIdpService implements OnModuleInit {
         )
         .pipe(
           catchError((err: AxiosError) => {
-            this.logger.error('Error exchanging authorization code');
+            this.logger.error('=== Error exchanging authorization code ===');
             this.logger.error('Status:', err.response?.status);
+            this.logger.error('Status Text:', err.response?.statusText);
+            this.logger.error('Response Data:', JSON.stringify(err.response?.data));
+            this.logger.error('Request URL:', err.config?.url);
+            this.logger.error('Request Headers:', JSON.stringify(err.config?.headers));
             if (err.response?.status === 400 || err.response?.status === 401) {
               throw new UnauthorizedException(
                 'Invalid authorization code or redirect URI',
@@ -280,6 +292,7 @@ export class InfoteamIdpService implements OnModuleInit {
         ),
     );
 
+    this.logger.log('Token exchange successful');
     return tokenResponse.data;
   }
 

@@ -56,6 +56,11 @@ export class AuthController {
   async login(
     @Body() dto: AdminLoginRequestDto,
   ): Promise<AdminLoginResponseDto> {
+    console.log('=== Admin Login Request ===');
+    console.log('Code length:', dto.code?.length);
+    console.log('Redirect URI:', dto.redirect_uri);
+    console.log('Code verifier present:', !!dto.code_verifier);
+    
     const result = await this.adminAuthService.loginWithCode(
       dto.code,
       dto.redirect_uri,

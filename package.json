@@ -26,6 +26,7 @@
     "test:all": "bun run test:unit && bun run test:e2e",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate:safe": "bash scripts/migrate.sh",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
   },

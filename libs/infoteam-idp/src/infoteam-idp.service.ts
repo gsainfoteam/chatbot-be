@@ -280,11 +280,31 @@ export class InfoteamIdpService implements OnModuleInit {
             this.logger.error('Response Data:', JSON.stringify(err.response?.data));
             this.logger.error('Request URL:', err.config?.url);
             this.logger.error('Request Headers:', JSON.stringify(err.config?.headers));
-            if (err.response?.status === 400 || err.response?.status === 401) {
+            this.logger.error('Request Body:', err.config?.data);
+            
+            // 400 에러 상세 분석
+            if (err.response?.status === 400) {
+              const errorData = err.response?.data as any;
+              if (errorData?.error === 'invalid_grant') {
+                this.logger.error('Invalid grant error - possible causes:');
+                this.logger.error('1. Authorization code already used');
+                this.logger.error('2. Code verifier does not match code challenge');
+                this.logger.error('3. Redirect URI mismatch');
+                this.logger.error('4. Authorization code expired');
+              }
+              throw new UnauthorizedException(
+                `Invalid authorization code: ${errorData?.error || 'invalid_grant'}`,
+              );
+            }
+            
+            if (err.response?.status === 401) {
               throw new UnauthorizedException(
                 'Invalid authorization code or redirect URI',
               );
             }
+            
+            // 그 외의 에러는 500으로 처리
+            this.logger.error('Unexpected error:', err.message);
             throw new InternalServerErrorException(
               'Failed to exchange authorization code',
             );

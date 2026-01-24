@@ -63,6 +63,7 @@ export interface OpenRouterRequest {
     | { type: 'function'; function: { name: string } };
   temperature?: number;
   max_tokens?: number;
+  stream?: boolean;
 }
 
 /**

@@ -9,45 +9,33 @@ import { OpenRouterService } from './open-router.service';
 import { ChatService } from './chat.service';
 import type { McpTool, OpenRouterMessage } from '../types/open-router.types';
 import { MessageRole } from '../../common/dto/chat-message-input.dto';
+import type { Readable } from 'stream';
+import type { FastifyReply } from 'fastify';
 
 /**
  * 리소스 정보
  */
 export interface ResourceInfo {
-  path: string;
+  path: string; // 문서 제목 (PDF/PNG인 경우 format 포함)
   formats: string[];
   url: string;
 }
 
 /**
- * 사용자 질문 처리 결과
- */
-export interface ChatResponse {
-  message: string;
-  toolCalls?: Array<{
-    toolName: string;
-    arguments: Record<string, any>;
-    result?: string;
-    resources?: ResourceInfo[];
-  }>;
-  resources?: ResourceInfo[];
-  metadata?: {
-    model?: string;
-    usage?: {
-      prompt_tokens: number;
-      completion_tokens: number;
-      total_tokens: number;
-    };
-  };
-}
-
-/**
  * 채팅 오케스트레이션 서비스
- * 사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 생성
+ * 사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 생성합니다.
  */
 @Injectable()
 export class ChatOrchestrationService {
   private readonly logger = new Logger(ChatOrchestrationService.name);
+
+  // Tool 목록 캐시 (5분간 유효)
+  private cachedTools: McpTool[] | null = null;
+  private cachedToolsTimestamp: number = 0;
+  private readonly TOOLS_CACHE_TTL = 5 * 60 * 1000; // 5분
+
+  // Tool 실행 타임아웃 (30초)
+  private readonly TOOL_EXECUTION_TIMEOUT = 30 * 1000;
 
   constructor(
     private readonly mcpClientService: McpClientService,
@@ -57,15 +45,721 @@ export class ChatOrchestrationService {
   ) {}
 
   /**
-   * 사용자 질문을 처리하여 답변을 생성
+   * MCP Tool 목록을 가져오거나 캐시에서 반환
+   */
+  private async getMcpTools(): Promise<McpTool[]> {
+    const now = Date.now();
+    if (
+      this.cachedTools &&
+      now - this.cachedToolsTimestamp < this.TOOLS_CACHE_TTL
+    ) {
+      this.logger.debug('Using cached MCP tools');
+      return this.cachedTools;
+    }
+
+    this.logger.debug('Fetching MCP tools from server...');
+    const mcpToolsListResult: unknown = await this.mcpClientService.listTools();
+
+    type ToolItem = {
+      name: string;
+      description?: string;
+      inputSchema?: McpTool['inputSchema'];
+    };
+    const mcpToolsList: ToolItem[] = Array.isArray(mcpToolsListResult)
+      ? (mcpToolsListResult as ToolItem[])
+      : [];
+    const mcpTools: McpTool[] = mcpToolsList.map((tool) => ({
+      name: tool.name,
+      description: tool.description ?? '',
+      inputSchema: tool.inputSchema,
+    }));
+
+    this.cachedTools = mcpTools;
+    this.cachedToolsTimestamp = now;
+
+    return mcpTools;
+  }
+
+  /**
+   * 리소스 경로 정규화
+   * MCP 서버는 확장자 없이 경로를 받고 자동으로 .md 또는 .pdf를 찾으므로,
+   * 확장자를 제거하여 전달합니다.
+   */
+  private normalizeResourcePath(path: string): string {
+    // 확장자가 있으면 제거 (MCP 서버가 자동으로 찾음)
+    if (path.includes('.')) {
+      const lastDotIndex = path.lastIndexOf('.');
+      // 마지막 점 이후가 확장자인 경우 (예: .md, .pdf)
+      const extension = path.substring(lastDotIndex + 1);
+      if (extension.length <= 5 && /^[a-z0-9]+$/i.test(extension)) {
+        return path.substring(0, lastDotIndex);
+      }
+    }
+    return path;
+  }
+
+  /**
+   * 경로에서 마지막 문서 제목만 추출 (확장자 포함)
+   * 예: "2025 캠프 발표자료_ 1일차 오전/학생지원.md" -> "학생지원.md"
+   * 원본 경로에 확장자가 없으면 formats 배열에서 찾아서 추가
+   */
+  private extractDocumentTitle(
+    path: string,
+    originalPath?: string,
+    formats?: string[],
+  ): string {
+    // 원본 경로가 있으면 원본 경로 사용 (확장자 포함)
+    const pathToUse = originalPath || path;
+
+    // 슬래시로 분리하여 마지막 부분만 반환
+    const parts = pathToUse.split('/');
+    let title = parts[parts.length - 1] || pathToUse;
+
+    // 확장자가 없고 formats 배열에 md가 있으면 .md 추가
+    if (!title.includes('.') && formats && formats.includes('md')) {
+      title = `${title}.md`;
+    }
+
+    return title;
+  }
+
+  /**
+   * get_resource 툴 응답에서 텍스트 내용 추출
+   * MCP 서버는 문자열을 직접 반환하므로, texts 배열이나 raw.content에서 추출
+   */
+  private extractContentFromToolResult(
+    toolResult: Awaited<ReturnType<typeof this.mcpClientService.callTool>>,
+  ): string {
+    // texts 배열에서 내용 추출 (가장 일반적인 경우)
+    if (toolResult.texts.length > 0) {
+      // texts가 여러 개인 경우 합치기
+      const content = toolResult.texts.join('\n');
+      // JSON 문자열이 아닌 경우 그대로 반환
+      if (
+        content &&
+        !content.trim().startsWith('{') &&
+        !content.trim().startsWith('[')
+      ) {
+        return content;
+      }
+    }
+
+    // raw.content에서 text 타입 항목 추출
+    if (toolResult.raw.content) {
+      const textContents: string[] = [];
+      for (const item of toolResult.raw.content) {
+        if (item.type === 'text' && 'text' in item) {
+          const text = item.text;
+          // JSON 문자열이 아닌 경우 그대로 추가
+          if (
+            text &&
+            !text.trim().startsWith('{') &&
+            !text.trim().startsWith('[')
+          ) {
+            textContents.push(text);
+          }
+        }
+      }
+      if (textContents.length > 0) {
+        return textContents.join('\n');
+      }
+    }
+
+    return '';
+  }
+
+  /**
+   * 리소스 내용을 가져와서 Tool 결과에 포함
+   */
+  private async fetchResourceContents(
+    resourcePaths: string[],
+  ): Promise<string> {
+    const contents: string[] = [];
+    const maxResources = 5; // 최대 5개까지만 가져오기
+
+    for (const path of resourcePaths.slice(0, maxResources)) {
+      try {
+        const resourcePath = this.normalizeResourcePath(path);
+        this.logger.debug(`Fetching resource content: ${resourcePath}`);
+        const toolResult = await this.mcpClientService.callTool(
+          'get_resource',
+          {
+            path: resourcePath,
+          },
+        );
+
+        const content = this.extractContentFromToolResult(toolResult);
+        if (content) {
+          const documentTitle = this.extractDocumentTitle(
+            resourcePath,
+            path,
+            undefined,
+          );
+          contents.push(`\n\n## 리소스: ${documentTitle}\n\n${content}`);
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to fetch resource ${path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    return contents.join('\n');
+  }
+
+  /**
+   * 질문 키워드와 리소스 경로를 매칭하여 관련 리소스 찾기
+   */
+  private findRelevantResources(
+    question: string,
+    resources: Array<{ path: string; formats?: string[] }>,
+    maxResults: number = 3,
+  ): Array<{ path: string; formats?: string[] }> {
+    const keywords =
+      question
+        .toLowerCase()
+        .match(/[\uac00-\ud7a3]+|[a-z]+/gi)
+        ?.filter((word) => word.length > 1) || [];
+
+    if (keywords.length === 0) {
+      return resources.slice(0, maxResults);
+    }
+
+    const scoredResources = resources.map((resource) => {
+      const pathLower = resource.path.toLowerCase();
+      let score = 0;
+
+      for (const keyword of keywords) {
+        if (pathLower.includes(keyword)) {
+          score += keyword.length;
+        }
+      }
+
+      return { resource, score };
+    });
+
+    return scoredResources
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxResults)
+      .map((item) => item.resource);
+  }
+
+  /**
+   * 리소스 내용에서 <document> 태그를 파싱하여 하위 문서 정보 추출
+   */
+  private parseDocumentLinks(content: string): Array<{
+    path: string;
+    description: string;
+  }> {
+    const documents: Array<{ path: string; description: string }> = [];
+    const documentRegex =
+      /<document\s+path="([^"]+)"\s+description="([^"]+)"><\/document>/g;
+
+    let match;
+    while ((match = documentRegex.exec(content)) !== null) {
+      documents.push({
+        path: match[1],
+        description: match[2],
+      });
+    }
+
+    return documents;
+  }
+
+  /**
+   * 질문과 관련된 하위 문서 찾기
+   */
+  private findRelevantSubDocuments(
+    question: string,
+    documents: Array<{ path: string; description: string }>,
+    maxResults: number = 3,
+  ): Array<{ path: string; description: string }> {
+    const keywords =
+      question
+        .toLowerCase()
+        .match(/[\uac00-\ud7a3]+|[a-z]+/gi)
+        ?.filter((word) => word.length > 1) || [];
+
+    if (keywords.length === 0) {
+      return documents.slice(0, maxResults);
+    }
+
+    const scoredDocuments = documents.map((doc) => {
+      const pathLower = doc.path.toLowerCase();
+      const descLower = doc.description.toLowerCase();
+      let score = 0;
+
+      for (const keyword of keywords) {
+        if (pathLower.includes(keyword)) {
+          score += keyword.length * 2; // 경로 매칭은 가중치 높게
+        }
+        if (descLower.includes(keyword)) {
+          score += keyword.length; // 설명 매칭
+        }
+      }
+
+      return { document: doc, score };
+    });
+
+    return scoredDocuments
+      .sort((a, b) => b.score - a.score)
+      .slice(0, maxResults)
+      .map((item) => item.document);
+  }
+
+  /**
+   * 하위 문서 내용 가져오기
+   */
+  private async fetchSubDocumentContents(
+    subDocuments: Array<{ path: string; description: string }>,
+  ): Promise<string> {
+    const contents: string[] = [];
+
+    for (const doc of subDocuments) {
+      try {
+        const resourcePath = this.normalizeResourcePath(doc.path);
+        this.logger.debug(`Fetching sub-document: ${resourcePath}`);
+        const toolResult = await this.mcpClientService.callTool(
+          'get_resource',
+          {
+            path: resourcePath,
+          },
+        );
+
+        const content = this.extractContentFromToolResult(toolResult);
+        if (content) {
+          const documentTitle = this.extractDocumentTitle(
+            resourcePath,
+            doc.path,
+            ['md'],
+          );
+          contents.push(
+            `\n\n## 하위 문서: ${documentTitle}\n\n**설명**: ${doc.description}\n\n${content}`,
+          );
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to fetch sub-document ${doc.path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    return contents.join('\n');
+  }
+
+  /**
+   * LLM에게 문서 목록을 주고 질문과 관련성이 높은 문서만 선별하도록 요청
+   */
+  private async selectMostRelevantDocuments(
+    question: string,
+    documents: Array<{ title: string; content: string; path: string }>,
+  ): Promise<Array<{ title: string; content: string; path: string }>> {
+    if (documents.length === 0) {
+      return [];
+    }
+
+    // 문서가 1개면 선별 불필요
+    if (documents.length === 1) {
+      return documents;
+    }
+
+    try {
+      // 문서 제목만 사용하여 프롬프트 생성 (내용은 제외하여 프롬프트 길이 최소화)
+      const documentList = documents
+        .map((doc, index) => `${index + 1}. ${doc.title}`)
+        .join('\n');
+
+      const selectionPrompt = `다음은 사용자 질문에 대한 관련 문서 목록입니다:
+
+${documentList}
+
+사용자 질문: "${question}"
+
+위 문서들 중에서 사용자 질문에 **실제로 도움이 되는** 문서만 선택해주세요.
+**최대 3개까지만** 선택해주세요. 가장 관련성이 높은 문서만 선택하세요.
+문서 번호만 쉼표로 구분하여 나열해주세요. 예: "1, 3, 5"
+모든 문서가 도움이 되지 않으면 "없음"이라고 답변해주세요.`;
+
+      this.logger.debug(
+        `Selection prompt length: ${selectionPrompt.length} chars, documents: ${documents.length}`,
+      );
+
+      const response = await this.openRouterService.callLLM(
+        [
+          {
+            role: 'system',
+            content:
+              '당신은 문서의 관련성을 판단하는 전문가입니다. 사용자 질문에 실제로 도움이 되는 문서만 선택하세요.',
+          },
+          {
+            role: 'user',
+            content: selectionPrompt,
+          },
+        ],
+        undefined,
+        { temperature: 0.1, max_tokens: 100 },
+      );
+
+      const selectedText = response.choices[0]?.message?.content?.trim() || '';
+      this.logger.debug(`LLM selected documents: ${selectedText}`);
+
+      // "없음"이면 빈 배열 반환
+      if (selectedText.toLowerCase().includes('없음')) {
+        return [];
+      }
+
+      // 번호 추출 (예: "1, 3, 5" 또는 "1,3,5")
+      const numbers =
+        selectedText
+          .match(/\d+/g)
+          ?.map((n) => parseInt(n, 10) - 1) // 0-based index로 변환
+          .filter((n) => n >= 0 && n < documents.length) || [];
+
+      if (numbers.length === 0) {
+        // 번호를 파싱할 수 없으면 모든 문서 반환 (최대 3개)
+        this.logger.warn(
+          `Could not parse document selection, returning first 3 documents`,
+        );
+        return documents.slice(0, 3);
+      }
+
+      // 최대 3개로 제한
+      const limitedNumbers = numbers.slice(0, 3);
+      const selected = limitedNumbers.map((idx) => documents[idx]);
+      this.logger.log(
+        `Selected ${selected.length} relevant document(s) out of ${documents.length}: ${selected.map((d) => d.title).join(', ')}`,
+      );
+
+      return selected;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to select relevant documents: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      // 에러 발생 시 모든 문서 반환
+      return documents;
+    }
+  }
+
+  /**
+   * list_resources tool 응답에서 관련 리소스 내용 가져오기
+   * formats 배열에 md가 있는 리소스만 가져옵니다.
+   * 리소스 내용에 하위 문서 링크가 있으면 관련 하위 문서도 추가로 가져옵니다.
+   * LLM에게 질문과 관련성이 높은 문서만 선별하도록 요청합니다.
+   * @returns 문서 내용과 실제 사용된 리소스 정보 (PDF/PNG만)
+   */
+  private async fetchRelevantResourceContents(
+    question: string,
+    filteredResources: Array<{ path: string; formats: string[] }>,
+  ): Promise<{
+    content: string;
+    usedResources: Array<{ path: string; formats: string[] }>;
+  }> {
+    if (!filteredResources || filteredResources.length === 0) {
+      return { content: '', usedResources: [] };
+    }
+
+    // formats 배열에 md가 있는 리소스만 필터링
+    const mdResources = filteredResources.filter(
+      (resource) => resource.formats && resource.formats.includes('md'),
+    );
+
+    if (mdResources.length === 0) {
+      this.logger.debug('No markdown resources found in filtered resources');
+      return { content: '', usedResources: [] };
+    }
+
+    const relevantResources = this.findRelevantResources(
+      question,
+      mdResources,
+      5, // 초기 선택은 5개로 늘림 (나중에 LLM이 선별)
+    );
+
+    if (relevantResources.length === 0) {
+      return { content: '', usedResources: [] };
+    }
+
+    this.logger.log(
+      `Found ${relevantResources.length} candidate markdown resource(s): ${relevantResources.map((r) => r.path).join(', ')}`,
+    );
+
+    // 모든 후보 문서 내용 가져오기
+    const documentCandidates: Array<{
+      title: string;
+      content: string;
+      path: string;
+      formats: string[];
+      subDocuments: Array<{ path: string; description: string }>;
+    }> = [];
+
+    for (const resource of relevantResources) {
+      try {
+        // MCP 서버는 확장자 없이 경로를 받음
+        const resourcePath = this.normalizeResourcePath(resource.path);
+        this.logger.debug(`Fetching markdown resource: ${resourcePath}`);
+        const toolResult = await this.mcpClientService.callTool(
+          'get_resource',
+          {
+            path: resourcePath,
+          },
+        );
+
+        const content = this.extractContentFromToolResult(toolResult);
+        if (content) {
+          const documentTitle = this.extractDocumentTitle(
+            resourcePath,
+            resource.path,
+            resource.formats,
+          );
+
+          // 리소스 내용에서 하위 문서 링크 추출
+          const subDocuments = this.parseDocumentLinks(content);
+
+          documentCandidates.push({
+            title: documentTitle,
+            content,
+            path: resource.path,
+            formats: resource.formats || [],
+            subDocuments,
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Failed to fetch ${resource.path}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    if (documentCandidates.length === 0) {
+      return { content: '', usedResources: [] };
+    }
+
+    // LLM에게 질문과 관련성이 높은 문서만 선별하도록 요청
+    const selectedDocuments = await this.selectMostRelevantDocuments(
+      question,
+      documentCandidates.map((doc) => ({
+        title: doc.title,
+        content: doc.content,
+        path: doc.path,
+      })),
+    );
+
+    if (selectedDocuments.length === 0) {
+      this.logger.log('No documents selected by LLM as relevant');
+      return { content: '', usedResources: [] };
+    }
+
+    // 선별된 문서만 사용
+    const contents: string[] = [];
+    const allSubDocuments: Array<{ path: string; description: string }> = [];
+    const usedResources: Array<{ path: string; formats: string[] }> = [];
+
+    for (const selected of selectedDocuments) {
+      const docCandidate = documentCandidates.find(
+        (d) => d.title === selected.title,
+      );
+      if (docCandidate) {
+        contents.push(
+          `\n\n## 리소스: ${docCandidate.title}\n\n${docCandidate.content}`,
+        );
+
+        // 실제 사용된 리소스 정보 수집 (PDF/PNG만)
+        const hasPdf = docCandidate.formats.includes('pdf');
+        const hasPng = docCandidate.formats.includes('png');
+        if (hasPdf || hasPng) {
+          usedResources.push({
+            path: docCandidate.path,
+            formats: docCandidate.formats.filter(
+              (f) => f === 'pdf' || f === 'png',
+            ),
+          });
+        }
+
+        // 하위 문서도 수집
+        if (docCandidate.subDocuments.length > 0) {
+          allSubDocuments.push(...docCandidate.subDocuments);
+        }
+      }
+    }
+
+    // 하위 문서 중 질문과 관련된 문서 찾아서 추가로 가져오기
+    if (allSubDocuments.length > 0) {
+      const relevantSubDocuments = this.findRelevantSubDocuments(
+        question,
+        allSubDocuments,
+        3, // 최대 3개의 하위 문서만 추가로 가져오기
+      );
+
+      if (relevantSubDocuments.length > 0) {
+        this.logger.log(
+          `Fetching ${relevantSubDocuments.length} relevant sub-document(s): ${relevantSubDocuments.map((d) => d.path).join(', ')}`,
+        );
+        const subDocumentContents =
+          await this.fetchSubDocumentContents(relevantSubDocuments);
+        if (subDocumentContents) {
+          contents.push('\n\n---\n\n## 관련 하위 문서\n' + subDocumentContents);
+        }
+      }
+    }
+
+    return {
+      content: contents.join('\n'),
+      usedResources,
+    };
+  }
+
+  /**
+   * Tool 실행에 타임아웃 적용
+   */
+  private async executeToolWithTimeout(
+    toolCall: {
+      id: string;
+      name: string;
+      arguments: Record<string, any>;
+    },
+    sessionId: string,
+    userQuestion?: string,
+  ): Promise<{
+    tool_call_id: string;
+    name: string;
+    content: string;
+    resources: ResourceInfo[];
+  }> {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Tool execution timeout: ${toolCall.name}`));
+      }, this.TOOL_EXECUTION_TIMEOUT);
+    });
+
+    const executePromise = (async () => {
+      this.logger.debug(
+        `Calling tool: ${toolCall.name} with args: ${JSON.stringify(toolCall.arguments)}`,
+      );
+
+      const toolResult = await this.mcpClientService.callTool(
+        toolCall.name,
+        toolCall.arguments,
+      );
+
+      let resultText =
+        toolResult.texts.join('\n') || JSON.stringify(toolResult.raw, null, 2);
+
+      // list_resources tool인 경우, 관련 리소스 내용을 가져와서 추가
+      let usedResourcesFromContent: Array<{
+        path: string;
+        formats: string[];
+      }> = [];
+      if (
+        toolCall.name === 'list_resources' &&
+        userQuestion &&
+        toolResult.filteredResources &&
+        toolResult.filteredResources.length > 0
+      ) {
+        const relevantResult = await this.fetchRelevantResourceContents(
+          userQuestion,
+          toolResult.filteredResources,
+        );
+        if (relevantResult.content) {
+          resultText += '\n\n' + relevantResult.content;
+          usedResourcesFromContent = relevantResult.usedResources;
+        }
+      } else {
+        // 기존 로직: 텍스트에서 리소스 경로 추출 및 내용 가져오기
+        const resourcePaths = this.extractResourcePaths(resultText);
+        if (resourcePaths.length > 0) {
+          const resourceContents =
+            await this.fetchResourceContents(resourcePaths);
+          if (resourceContents) {
+            resultText += '\n\n' + resourceContents;
+          }
+        }
+      }
+
+      // 실제 사용된 리소스만 포함 (PDF/PNG만)
+      const resources: ResourceInfo[] = [];
+      if (usedResourcesFromContent.length > 0) {
+        for (const resource of usedResourcesFromContent) {
+          if (resource.path && resource.formats) {
+            // PDF 또는 PNG만 포함
+            const pdfPngFormats = resource.formats.filter(
+              (f) => f === 'pdf' || f === 'png',
+            );
+            if (pdfPngFormats.length > 0) {
+              const resourceUrl = this.generateResourceUrl(resource.path);
+              // 문서 제목 추출 (마지막 부분만)
+              const documentTitle = this.extractDocumentTitle(
+                resource.path,
+                resource.path,
+                pdfPngFormats,
+              );
+              // PDF/PNG인 경우 format을 제목에 추가
+              const titleWithFormat = pdfPngFormats.includes('pdf')
+                ? `${documentTitle} (PDF)`
+                : pdfPngFormats.includes('png')
+                  ? `${documentTitle} (PNG)`
+                  : documentTitle;
+
+              resources.push({
+                path: titleWithFormat,
+                formats: pdfPngFormats,
+                url: resourceUrl,
+              });
+            }
+          }
+        }
+      }
+
+      return {
+        tool_call_id: toolCall.id,
+        name: toolCall.name,
+        content: resultText,
+        resources,
+      };
+    })();
+
+    return Promise.race([executePromise, timeoutPromise]);
+  }
+
+  /**
+   * Tool 결과 텍스트에서 리소스 경로 추출
+   */
+  private extractResourcePaths(text: string): string[] {
+    const paths: string[] = [];
+
+    // 마크다운 링크 형식: - [text](path) 또는 - path
+    const markdownLinkRegex = /-\s+(?:\[.*?\]\(([^)]+)\)|([^\n]+\.md))/g;
+    let match;
+    while ((match = markdownLinkRegex.exec(text)) !== null) {
+      const path = match[1] || match[2];
+      if (path && path.trim() && path.includes('/')) {
+        paths.push(path.trim());
+      }
+    }
+
+    // 일반 경로 패턴: "경로" 또는 '경로' (슬래시 포함)
+    const quotedPathRegex = /["']([^"']+\.md)["']/g;
+    while ((match = quotedPathRegex.exec(text)) !== null) {
+      const path = match[1].trim();
+      if (path.includes('/')) {
+        paths.push(path);
+      }
+    }
+
+    return [...new Set(paths)]; // 중복 제거
+  }
+
+  /**
+   * 사용자 질문을 처리하여 스트리밍 답변을 생성
    * @param sessionId 세션 ID
    * @param userQuestion 사용자 질문
-   * @returns 생성된 답변
+   * @returns 스트리밍 응답 스트림과 리소스 정보
    */
-  async processUserQuestion(
+  async processUserQuestionStream(
     sessionId: string,
     userQuestion: string,
-  ): Promise<ChatResponse> {
+  ): Promise<{
+    stream: Readable;
+    resources: ResourceInfo[];
+  }> {
     try {
       // 1. 사용자 메시지 저장
       await this.chatService.createMessage(sessionId, {
@@ -73,237 +767,176 @@ export class ChatOrchestrationService {
         content: userQuestion,
       });
 
-      // 2. MCP Tool 목록 조회
-      this.logger.debug('Fetching MCP tools...');
-      const mcpToolsListResult: unknown =
-        await this.mcpClientService.listTools();
-
-      // MCPTool 형식으로 변환
-      type ToolItem = { name: string; description?: string };
-      const mcpToolsList: ToolItem[] = Array.isArray(mcpToolsListResult)
-        ? (mcpToolsListResult as ToolItem[])
-        : [];
-      const mcpTools: McpTool[] = mcpToolsList.map((tool) => ({
-        name: tool.name,
-        description: tool.description ?? '',
-      }));
+      // 2. MCP Tool 목록 조회 (캐시 사용)
+      const mcpTools = await this.getMcpTools();
 
       if (mcpTools.length === 0) {
-        this.logger.warn('No MCP tools available, using LLM without tools');
-        // Tool이 없으면 일반 LLM 호출
-        const response = await this.openRouterService.callLLM([
-          {
-            role: 'system',
-            content:
-              "Because of the lack of MCP tools, you must not answer the user's question. Just say that you don't know the answer.",
-          },
-          {
-            role: 'user',
-            content: userQuestion,
-          },
-        ]);
-
-        const assistantMessage =
-          response.choices[0]?.message.content ||
-          '죄송합니다. 응답을 생성할 수 없습니다.';
-
-        // Assistant 메시지 저장
-        await this.chatService.createMessage(sessionId, {
-          role: MessageRole.ASSISTANT,
-          content: assistantMessage,
-          metadata: {
-            model: response.model,
-            usage: response.usage,
-          },
-        });
-
-        return {
-          message: assistantMessage,
-          metadata: {
-            model: response.model,
-            usage: response.usage,
-          },
-        };
+        this.logger.warn('No MCP tools available');
+        const stream = await this.openRouterService.generateFinalResponseStream(
+          [
+            {
+              role: 'system',
+              content:
+                '사용할 수 있는 MCP 도구가 없으므로, 질문에 답변할 수 없습니다. 모른다고 대답하세요.',
+            },
+            {
+              role: 'user',
+              content: userQuestion,
+            },
+          ],
+          [],
+        );
+        return { stream, resources: [] };
       }
 
-      // 3. LLM에게 Tool 선택 요청
-      this.logger.debug('Requesting tool selection from LLM...');
-      const toolSelectionResponse = await this.openRouterService.selectTool(
-        userQuestion,
-        mcpTools,
+      // 3. LLM에게 Tool 선택 요청 (최대 2회 시도)
+      this.logger.debug(
+        `Requesting tool selection from LLM for question: "${userQuestion}"`,
       );
 
-      // 4. Tool Call 파싱
-      const toolCalls = this.openRouterService.parseToolCalls(
-        toolSelectionResponse,
-      );
+      let toolSelectionResponse: any;
+      let toolCalls: any[] = [];
+      const maxAttempts = 2;
 
-      // 5. Tool이 선택되지 않은 경우 (일반 대화)
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          toolSelectionResponse = await this.openRouterService.selectTool(
+            userQuestion,
+            mcpTools,
+            undefined,
+            attempt > 1
+              ? { temperature: 0.1, emphasizeToolUsage: true }
+              : undefined,
+          );
+
+          toolCalls = this.openRouterService.parseToolCalls(
+            toolSelectionResponse,
+          );
+
+          this.logger.debug(
+            `Tool selection result (attempt ${attempt}/${maxAttempts}): ${toolCalls.length} tool(s) selected`,
+          );
+
+          if (toolCalls.length > 0) {
+            break; // Tool이 선택되었으면 중단
+          }
+
+          // 마지막 시도가 아니면 잠시 대기 후 재시도
+          if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          this.logger.error(
+            `Error during tool selection (attempt ${attempt}): ${errorMessage}`,
+          );
+
+          // 마지막 시도가 아니면 재시도
+          if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            continue;
+          }
+          // 마지막 시도에서도 실패하면 toolCalls는 빈 배열로 유지
+        }
+      }
+
+      // 4. Tool이 선택되지 않은 경우 (2회 시도 후 실패)
       if (toolCalls.length === 0) {
-        const assistantMessage =
-          toolSelectionResponse.choices[0]?.message.content ||
-          '죄송합니다. 응답을 생성할 수 없습니다.';
-
-        // Assistant 메시지 저장
-        await this.chatService.createMessage(sessionId, {
-          role: MessageRole.ASSISTANT,
-          content: assistantMessage,
-          metadata: {
-            model: toolSelectionResponse.model,
-            usage: toolSelectionResponse.usage,
-          },
-        });
-
-        return {
-          message: assistantMessage,
-          metadata: {
-            model: toolSelectionResponse.model,
-            usage: toolSelectionResponse.usage,
-          },
-        };
+        this.logger.warn(
+          `No tools selected after ${maxAttempts} attempt(s). Responding that no relevant materials are available.`,
+        );
+        const stream = await this.openRouterService.generateFinalResponseStream(
+          [
+            {
+              role: 'system',
+              content:
+                '사용자의 질문에 답변하기 위해 필요한 관련 자료를 찾을 수 없습니다. 정중하게 관련 자료가 없어서 답변을 드릴 수 없다고 안내하세요.',
+            },
+            {
+              role: 'user',
+              content: userQuestion,
+            },
+          ],
+          [],
+        );
+        return { stream, resources: [] };
       }
 
-      // 6. Tool 실행
-      this.logger.debug(`Executing ${toolCalls.length} tool(s)...`);
+      // 5. Tool 실행 (병렬 처리)
+      this.logger.debug(`Executing ${toolCalls.length} tool(s) in parallel...`);
+      const toolExecutionPromises = toolCalls.map((toolCall) =>
+        this.executeToolWithTimeout(toolCall, sessionId, userQuestion).catch(
+          (error) => {
+            const errorMessage =
+              error instanceof Error ? error.message : String(error);
+            this.logger.error(
+              `Error executing tool ${toolCall.name}: ${errorMessage}`,
+            );
+            return {
+              tool_call_id: toolCall.id,
+              name: toolCall.name,
+              content: `Tool execution failed: ${errorMessage}`,
+              resources: [] as ResourceInfo[],
+            };
+          },
+        ),
+      );
+
+      const toolExecutionResults = await Promise.all(toolExecutionPromises);
+
       const toolResults: Array<{
         tool_call_id: string;
         name: string;
         content: string;
       }> = [];
-
-      const toolCallDetails: Array<{
-        toolName: string;
-        arguments: Record<string, any>;
-        result?: string;
-        resources?: ResourceInfo[];
-      }> = [];
       const allResources: ResourceInfo[] = [];
 
-      for (const toolCall of toolCalls) {
-        try {
-          this.logger.debug(
-            `Calling tool: ${toolCall.name} with args: ${JSON.stringify(toolCall.arguments)}`,
-          );
+      for (const result of toolExecutionResults) {
+        toolResults.push({
+          tool_call_id: result.tool_call_id,
+          name: result.name,
+          content: result.content,
+        });
 
-          // MCP Tool 실행
-          const toolResult = await this.mcpClientService.callTool(
-            toolCall.name,
-            toolCall.arguments,
-          );
-
-          // Tool 결과를 텍스트로 변환
-          const resultText =
-            toolResult.texts.join('\n') ||
-            JSON.stringify(toolResult.raw, null, 2);
-
-          // 리소스 추출 (JSON 파싱 시도)
-          const toolResources: ResourceInfo[] = [];
-          try {
-            const parsedResult = JSON.parse(resultText);
-            if (
-              parsedResult.resources &&
-              Array.isArray(parsedResult.resources)
-            ) {
-              for (const resource of parsedResult.resources) {
-                if (resource.path && resource.formats) {
-                  const resourceUrl = this.generateResourceUrl(resource.path);
-                  const resourceInfo: ResourceInfo = {
-                    path: resource.path,
-                    formats: resource.formats,
-                    url: resourceUrl,
-                  };
-                  toolResources.push(resourceInfo);
-                  allResources.push(resourceInfo);
-                }
-              }
-            }
-          } catch {
-            // JSON 파싱 실패 시 무시 (텍스트 결과만 사용)
-          }
-
-          toolResults.push({
-            tool_call_id: toolCall.id,
-            name: toolCall.name,
-            content: resultText,
-          });
-
-          toolCallDetails.push({
-            toolName: toolCall.name,
-            arguments: toolCall.arguments,
-            result: resultText,
-            resources: toolResources.length > 0 ? toolResources : undefined,
-          });
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          this.logger.error(
-            `Error executing tool ${toolCall.name}: ${errorMessage}`,
-            error instanceof Error ? error.stack : undefined,
-          );
-          // Tool 실행 실패 시 에러 메시지를 결과로 사용
-          const toolErrorMessage = `Tool execution failed: ${errorMessage}`;
-          toolResults.push({
-            tool_call_id: toolCall.id,
-            name: toolCall.name,
-            content: toolErrorMessage,
-          });
-
-          toolCallDetails.push({
-            toolName: toolCall.name,
-            arguments: toolCall.arguments,
-            result: toolErrorMessage,
-          });
+        if (result.resources.length > 0) {
+          allResources.push(...result.resources);
         }
       }
 
-      // 7. Tool 결과를 LLM에 전달하여 최종 응답 생성
+      // 6. Tool 결과를 LLM에 전달하여 최종 응답 생성 (스트리밍)
       this.logger.debug('Generating final response with tool results...');
       const messages: OpenRouterMessage[] = [
         {
           role: 'system',
-          content:
-            'You are a helpful assistant that can use tools to help users. When you receive tool results, use them to provide a clear and helpful answer to the user.',
+          content: `당신은 도구를 사용하여 사용자를 도울 수 있는 유용한 어시스턴트입니다. 도구 결과를 받으면:
+
+1. 도구 결과에 리소스 내용이 포함되어 있으면 (## 리소스: [path] 형식), 반드시 그 내용을 사용하여 사용자 질문에 직접 답변하세요.
+2. 파일 경로만 나열하거나 어떤 파일을 열지 물어보지 마세요. 제공된 리소스 내용을 읽고 그것을 기반으로 답변하세요.
+3. 리소스 내용을 종합하여 포괄적인 답변을 제공하세요.
+4. 여러 리소스가 제공되면 모든 리소스의 정보를 종합하여 완전한 답변을 제공하세요.`,
         },
         {
           role: 'user',
           content: userQuestion,
         },
-        ...(toolSelectionResponse.choices[0]?.message.tool_calls?.map((tc) => ({
-          role: 'assistant' as const,
-          content: null,
-          tool_calls: [tc],
-        })) || []),
       ];
 
-      const finalResponse = await this.openRouterService.generateFinalResponse(
+      // tool_calls가 있으면 하나의 assistant 메시지에 모든 tool_calls 포함
+      if (toolSelectionResponse.choices[0]?.message.tool_calls) {
+        messages.push({
+          role: 'assistant',
+          content: null,
+          tool_calls: toolSelectionResponse.choices[0].message.tool_calls,
+        });
+      }
+
+      const stream = await this.openRouterService.generateFinalResponseStream(
         messages,
         toolResults,
       );
 
-      const assistantMessage =
-        finalResponse.choices[0]?.message.content ||
-        '죄송합니다. 응답을 생성할 수 없습니다.';
-
-      // 8. Assistant 메시지 저장
-      await this.chatService.createMessage(sessionId, {
-        role: MessageRole.ASSISTANT,
-        content: assistantMessage,
-        metadata: {
-          model: finalResponse.model,
-          usage: finalResponse.usage,
-          toolCalls: toolCallDetails,
-        },
-      });
-
-      return {
-        message: assistantMessage,
-        toolCalls: toolCallDetails,
-        resources: allResources.length > 0 ? allResources : undefined,
-        metadata: {
-          model: finalResponse.model,
-          usage: finalResponse.usage,
-        },
-      };
+      return { stream, resources: allResources };
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -318,13 +951,131 @@ export class ChatOrchestrationService {
   }
 
   /**
+   * 스트리밍 응답을 처리하여 SSE 형식으로 전송
+   * @param sessionId 세션 ID
+   * @param userQuestion 사용자 질문
+   * @param reply Fastify 응답 객체
+   */
+  async handleStreamingResponse(
+    sessionId: string,
+    userQuestion: string,
+    reply: FastifyReply,
+  ): Promise<void> {
+    reply.hijack();
+
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+
+    try {
+      const { stream, resources } = await this.processUserQuestionStream(
+        sessionId,
+        userQuestion,
+      );
+
+      let accumulatedContent = '';
+      let model = '';
+      let usage: {
+        prompt_tokens: number;
+        completion_tokens: number;
+        total_tokens: number;
+      } | null = null;
+      let buffer = '';
+
+      stream.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6).trim();
+            if (!data || data === '[DONE]') {
+              continue;
+            }
+
+            try {
+              const parsed = JSON.parse(data);
+              if (parsed.choices?.[0]?.delta?.content) {
+                const content = parsed.choices[0].delta.content;
+                accumulatedContent += content;
+                reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
+              }
+              if (parsed.model) {
+                model = parsed.model;
+              }
+              if (parsed.usage) {
+                usage = parsed.usage;
+              }
+            } catch {
+              // JSON 파싱 실패 시 무시
+            }
+          }
+        }
+      });
+
+      stream.on('error', (error) => {
+        this.logger.error('Stream error:', error);
+        reply.raw.write(
+          `data: ${JSON.stringify({ error: error.message || 'Stream error' })}\n\n`,
+        );
+        reply.raw.end();
+      });
+
+      stream.on('end', () => {
+        void (async () => {
+          try {
+            if (accumulatedContent) {
+              await this.chatService.createMessage(sessionId, {
+                role: MessageRole.ASSISTANT,
+                content: accumulatedContent,
+                metadata: {
+                  model: model || undefined,
+                  usage: usage || undefined,
+                  resources: resources.length > 0 ? resources : undefined,
+                },
+              });
+            }
+
+            if (resources.length > 0) {
+              reply.raw.write(
+                `data: ${JSON.stringify({
+                  type: 'resources',
+                  resources: resources,
+                })}\n\n`,
+              );
+            }
+
+            reply.raw.write('data: [DONE]\n\n');
+            reply.raw.end();
+          } catch (error) {
+            this.logger.error('Error saving final message:', error);
+            reply.raw.write(
+              `data: ${JSON.stringify({ error: 'Failed to save message' })}\n\n`,
+            );
+            reply.raw.end();
+          }
+        })();
+      });
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.logger.error('Error in chat stream:', errorMessage);
+      reply.raw.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
+      reply.raw.end();
+    }
+  }
+
+  /**
    * 리소스 경로를 기반으로 URL 생성
-   * 백엔드의 리소스 프록시 엔드포인트를 사용
    */
   private generateResourceUrl(resourcePath: string): string {
-    // 백엔드의 리소스 프록시 엔드포인트 사용
-    // 실제 MCP 서버 URL이 아닌 백엔드 프록시 URL 반환
     const encodedPath = encodeURIComponent(resourcePath);
-    return `/api/v1/widget/messages/resources/${encodedPath}`;
+    return encodedPath;
   }
 }

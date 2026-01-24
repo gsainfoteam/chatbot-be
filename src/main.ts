@@ -3,7 +3,7 @@ import {
   FastifyAdapter,
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
@@ -20,6 +20,16 @@ async function bootstrap() {
       transform: true,
       whitelist: true,
       forbidNonWhitelisted: true,
+      exceptionFactory: (errors) => {
+        const messages = errors.map((error) =>
+          Object.values(error.constraints || {}).join(', '),
+        );
+        return new BadRequestException({
+          statusCode: 400,
+          message: messages,
+          error: 'Bad Request',
+        });
+      },
     }),
   );
 

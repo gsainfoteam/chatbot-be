@@ -9,6 +9,7 @@ import {
   ParseIntPipe,
   DefaultValuePipe,
   Res,
+  Logger,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -29,13 +30,14 @@ import { ChatMessageInputDto } from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';
 import { ChatRequestDto } from './dto/chat-request.dto';
-import { ChatResponseDto } from './dto/chat-response.dto';
 
 @ApiTags('Widget Messages')
 @Controller('api/v1/widget/messages')
 @UseGuards(WidgetSessionGuard)
 @ApiBearerAuth('widgetSessionAuth')
 export class ChatController {
+  private readonly logger = new Logger(ChatController.name);
+
   constructor(
     private readonly chatService: ChatService,
     private readonly chatOrchestrationService: ChatOrchestrationService,
@@ -98,16 +100,29 @@ export class ChatController {
     return this.chatService.createMessage(session.sessionId, dto);
   }
 
-  @Post('chat')
+  @Post('chat/stream')
   @ApiOperation({
-    summary: '사용자 질문 처리 및 답변 생성',
+    summary: '사용자 질문 처리 및 스트리밍 답변 생성',
     description:
-      '사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 생성합니다.',
+      '사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 스트리밍으로 생성합니다. Server-Sent Events (SSE) 형식으로 응답을 전송합니다.',
   })
   @ApiResponse({
-    status: 201,
-    description: '답변 생성 성공',
-    type: ChatResponseDto,
+    status: 200,
+    description: '스트리밍 시작 (text/event-stream)',
+    headers: {
+      'Content-Type': {
+        description: 'text/event-stream',
+        schema: { type: 'string' },
+      },
+      'Cache-Control': {
+        description: 'no-cache',
+        schema: { type: 'string' },
+      },
+      Connection: {
+        description: 'keep-alive',
+        schema: { type: 'string' },
+      },
+    },
   })
   @ApiResponse({
     status: 401,
@@ -117,13 +132,15 @@ export class ChatController {
     status: 500,
     description: '서버 오류 (LLM 호출 실패, Tool 실행 실패 등)',
   })
-  async chat(
+  async chatStream(
     @CurrentSession() session: SessionPayload,
     @Body() dto: ChatRequestDto,
-  ): Promise<ChatResponseDto> {
-    return this.chatOrchestrationService.processUserQuestion(
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    return this.chatOrchestrationService.handleStreamingResponse(
       session.sessionId,
       dto.question,
+      reply,
     );
   }
 

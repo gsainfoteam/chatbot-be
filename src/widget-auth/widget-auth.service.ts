@@ -10,7 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { DB_CONNECTION, type Database, widgetKeys, sessions } from '../db';
 import { eq } from 'drizzle-orm';
 import {
-  validateOriginAndPageUrl,
+  extractDomain,
   isDomainAllowed,
 } from '../common/utils/domain-validator.util';
 import { WidgetSessionRequestDto } from '../common/dto/widget-session-request.dto';
@@ -28,13 +28,11 @@ export class WidgetAuthService {
     dto: WidgetSessionRequestDto,
     origin?: string,
   ): Promise<WidgetSessionResponseDto> {
-    // 1. Origin과 pageUrl 검증
-    const validation = validateOriginAndPageUrl(origin, dto.pageUrl);
-    if (!validation.valid) {
-      throw new BadRequestException(validation.error);
+    // 1. pageUrl에서 도메인 추출
+    const domain = extractDomain(dto.pageUrl);
+    if (!domain) {
+      throw new BadRequestException('Invalid pageUrl: cannot extract domain');
     }
-
-    const domain = validation.domain;
 
     // 2. widgetKey로 DB 조회
     const [widgetKey] = await this.db
@@ -59,10 +57,7 @@ export class WidgetAuthService {
     }
 
     // 5. 세션 생성 및 DB 저장
-    const expiresInSeconds = parseInt(
-      this.configService.get<string>('JWT_EXPIRES_IN', '3600'),
-      10,
-    );
+    const expiresInSeconds = 1800; // 30분
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
 
     const [newSession] = await this.db

@@ -8,6 +8,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { AxiosError } from 'axios';
+import type { Readable } from 'stream';
 import type {
   McpTool,
   OpenRouterTool,
@@ -51,11 +52,47 @@ export class OpenRouterService {
         required: [],
       };
 
+      // Tool description 개선: 더 상세한 설명 생성
+      let description = tool.description || '';
+
+      // Description이 없거나 너무 짧은 경우 개선
+      if (!description || description.trim().length < 20) {
+        // Tool 이름을 기반으로 더 상세한 설명 생성
+        const toolNameLower = tool.name.toLowerCase();
+        const paramInfo = parameters.properties
+          ? Object.keys(parameters.properties)
+              .map((key) => {
+                const prop = parameters.properties![key];
+                return `${key} (${prop.type || 'string'})`;
+              })
+              .join(', ')
+          : 'no parameters';
+
+        description = `Tool: ${tool.name}. 
+Use this tool when the user's question relates to ${tool.name} or when you need to access information related to ${toolNameLower}.
+${paramInfo ? `Parameters: ${paramInfo}` : 'No parameters required.'}
+This tool is essential for answering questions that require ${toolNameLower} functionality.`;
+      } else {
+        // 기존 description이 있으면 파라미터 정보 추가
+        const paramInfo = parameters.properties
+          ? Object.keys(parameters.properties)
+              .map((key) => {
+                const prop = parameters.properties![key];
+                return `${key} (${prop.type || 'string'})`;
+              })
+              .join(', ')
+          : '';
+
+        if (paramInfo) {
+          description += ` Parameters: ${paramInfo}.`;
+        }
+      }
+
       return {
         type: 'function',
         function: {
           name: tool.name,
-          description: tool.description,
+          description: description.trim(),
           parameters: {
             type: parameters.type || 'object',
             properties: parameters.properties || {},
@@ -71,20 +108,75 @@ export class OpenRouterService {
    * @param userQuestion 사용자 질문
    * @param mcpTools 사용 가능한 MCP Tool 목록
    * @param model 사용할 LLM 모델 (선택사항)
+   * @param options 추가 옵션 (temperature, emphasizeToolUsage 등)
    * @returns LLM 응답 (tool_calls 포함 가능)
    */
   async selectTool(
     userQuestion: string,
     mcpTools: McpTool[],
     model?: string,
+    options?: {
+      temperature?: number;
+      emphasizeToolUsage?: boolean;
+    },
   ): Promise<OpenRouterResponse> {
     const tools = this.convertMcpToolsToOpenRouterFormat(mcpTools);
+
+    // Tool 목록을 더 읽기 쉽게 포맷팅
+    const toolsDescription = mcpTools
+      .map((tool, index) => {
+        const toolInfo = tools[index];
+        const params = toolInfo.function.parameters.properties
+          ? Object.entries(toolInfo.function.parameters.properties)
+              .map(([key, value]: [string, any]) => {
+                const type = value.type || 'string';
+                const desc = value.description ? ` - ${value.description}` : '';
+                return `  - ${key} (${type})${desc}`;
+              })
+              .join('\n')
+          : '  (no parameters)';
+
+        return `${index + 1}. ${tool.name}
+   Description: ${toolInfo.function.description}
+   Parameters:
+${params}`;
+      })
+      .join('\n\n');
+
+    // System prompt 강화
+    const systemPrompt = options?.emphasizeToolUsage
+      ? `You are a helpful assistant that MUST use tools to answer user questions.
+
+CRITICAL RULES - READ CAREFULLY:
+1. You MUST analyze the user's question and determine which tool(s) to use.
+2. You MUST use at least one tool if any tool is relevant to the question.
+3. If you don't use a tool when one is available, you will FAIL to answer correctly.
+4. When using a tool, provide all necessary arguments based on the tool's parameters.
+5. DO NOT respond without using tools if a relevant tool exists.
+6. Tool usage is MANDATORY when tools are available and relevant.
+
+Available tools:
+${toolsDescription}
+
+Remember: Using tools is MANDATORY when they are relevant to the question. Failure to use tools will result in incorrect answers.`
+      : `You are a helpful assistant that MUST use tools to help users answer questions.
+
+IMPORTANT INSTRUCTIONS:
+1. You MUST analyze the user's question carefully and determine if any of the available tools can help answer it.
+2. If a tool is relevant to the user's question, you MUST use it. Do not skip tool usage when it would be helpful.
+3. If multiple tools are relevant, you can use multiple tools.
+4. When using a tool, provide all necessary arguments based on the tool's parameters.
+5. If no tool is relevant, you can respond without using tools, but ONLY if the question is truly unrelated to any available tool.
+
+Available tools:
+${toolsDescription}
+
+Remember: Using the right tool is crucial for providing accurate and helpful answers.`;
 
     const messages: OpenRouterMessage[] = [
       {
         role: 'system',
-        content:
-          'You are a helpful assistant that can use tools to help users. When you need to use a tool, select the appropriate tool and provide the necessary arguments.',
+        content: systemPrompt,
       },
       {
         role: 'user',
@@ -97,8 +189,8 @@ export class OpenRouterService {
       messages,
       tools,
       tool_choice: 'auto',
-      temperature: 0.7,
-      max_tokens: 1000,
+      temperature: options?.temperature ?? 0.3, // 재시도 시 더 낮은 temperature 사용 가능
+      max_tokens: 2000,
     };
 
     try {
@@ -111,22 +203,17 @@ export class OpenRouterService {
               headers: {
                 Authorization: `Bearer ${this.apiKey}`,
                 'Content-Type': 'application/json',
-                'HTTP-Referer': this.configService.get<string>(
-                  'OPEN_ROUTER_REFERER',
-                  'https://ziggle.ai',
-                ),
-                'X-Title': this.configService.get<string>(
-                  'OPEN_ROUTER_TITLE',
-                  'Ziggle Chatbot',
-                ),
+                'HTTP-Referer': this.configService.get<string>('DOMAIN_NAME'),
+                'X-Title': this.configService.get<string>('OPEN_ROUTER_TITLE'),
               },
+              timeout: 15000,
             },
           )
           .pipe(
             catchError((error: AxiosError) => {
               this.logger.error(
                 `Open Router API error: ${error.message}`,
-                error.response?.data,
+                error instanceof Error ? error.stack : undefined,
               );
               throw new InternalServerErrorException(
                 `Failed to call Open Router API: ${error.message}`,
@@ -135,7 +222,21 @@ export class OpenRouterService {
           ),
       );
 
-      return response.data;
+      // Tool 선택 응답 상세 로깅
+      const responseData = response.data;
+      const finishReason = responseData.choices[0]?.finish_reason;
+      const hasToolCalls = !!responseData.choices[0]?.message.tool_calls;
+      const toolCallCount =
+        responseData.choices[0]?.message.tool_calls?.length || 0;
+
+      // Tool이 선택되지 않은 경우 경고
+      if (!hasToolCalls || toolCallCount === 0) {
+        this.logger.warn(
+          `No tools selected. Finish reason: ${finishReason}, Available tools: ${mcpTools.map((t) => t.name).join(', ')}`,
+        );
+      }
+
+      return responseData;
     } catch (error) {
       this.logger.error(`Error calling Open Router: ${error}`);
       throw error;
@@ -214,25 +315,89 @@ export class OpenRouterService {
               headers: {
                 Authorization: `Bearer ${this.apiKey}`,
                 'Content-Type': 'application/json',
-                'HTTP-Referer': this.configService.get<string>(
-                  'OPEN_ROUTER_REFERER',
-                  'https://ziggle.ai',
-                ),
-                'X-Title': this.configService.get<string>(
-                  'OPEN_ROUTER_TITLE',
-                  'Ziggle Chatbot',
-                ),
+                'HTTP-Referer': this.configService.get<string>('DOMAIN_NAME'),
+                'X-Title': this.configService.get<string>('OPEN_ROUTER_TITLE'),
               },
+              timeout: 15000,
             },
           )
           .pipe(
             catchError((error: AxiosError) => {
               this.logger.error(
                 `Open Router API error: ${error.message}`,
-                error.response?.data,
+                error instanceof Error ? error.stack : undefined,
               );
               throw new InternalServerErrorException(
                 `Failed to call Open Router API: ${error.message}`,
+              );
+            }),
+          ),
+      );
+
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Error calling Open Router: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Tool 실행 결과를 LLM에 전달하여 최종 응답을 스트리밍으로 생성
+   * @param messages 이전 대화 내역
+   * @param toolResults Tool 실행 결과 (tool_call_id와 결과 매핑)
+   * @param model 사용할 LLM 모델 (선택사항)
+   * @returns 스트리밍 응답 스트림
+   */
+  async generateFinalResponseStream(
+    messages: OpenRouterMessage[],
+    toolResults: Array<{
+      tool_call_id: string;
+      name: string;
+      content: string;
+    }>,
+    model?: string,
+  ): Promise<Readable> {
+    // Tool 결과를 메시지에 추가
+    const toolMessages: OpenRouterMessage[] = toolResults.map((result) => ({
+      role: 'tool',
+      tool_call_id: result.tool_call_id,
+      name: result.name,
+      content: result.content,
+    }));
+
+    const updatedMessages = [...messages, ...toolMessages];
+
+    const request: OpenRouterRequest & { stream: boolean } = {
+      model: model || this.defaultModel,
+      messages: updatedMessages,
+      temperature: 0.7,
+      max_tokens: 2000,
+      stream: true,
+    };
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService
+          .post<Readable>(`${this.baseUrl}/chat/completions`, request, {
+            headers: {
+              Authorization: `Bearer ${this.apiKey}`,
+              'Content-Type': 'application/json',
+              'HTTP-Referer': this.configService.get<string>('DOMAIN_NAME'),
+              'X-Title': this.configService.get<string>('APP_NAME'),
+            },
+            responseType: 'stream',
+            timeout: 15000,
+          })
+          .pipe(
+            catchError((error: AxiosError) => {
+              const errorMessage = error.message;
+              const statusCode = error.response?.status;
+              this.logger.error(
+                `Open Router API error (status ${statusCode}): ${errorMessage}`,
+                error instanceof Error ? error.stack : undefined,
+              );
+              throw new InternalServerErrorException(
+                `Failed to call Open Router API: ${errorMessage}`,
               );
             }),
           ),
@@ -273,25 +438,22 @@ export class OpenRouterService {
               headers: {
                 Authorization: `Bearer ${this.apiKey}`,
                 'Content-Type': 'application/json',
-                'HTTP-Referer': this.configService.get<string>(
-                  'OPEN_ROUTER_REFERER',
-                  'https://ziggle.ai',
-                ),
-                'X-Title': this.configService.get<string>(
-                  'OPEN_ROUTER_TITLE',
-                  'Ziggle Chatbot',
-                ),
+                'HTTP-Referer': this.configService.get<string>('DOMAIN_NAME'),
+                'X-Title': this.configService.get<string>('OPEN_ROUTER_TITLE'),
               },
+              timeout: 15000,
             },
           )
           .pipe(
             catchError((error: AxiosError) => {
+              const errorMessage = error.message;
+              const statusCode = error.response?.status;
               this.logger.error(
-                `Open Router API error: ${error.message}`,
-                error.response?.data,
+                `Open Router API error (status ${statusCode}): ${errorMessage}`,
+                error instanceof Error ? error.stack : undefined,
               );
               throw new InternalServerErrorException(
-                `Failed to call Open Router API: ${error.message}`,
+                `Failed to call Open Router API: ${errorMessage}`,
               );
             }),
           ),

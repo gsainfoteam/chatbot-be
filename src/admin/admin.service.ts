@@ -6,7 +6,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { DB_CONNECTION, type Database, widgetKeys } from '../db';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { generateWidgetKey } from '../common/utils/widget-key-generator.util';
 import { CreateWidgetKeyDto } from '../common/dto/create-widget-key.dto';
 import { RegisterDomainsDto } from '../common/dto/register-domains.dto';
@@ -20,7 +20,12 @@ export class AdminService {
     const keys = await this.db
       .select()
       .from(widgetKeys)
-      .where(eq(widgetKeys.createdByIdpUuid, adminUuid));
+      .where(
+        and(
+          eq(widgetKeys.createdByIdpUuid, adminUuid),
+          ne(widgetKeys.status, 'REVOKED'),
+        ),
+      );
 
     return keys.map((key) => ({
       id: key.id,

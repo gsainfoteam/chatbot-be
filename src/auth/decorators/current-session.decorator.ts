@@ -11,7 +11,9 @@ export interface SessionPayload {
  */
 export const CurrentSession = createParamDecorator(
   (data: unknown, ctx: ExecutionContext): SessionPayload => {
-    const request = ctx.switchToHttp().getRequest();
+    const request = ctx
+      .switchToHttp()
+      .getRequest<{ session: SessionPayload }>();
     return request.session;
   },
 );

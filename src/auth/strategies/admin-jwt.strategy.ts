@@ -15,7 +15,7 @@ export class AdminJwtStrategy extends PassportStrategy(Strategy, 'admin-jwt') {
     });
   }
 
-  async validate(payload: AdminAccessTokenJwtPayload): Promise<AdminContext> {
+  validate(payload: AdminAccessTokenJwtPayload): AdminContext {
     return new AdminContext(payload.email, payload.uuid, payload.name);
   }
 }

@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
   InternalServerErrorException,
+  GatewayTimeoutException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
@@ -47,9 +48,25 @@ export class McpResourceService {
         this.httpService
           .get(resourceUrl, {
             responseType: 'arraybuffer',
+            timeout: 5000,
           })
           .pipe(
             catchError((error: AxiosError) => {
+              // 타임아웃 에러 처리
+              if (
+                error.code === 'ECONNABORTED' ||
+                error.code === 'ETIMEDOUT' ||
+                error.message?.includes('timeout')
+              ) {
+                this.logger.error(
+                  `Timeout while fetching resource ${resourcePath}: ${error.message}`,
+                  error instanceof Error ? error.stack : undefined,
+                );
+                throw new GatewayTimeoutException(
+                  `Request timeout while fetching resource: ${resourcePath}`,
+                );
+              }
+
               if (error.response?.status === 404) {
                 this.logger.warn(`Resource not found: ${resourcePath}`);
                 throw new NotFoundException(
@@ -58,6 +75,7 @@ export class McpResourceService {
               }
               this.logger.error(
                 `Failed to fetch resource ${resourcePath}: ${error.message}`,
+                error instanceof Error ? error.stack : undefined,
               );
               throw new InternalServerErrorException(
                 `Failed to fetch resource: ${error.message}`,

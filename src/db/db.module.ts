@@ -13,12 +13,12 @@ import {
     {
       provide: DB_CONNECTION,
       useFactory: (configService: ConfigService): Database => {
-        const host = configService.get<string>('DB_HOST', 'localhost');
-        const port = configService.get<number>('DB_PORT', 5432);
-        const user = configService.get<string>('DB_USER', 'postgres');
-        const password = configService.get<string>('DB_PASSWORD', 'postgres');
-        const database = configService.get<string>('DB_NAME', 'ziggle_chatbot');
-        
+        const host = configService.get<string>('DB_HOST');
+        const port = configService.get<number>('DB_PORT');
+        const user = configService.get<string>('DB_USER');
+        const password = configService.get<string>('DB_PASSWORD');
+        const database = configService.get<string>('DB_NAME');
+
         // 환경 변수는 문자열이므로 명시적으로 boolean 변환
         const sslValue = configService.get<string>('DB_SSL', 'false');
         const ssl = sslValue === 'true';
@@ -39,12 +39,12 @@ export class DbModule implements OnModuleInit {
 
   async onModuleInit() {
     // Run migrations on startup
-    const host = this.configService.get<string>('DB_HOST', 'localhost');
-    const port = this.configService.get<number>('DB_PORT', 5432);
-    const user = this.configService.get<string>('DB_USER', 'postgres');
-    const password = this.configService.get<string>('DB_PASSWORD', 'postgres');
-    const database = this.configService.get<string>('DB_NAME', 'ziggle_chatbot');
-    
+    const host = this.configService.get<string>('DB_HOST');
+    const port = this.configService.get<number>('DB_PORT');
+    const user = this.configService.get<string>('DB_USER');
+    const password = this.configService.get<string>('DB_PASSWORD');
+    const database = this.configService.get<string>('DB_NAME');
+
     // 환경 변수는 문자열이므로 명시적으로 boolean 변환
     const sslValue = this.configService.get<string>('DB_SSL', 'false');
     const ssl = sslValue === 'true';

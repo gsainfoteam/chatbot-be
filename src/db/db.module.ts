@@ -23,6 +23,7 @@ import {
         const sslValue = configService.get<string>('DB_SSL', 'false');
         const ssl = sslValue === 'true';
 
+        // 보안: connectionString에 비밀번호가 포함되어 있으므로 로그에 출력하지 않음
         const connectionString = `postgres://${user}:${password}@${host}:${port}/${database}`;
 
         return createDatabaseConnection(connectionString, ssl);
@@ -51,6 +52,7 @@ export class DbModule implements OnModuleInit {
 
     const connectionString = `postgres://${user}:${password}@${host}:${port}/${database}`;
 
+    // 보안: connectionString에 비밀번호가 포함되어 있으므로 로그에 출력하지 않음
     this.logger.log(`Connecting to database at ${host}:${port}/${database}`);
     this.logger.log(`DB_SSL env value: ${sslValue}`);
     this.logger.log(`SSL enabled: ${ssl}`);
@@ -59,7 +61,15 @@ export class DbModule implements OnModuleInit {
       await runMigrations(connectionString, ssl);
       this.logger.log('Database migrations completed');
     } catch (error) {
-      this.logger.error('Failed to run migrations', error);
+      // 보안: connectionString이 에러 메시지에 포함되지 않도록 주의
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      // connectionString이 포함된 에러 메시지를 제거
+      const sanitizedMessage = errorMessage.replace(
+        /postgres:\/\/[^@]+@[^\s]+/g,
+        'postgres://***:***@***',
+      );
+      this.logger.error('Failed to run migrations', sanitizedMessage);
       throw error;
     }
   }

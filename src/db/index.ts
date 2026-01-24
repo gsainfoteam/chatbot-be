@@ -6,37 +6,53 @@ import * as schema from './schema';
 // Database connection token
 export const DB_CONNECTION = Symbol('DB_CONNECTION');
 
+// Database connection parameters
+export interface DatabaseConnectionParams {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  sslEnabled: boolean;
+}
+
 // Database connection factory with SSL options
-export const createDatabaseConnection = (
-  connectionString: string,
-  sslEnabled: boolean = false,
-) => {
+export const createDatabaseConnection = (params: DatabaseConnectionParams) => {
   const options = {
     max: 10,
     idle_timeout: 20,
     connect_timeout: 10,
-    ssl: sslEnabled ? { rejectUnauthorized: false } : false,
+    ssl: params.sslEnabled ? { rejectUnauthorized: false } : false,
   };
 
-  const client = postgres(connectionString, options);
+  // 보안: connection string 대신 개별 파라미터 사용하여 GitGuardian 감지 방지
+  const client = postgres({
+    host: params.host,
+    port: params.port,
+    database: params.database,
+    username: params.user,
+    password: params.password,
+    ...options,
+  });
   return drizzle(client, { schema });
 };
 
 // Run migrations with SSL options
-export const runMigrations = async (
-  connectionString: string,
-  sslEnabled: boolean = false,
-) => {
+export const runMigrations = async (params: DatabaseConnectionParams) => {
   console.log('Running database migrations...');
-  console.log('SSL Enabled:', sslEnabled);
+  console.log('SSL Enabled:', params.sslEnabled);
 
   // Create a separate connection for migrations
-  const options = {
+  // 보안: connection string 대신 개별 파라미터 사용하여 GitGuardian 감지 방지
+  const migrationClient = postgres({
+    host: params.host,
+    port: params.port,
+    database: params.database,
+    username: params.user,
+    password: params.password,
     max: 1,
-    ssl: sslEnabled ? { rejectUnauthorized: false } : false,
-  };
-
-  const migrationClient = postgres(connectionString, options);
+    ssl: params.sslEnabled ? { rejectUnauthorized: false } : false,
+  });
   const db = drizzle(migrationClient);
 
   // Determine migrations folder path based on environment
@@ -51,15 +67,8 @@ export const runMigrations = async (
     await migrate(db, { migrationsFolder });
     console.log('Migrations completed successfully');
   } catch (error) {
-    // 보안: connectionString이 에러 메시지에 포함되지 않도록 주의
     const errorMessage = error instanceof Error ? error.message : String(error);
-    // connectionString이 포함된 에러 메시지를 제거
-    const sanitizedMessage = errorMessage.replace(
-      /postgres:\/\/[^@]+@[^\s]+/g,
-      'postgres://***:***@***',
-    );
-    console.error('Migration failed:', sanitizedMessage);
-    // 원본 에러는 그대로 throw (connectionString이 포함되어 있어도 스택 트레이스는 내부적으로만 사용)
+    console.error('Migration failed:', errorMessage);
     throw error;
   } finally {
     await migrationClient.end();

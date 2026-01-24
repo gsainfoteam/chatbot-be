@@ -99,8 +99,11 @@ $ psql -U postgres -c "CREATE DATABASE ziggle_chatbot;"
 # 마이그레이션 파일 생성 (스키마 변경 시)
 $ bun run db:generate
 
-# 스키마를 데이터베이스에 적용
+# 스키마를 데이터베이스에 적용 (개발 환경용 - 빠른 동기화)
 $ bun run db:push
+
+# 또는 마이그레이션 실행 (프로덕션과 동일한 방식)
+$ bun run db:migrate
 
 # Drizzle Studio 실행 (데이터베이스 GUI)
 $ bun run db:studio
@@ -133,15 +136,35 @@ $ docker-compose down -v
 ### Docker 마이그레이션 수동 실행
 
 ```bash
-# 애플리케이션 컨테이너에서 마이그레이션 실행
-$ docker-compose exec app bun run db:push
+# 애플리케이션 컨테이너에서 마이그레이션 실행 (권장)
+$ docker-compose exec app bun run db:migrate
 
-# 마이그레이션 파일 생성
+# 또는 안전한 마이그레이션 스크립트 사용
+$ docker-compose exec app bun run db:migrate:safe
+
+# 마이그레이션 파일 생성 (스키마 변경 시)
 $ docker-compose exec app bun run db:generate
 
 # Drizzle Studio 실행 (로컬에서 Docker DB 접속)
 $ bun run db:studio
 ```
+
+### 프로덕션 서버 마이그레이션
+
+서버에 배포할 때는 다음 명령어로 마이그레이션을 실행하세요:
+
+```bash
+# 안전한 마이그레이션 실행 (권장)
+$ bun run db:migrate:safe
+
+# 또는 직접 실행
+$ bun run db:migrate
+```
+
+**중요 사항:**
+- 모든 마이그레이션 파일은 **idempotent**하게 작성되어 있어 여러 번 실행해도 안전합니다.
+- ENUM 타입, 테이블, 인덱스, 제약조건은 이미 존재하면 자동으로 건너뜁니다.
+- 서버의 데이터베이스가 로컬 개발 환경과 동일한 구조로 동기화됩니다.
 
 ## Compile and run the project
 

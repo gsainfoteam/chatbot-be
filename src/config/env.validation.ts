@@ -1,4 +1,4 @@
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
   IsString,
   IsNumber,
@@ -45,6 +45,13 @@ export class EnvironmentVariables {
   DB_NAME: string;
 
   @IsBoolean()
+  @Transform(({ value }) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      return value.toLowerCase() === 'true';
+    }
+    return false;
+  })
   DB_SSL: boolean;
 
   // Application Configuration
@@ -94,6 +101,11 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   OPEN_ROUTER_API_KEY: string;
+
+  // Client Domain Configuration
+  @IsString()
+  @IsNotEmpty()
+  DOMAIN_NAME: string;
 }
 
 /**

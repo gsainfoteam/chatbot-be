@@ -1,8 +1,9 @@
-import { Module, Global } from '@nestjs/common';
+import { Module, Global, OnModuleInit, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DB_CONNECTION,
   createDatabaseConnection,
+  runMigrations,
   type Database,
 } from './index';
 
@@ -17,15 +18,49 @@ import {
         const user = configService.get<string>('DB_USER', 'postgres');
         const password = configService.get<string>('DB_PASSWORD', 'postgres');
         const database = configService.get<string>('DB_NAME', 'ziggle_chatbot');
-        const ssl = configService.get<string>('DB_SSL', 'false') === 'true';
+        
+        // 환경 변수는 문자열이므로 명시적으로 boolean 변환
+        const sslValue = configService.get<string>('DB_SSL', 'false');
+        const ssl = sslValue === 'true';
 
-        const connectionString = `postgres://${user}:${password}@${host}:${port}/${database}${ssl ? '?sslmode=require' : ''}`;
+        const connectionString = `postgres://${user}:${password}@${host}:${port}/${database}`;
 
-        return createDatabaseConnection(connectionString);
+        return createDatabaseConnection(connectionString, ssl);
       },
       inject: [ConfigService],
     },
   ],
   exports: [DB_CONNECTION],
 })
-export class DbModule {}
+export class DbModule implements OnModuleInit {
+  private readonly logger = new Logger(DbModule.name);
+
+  constructor(private readonly configService: ConfigService) {}
+
+  async onModuleInit() {
+    // Run migrations on startup
+    const host = this.configService.get<string>('DB_HOST', 'localhost');
+    const port = this.configService.get<number>('DB_PORT', 5432);
+    const user = this.configService.get<string>('DB_USER', 'postgres');
+    const password = this.configService.get<string>('DB_PASSWORD', 'postgres');
+    const database = this.configService.get<string>('DB_NAME', 'ziggle_chatbot');
+    
+    // 환경 변수는 문자열이므로 명시적으로 boolean 변환
+    const sslValue = this.configService.get<string>('DB_SSL', 'false');
+    const ssl = sslValue === 'true';
+
+    const connectionString = `postgres://${user}:${password}@${host}:${port}/${database}`;
+
+    this.logger.log(`Connecting to database at ${host}:${port}/${database}`);
+    this.logger.log(`DB_SSL env value: ${sslValue}`);
+    this.logger.log(`SSL enabled: ${ssl}`);
+
+    try {
+      await runMigrations(connectionString, ssl);
+      this.logger.log('Database migrations completed');
+    } catch (error) {
+      this.logger.error('Failed to run migrations', error);
+      throw error;
+    }
+  }
+}

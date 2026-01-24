@@ -56,16 +56,31 @@ export class AuthController {
   async login(
     @Body() dto: AdminLoginRequestDto,
   ): Promise<AdminLoginResponseDto> {
-    const result = await this.adminAuthService.loginWithCode(
-      dto.code,
-      dto.redirect_uri,
-      dto.code_verifier,
-    );
-    return {
-      access_token: result.accessToken,
-      refresh_token: result.refreshToken,
-      expires_in: result.expiresIn,
-    };
+    console.log('=== Admin Login Request ===');
+    console.log('Code length:', dto.code?.length);
+    console.log('Redirect URI:', dto.redirect_uri);
+    console.log('Code verifier present:', !!dto.code_verifier);
+    console.log('Code verifier length:', dto.code_verifier?.length);
+    
+    try {
+      const result = await this.adminAuthService.loginWithCode(
+        dto.code,
+        dto.redirect_uri,
+        dto.code_verifier,
+      );
+      console.log('=== Login Success ===');
+      return {
+        access_token: result.accessToken,
+        refresh_token: result.refreshToken,
+        expires_in: result.expiresIn,
+      };
+    } catch (error) {
+      console.error('=== Login Failed ===');
+      console.error('Error name:', error?.constructor?.name);
+      console.error('Error message:', error?.message);
+      console.error('Error stack:', error?.stack);
+      throw error;
+    }
   }
 
   @Get('admin/verify')

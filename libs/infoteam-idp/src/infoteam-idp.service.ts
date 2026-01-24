@@ -232,6 +232,14 @@ export class InfoteamIdpService implements OnModuleInit {
     const clientSecret =
       this.configService.getOrThrow<string>('IDP_CLIENT_SECRET');
 
+    // 디버깅을 위한 로그 추가
+    this.logger.log('=== Exchange Code for Token ===');
+    this.logger.log(`IDP URL: ${this.idpUrl}`);
+    this.logger.log(`Client ID: ${clientId}`);
+    this.logger.log(`Redirect URI: ${redirectUri}`);
+    this.logger.log(`Code length: ${code.length}`);
+    this.logger.log(`Code verifier present: ${!!codeVerifier}`);
+
     // HTTP Basic Auth header 생성
     const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString(
       'base64',
@@ -266,13 +274,37 @@ export class InfoteamIdpService implements OnModuleInit {
         )
         .pipe(
           catchError((err: AxiosError) => {
-            this.logger.error('Error exchanging authorization code');
+            this.logger.error('=== Error exchanging authorization code ===');
             this.logger.error('Status:', err.response?.status);
-            if (err.response?.status === 400 || err.response?.status === 401) {
+            this.logger.error('Status Text:', err.response?.statusText);
+            this.logger.error('Response Data:', JSON.stringify(err.response?.data));
+            this.logger.error('Request URL:', err.config?.url);
+            this.logger.error('Request Headers:', JSON.stringify(err.config?.headers));
+            this.logger.error('Request Body:', err.config?.data);
+            
+            // 400 에러 상세 분석
+            if (err.response?.status === 400) {
+              const errorData = err.response?.data as any;
+              if (errorData?.error === 'invalid_grant') {
+                this.logger.error('Invalid grant error - possible causes:');
+                this.logger.error('1. Authorization code already used');
+                this.logger.error('2. Code verifier does not match code challenge');
+                this.logger.error('3. Redirect URI mismatch');
+                this.logger.error('4. Authorization code expired');
+              }
+              throw new UnauthorizedException(
+                `Invalid authorization code: ${errorData?.error || 'invalid_grant'}`,
+              );
+            }
+            
+            if (err.response?.status === 401) {
               throw new UnauthorizedException(
                 'Invalid authorization code or redirect URI',
               );
             }
+            
+            // 그 외의 에러는 500으로 처리
+            this.logger.error('Unexpected error:', err.message);
             throw new InternalServerErrorException(
               'Failed to exchange authorization code',
             );
@@ -280,6 +312,7 @@ export class InfoteamIdpService implements OnModuleInit {
         ),
     );
 
+    this.logger.log('Token exchange successful');
     return tokenResponse.data;
   }
 

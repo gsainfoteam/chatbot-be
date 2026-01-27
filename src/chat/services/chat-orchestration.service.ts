@@ -10,6 +10,13 @@ import type { McpTool, OpenRouterMessage } from '../types/open-router.types';
 import { MessageRole } from '../../common/dto/chat-message-input.dto';
 import type { Readable } from 'stream';
 import type { FastifyReply } from 'fastify';
+import {
+  DOCUMENT_SELECTION_SYSTEM_PROMPT,
+  getDocumentSelectionUserPrompt,
+  FINAL_RESPONSE_SYSTEM_PROMPT,
+  NO_TOOLS_AVAILABLE_SYSTEM_PROMPT,
+  NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
+} from '../prompts';
 
 /**
  * 리소스 정보
@@ -328,16 +335,10 @@ export class ChatOrchestrationService {
         .map((doc, index) => `${index + 1}. ${doc.title}`)
         .join('\n');
 
-      const selectionPrompt = `다음은 사용자 질문에 대한 관련 문서 목록입니다:
-
-${documentList}
-
-사용자 질문: "${question}"
-
-위 문서들 중에서 사용자 질문에 **실제로 도움이 되는** 문서만 선택해주세요.
-**최대 3개까지만** 선택해주세요. 가장 관련성이 높은 문서만 선택하세요.
-문서 번호만 쉼표로 구분하여 나열해주세요. 예: "1, 3, 5"
-모든 문서가 도움이 되지 않으면 "없음"이라고 답변해주세요.`;
+      const selectionPrompt = getDocumentSelectionUserPrompt({
+        documentList,
+        question,
+      });
 
       this.logger.debug(
         `Selection prompt length: ${selectionPrompt.length} chars, documents: ${documents.length}`,
@@ -347,8 +348,7 @@ ${documentList}
         [
           {
             role: 'system',
-            content:
-              '당신은 문서의 관련성을 판단하는 전문가입니다. 사용자 질문에 실제로 도움이 되는 문서만 선택하세요.',
+            content: DOCUMENT_SELECTION_SYSTEM_PROMPT,
           },
           {
             role: 'user',
@@ -697,8 +697,7 @@ ${documentList}
           [
             {
               role: 'system',
-              content:
-                '사용할 수 있는 MCP 도구가 없으므로, 질문에 답변할 수 없습니다. 모른다고 대답하세요.',
+              content: NO_TOOLS_AVAILABLE_SYSTEM_PROMPT,
             },
             {
               role: 'user',
@@ -771,8 +770,7 @@ ${documentList}
           [
             {
               role: 'system',
-              content:
-                '사용자의 질문에 답변하기 위해 필요한 관련 자료를 찾을 수 없습니다. 정중하게 관련 자료가 없어서 답변을 드릴 수 없다고 안내하세요.',
+              content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
             },
             {
               role: 'user',
@@ -830,12 +828,7 @@ ${documentList}
       const messages: OpenRouterMessage[] = [
         {
           role: 'system',
-          content: `당신은 도구를 사용하여 사용자를 도울 수 있는 유용한 어시스턴트입니다. 도구 결과를 받으면:
-
-1. 도구 결과에 리소스 내용이 포함되어 있으면 (## 리소스: [path] 형식), 반드시 그 내용을 사용하여 사용자 질문에 직접 답변하세요.
-2. 파일 경로만 나열하거나 어떤 파일을 열지 물어보지 마세요. 제공된 리소스 내용을 읽고 그것을 기반으로 답변하세요.
-3. 리소스 내용을 종합하여 포괄적인 답변을 제공하세요.
-4. 여러 리소스가 제공되면 모든 리소스의 정보를 종합하여 완전한 답변을 제공하세요.`,
+          content: FINAL_RESPONSE_SYSTEM_PROMPT,
         },
         {
           role: 'user',

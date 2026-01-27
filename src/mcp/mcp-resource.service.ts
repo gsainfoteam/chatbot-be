@@ -24,9 +24,9 @@ export class McpResourceService {
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.resourceApiBaseUrl =
-      this.configService.get<string>('MCP_RESOURCE_API_URL') ||
-      'https://resource-center-573707418062.us-central1.run.app';
+    this.resourceApiBaseUrl = this.configService.getOrThrow<string>(
+      'MCP_RESOURCE_API_URL',
+    );
   }
 
   /**

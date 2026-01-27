@@ -106,6 +106,16 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   DOMAIN_NAME: string;
+
+  // MCP Server URL
+  @IsString()
+  @IsNotEmpty()
+  MCP_BASE_URL: string;
+
+  // MCP Resource API URL
+  @IsString()
+  @IsNotEmpty()
+  MCP_RESOURCE_API_URL: string;
 }
 
 /**

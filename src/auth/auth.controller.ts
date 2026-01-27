@@ -61,7 +61,7 @@ export class AuthController {
     console.log('Redirect URI:', dto.redirect_uri);
     console.log('Code verifier present:', !!dto.code_verifier);
     console.log('Code verifier length:', dto.code_verifier?.length);
-    
+
     try {
       const result = await this.adminAuthService.loginWithCode(
         dto.code,

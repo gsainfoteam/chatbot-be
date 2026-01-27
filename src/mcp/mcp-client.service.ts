@@ -88,7 +88,7 @@ export class McpClientService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      this.client?.close();
+      await this.client?.close();
     } catch (e) {
       this.logger.warn(`Client close failed: ${String(e)}`);
     }

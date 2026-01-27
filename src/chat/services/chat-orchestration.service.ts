@@ -3,7 +3,6 @@ import {
   Logger,
   InternalServerErrorException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { McpClientService } from '../../mcp/mcp-client.service';
 import { OpenRouterService } from './open-router.service';
 import { ChatService } from './chat.service';
@@ -41,7 +40,6 @@ export class ChatOrchestrationService {
     private readonly mcpClientService: McpClientService,
     private readonly openRouterService: OpenRouterService,
     private readonly chatService: ChatService,
-    private readonly configService: ConfigService,
   ) {}
 
   /**
@@ -166,45 +164,6 @@ export class ChatOrchestrationService {
     }
 
     return '';
-  }
-
-  /**
-   * 리소스 내용을 가져와서 Tool 결과에 포함
-   */
-  private async fetchResourceContents(
-    resourcePaths: string[],
-  ): Promise<string> {
-    const contents: string[] = [];
-    const maxResources = 5; // 최대 5개까지만 가져오기
-
-    for (const path of resourcePaths.slice(0, maxResources)) {
-      try {
-        const resourcePath = this.normalizeResourcePath(path);
-        this.logger.debug(`Fetching resource content: ${resourcePath}`);
-        const toolResult = await this.mcpClientService.callTool(
-          'get_resource',
-          {
-            path: resourcePath,
-          },
-        );
-
-        const content = this.extractContentFromToolResult(toolResult);
-        if (content) {
-          const documentTitle = this.extractDocumentTitle(
-            resourcePath,
-            path,
-            undefined,
-          );
-          contents.push(`\n\n## 리소스: ${documentTitle}\n\n${content}`);
-        }
-      } catch (error) {
-        this.logger.warn(
-          `Failed to fetch resource ${path}: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
-    }
-
-    return contents.join('\n');
   }
 
   /**
@@ -662,16 +621,6 @@ ${documentList}
           resultText += '\n\n' + relevantResult.content;
           usedResourcesFromContent = relevantResult.usedResources;
         }
-      } else {
-        // 기존 로직: 텍스트에서 리소스 경로 추출 및 내용 가져오기
-        const resourcePaths = this.extractResourcePaths(resultText);
-        if (resourcePaths.length > 0) {
-          const resourceContents =
-            await this.fetchResourceContents(resourcePaths);
-          if (resourceContents) {
-            resultText += '\n\n' + resourceContents;
-          }
-        }
       }
 
       // 실제 사용된 리소스만 포함 (PDF/PNG만)
@@ -717,34 +666,6 @@ ${documentList}
     })();
 
     return Promise.race([executePromise, timeoutPromise]);
-  }
-
-  /**
-   * Tool 결과 텍스트에서 리소스 경로 추출
-   */
-  private extractResourcePaths(text: string): string[] {
-    const paths: string[] = [];
-
-    // 마크다운 링크 형식: - [text](path) 또는 - path
-    const markdownLinkRegex = /-\s+(?:\[.*?\]\(([^)]+)\)|([^\n]+\.md))/g;
-    let match;
-    while ((match = markdownLinkRegex.exec(text)) !== null) {
-      const path = match[1] || match[2];
-      if (path && path.trim() && path.includes('/')) {
-        paths.push(path.trim());
-      }
-    }
-
-    // 일반 경로 패턴: "경로" 또는 '경로' (슬래시 포함)
-    const quotedPathRegex = /["']([^"']+\.md)["']/g;
-    while ((match = quotedPathRegex.exec(text)) !== null) {
-      const path = match[1].trim();
-      if (path.includes('/')) {
-        paths.push(path);
-      }
-    }
-
-    return [...new Set(paths)]; // 중복 제거
   }
 
   /**

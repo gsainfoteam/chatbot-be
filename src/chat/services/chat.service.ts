@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { DB_CONNECTION, type Database, messages } from '../../db';
-import { eq, and, lt, desc } from 'drizzle-orm';
+import { eq, and, lt, desc, count } from 'drizzle-orm';
 import {
   ChatMessageInputDto,
   MessageRole,
@@ -11,6 +11,14 @@ import { PaginatedMessagesDto } from '../../common/dto/paginated-messages.dto';
 @Injectable()
 export class ChatService {
   constructor(@Inject(DB_CONNECTION) private db: Database) {}
+
+  async getUserMessageCount(sessionId: string): Promise<number> {
+    const [row] = await this.db
+      .select({ count: count() })
+      .from(messages)
+      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')));
+    return Number(row?.count ?? 0);
+  }
 
   async getMessages(
     sessionId: string,

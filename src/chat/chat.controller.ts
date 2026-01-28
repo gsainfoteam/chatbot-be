@@ -115,7 +115,7 @@ export class ChatController {
         throw new HttpException(
           {
             statusCode: HttpStatus.TOO_MANY_REQUESTS,
-            message: '이 세션에서는 최대 5개의 질문만 가능합니다.',
+            message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
             limit: MAX_QUESTIONS_PER_SESSION,
           },
           HttpStatus.TOO_MANY_REQUESTS,
@@ -173,7 +173,7 @@ export class ChatController {
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          message: '이 세션에서는 최대 5개의 질문만 가능합니다.',
+          message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
           limit: MAX_QUESTIONS_PER_SESSION,
         },
         HttpStatus.TOO_MANY_REQUESTS,

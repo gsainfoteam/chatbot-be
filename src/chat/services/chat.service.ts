@@ -20,6 +20,14 @@ export class ChatService {
     return Number(row?.count ?? 0);
   }
 
+  /**
+   * context용: 해당 세션의 대화 전체 조회 (rate limit으로 최대 10개 수준)
+   */
+  async getMessagesForContext(sessionId: string): Promise<ChatMessageDto[]> {
+    const result = await this.getMessages(sessionId, undefined, 50);
+    return result.messages;
+  }
+
   async getMessages(
     sessionId: string,
     cursor?: string,

@@ -56,31 +56,16 @@ export class AuthController {
   async login(
     @Body() dto: AdminLoginRequestDto,
   ): Promise<AdminLoginResponseDto> {
-    console.log('=== Admin Login Request ===');
-    console.log('Code length:', dto.code?.length);
-    console.log('Redirect URI:', dto.redirect_uri);
-    console.log('Code verifier present:', !!dto.code_verifier);
-    console.log('Code verifier length:', dto.code_verifier?.length);
-
-    try {
-      const result = await this.adminAuthService.loginWithCode(
-        dto.code,
-        dto.redirect_uri,
-        dto.code_verifier,
-      );
-      console.log('=== Login Success ===');
-      return {
-        access_token: result.accessToken,
-        refresh_token: result.refreshToken,
-        expires_in: result.expiresIn,
-      };
-    } catch (error) {
-      console.error('=== Login Failed ===');
-      console.error('Error name:', error?.constructor?.name);
-      console.error('Error message:', error?.message);
-      console.error('Error stack:', error?.stack);
-      throw error;
-    }
+    const result = await this.adminAuthService.loginWithCode(
+      dto.code,
+      dto.redirect_uri,
+      dto.code_verifier,
+    );
+    return {
+      access_token: result.accessToken,
+      refresh_token: result.refreshToken,
+      expires_in: result.expiresIn,
+    };
   }
 
   @Get('admin/verify')
@@ -165,9 +150,6 @@ export class AuthController {
     description: '토큰이 유효하지 않음',
   })
   async logout(@Body() _dto: LogoutRequestDto): Promise<LogoutResponseDto> {
-    // 임시 조치 : Dto 출력
-    console.log('=== LOGOUT REQUEST ===');
-    console.log('Request body:', _dto);
     // TODO: IDP의 token revoke 엔드포인트 확인 필요
     // - 문서에는 /oauth2/revoke로 되어 있지만 404 발생
     // - /oauth/revoke도 404 발생

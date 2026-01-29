@@ -39,9 +39,6 @@ export const createDatabaseConnection = (params: DatabaseConnectionParams) => {
 
 // Run migrations with SSL options
 export const runMigrations = async (params: DatabaseConnectionParams) => {
-  console.log('Running database migrations...');
-  console.log('SSL Enabled:', params.sslEnabled);
-
   // Create a separate connection for migrations
   // 보안: connection string 대신 개별 파라미터 사용하여 GitGuardian 감지 방지
   const migrationClient = postgres({
@@ -61,11 +58,8 @@ export const runMigrations = async (params: DatabaseConnectionParams) => {
       ? '/app/drizzle' // Docker container path
       : './drizzle'; // Local development path
 
-  console.log(`Using migrations folder: ${migrationsFolder}`);
-
   try {
     await migrate(db, { migrationsFolder });
-    console.log('Migrations completed successfully');
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Migration failed:', errorMessage);

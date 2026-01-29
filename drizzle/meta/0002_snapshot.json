@@ -376,11 +376,12 @@
           "primaryKey": false,
           "notNull": true
         },
-        "path": {
-          "name": "path",
-          "type": "varchar(2048)",
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
           "primaryKey": false,
-          "notNull": true
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "uploaded_by_idp_uuid": {
           "name": "uploaded_by_idp_uuid",

@@ -13,6 +13,7 @@ import {
 } from '@lib/infoteam-idp';
 import { DB_CONNECTION, admins } from '../db';
 import type { Database } from '../db';
+import type { Admin } from '../db';
 
 export interface LoginResult {
   accessToken: string;
@@ -101,13 +102,18 @@ export class AdminAuthService {
     );
 
     // 3. Admin 정보 upsert (없으면 생성, 있으면 업데이트)
-    await this.upsertAdmin(userInfo.uuid, userInfo.email, userInfo.name);
+    const admin = await this.upsertAdmin(
+      userInfo.uuid,
+      userInfo.email,
+      userInfo.name,
+    );
 
     // 4. 자체 JWT 토큰 생성
     const payload: AdminAccessTokenJwtPayload = {
       email: userInfo.email,
       uuid: userInfo.uuid,
       name: userInfo.name,
+      role: admin.role,
     };
 
     const accessToken = this.jwtService.sign(payload, {
@@ -137,13 +143,18 @@ export class AdminAuthService {
     );
 
     // 3. Admin 정보 업데이트 (lastLoginAt)
-    await this.upsertAdmin(userInfo.uuid, userInfo.email, userInfo.name);
+    const admin = await this.upsertAdmin(
+      userInfo.uuid,
+      userInfo.email,
+      userInfo.name,
+    );
 
     // 4. 자체 JWT 토큰 생성
     const payload: AdminAccessTokenJwtPayload = {
       email: userInfo.email,
       uuid: userInfo.uuid,
       name: userInfo.name,
+      role: admin.role,
     };
 
     const accessToken = this.jwtService.sign(payload, {
@@ -159,15 +170,16 @@ export class AdminAuthService {
 
   /**
    * Admin 정보 upsert (없으면 생성, 있으면 lastLoginAt 업데이트)
+   * @returns upsert된 Admin 행 (JWT payload의 role 등에 사용)
    */
   private async upsertAdmin(
     idpUuid: string,
     email: string,
     name: string,
-  ): Promise<void> {
+  ): Promise<Admin> {
     const now = new Date();
     // DB-level upsert으로 race condition 방지
-    await this.db
+    const [admin] = await this.db
       .insert(admins)
       .values({
         idpUuid,
@@ -183,10 +195,12 @@ export class AdminAuthService {
           name,
           email,
         },
-      });
+      })
+      .returning();
 
     // PII 최소화: email 대신 idpUuid 로깅
     this.logger.log(`Admin login processed: ${idpUuid}`);
+    return admin;
   }
 
   /**

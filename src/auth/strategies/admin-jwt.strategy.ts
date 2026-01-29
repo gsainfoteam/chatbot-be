@@ -16,6 +16,11 @@ export class AdminJwtStrategy extends PassportStrategy(Strategy, 'admin-jwt') {
   }
 
   validate(payload: AdminAccessTokenJwtPayload): AdminContext {
-    return new AdminContext(payload.email, payload.uuid, payload.name);
+    return new AdminContext(
+      payload.email,
+      payload.uuid,
+      payload.name,
+      payload.role,
+    );
   }
 }

@@ -90,6 +90,7 @@ export class AuthController {
       uuid: admin.uuid,
       email: admin.email,
       name: admin.name,
+      role: admin.role,
     };
   }
 

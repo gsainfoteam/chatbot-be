@@ -14,7 +14,8 @@ Infoteam Identity Provider (IDP) 인증을 위한 NestJS 모듈입니다.
 
 이 모듈은 chatbot-be 프로젝트의 내부 라이브러리입니다.
 
-필요한 의존성:
+필요한 의존성
+
 - `@nestjs/axios`
 - `axios`
 - `@nestjs/jwt`

@@ -68,6 +68,12 @@ export class AdminVerifyResponseDto {
     example: '홍길동',
   })
   name: string;
+
+  @ApiProperty({
+    description: 'Admin 역할',
+    example: 'ADMIN',
+  })
+  role: string;
 }
 
 export class RefreshTokenRequestDto {

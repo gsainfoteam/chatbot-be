@@ -14,6 +14,17 @@ async function bootstrap() {
     new FastifyAdapter(),
   );
 
+  const multipart = await import('@fastify/multipart').then((m) => m.default);
+
+  await app.register(multipart, {
+    limits: {
+      fileSize: 1024 * 1024 * 20, // 20MB for PDF
+      fieldNameSize: 256,
+      fields: 10,
+      files: 1,
+    },
+  });
+
   // Global Validation Pipe
   app.useGlobalPipes(
     new ValidationPipe({
@@ -61,6 +72,7 @@ async function bootstrap() {
     .addTag('Widget Messages', '(Public) 대화 내역 저장 및 조회')
     .addTag('Admin Management', '(Private) 위젯 키 관리')
     .addTag('Authentication', '(Private) Admin 인증 및 토큰 관리')
+    .addTag('Upload', '(Private) Super Admin 전용 PDF 업로드/삭제')
     .addTag('Health', '(Public) 서버 상태 확인')
     .build();
 
@@ -79,7 +91,12 @@ async function bootstrap() {
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Origin'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Origin',
+      'Content-Disposition',
+    ],
   });
 
   await app.listen(port, '0.0.0.0');

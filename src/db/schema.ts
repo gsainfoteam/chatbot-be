@@ -7,6 +7,7 @@ import {
   jsonb,
   text,
   index,
+  boolean,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
@@ -96,6 +97,40 @@ export const sessions = pgTable(
 );
 
 /**
+ * resource-center 업로드 응답 메타데이터 타입
+ * (resource_name, status, queued_for_processing, message_id, gcs_path 등)
+ */
+export type UploadedResourceMetadata = Record<string, unknown>;
+
+/**
+ * 업로드 리소스 테이블
+ * - super_admin이 resource-center에 업로드한 파일 메타데이터 기록
+ */
+export const uploadedResources = pgTable(
+  'uploaded_resources',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    title: varchar('title', { length: 512 }).notNull(),
+    metadata: jsonb('metadata').$type<UploadedResourceMetadata>().notNull(),
+    uploadedByIdpUuid: varchar('uploaded_by_idp_uuid', {
+      length: 255,
+    }).notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    uploadedByIdpUuidIdx: index(
+      'uploaded_resources_uploaded_by_idp_uuid_idx',
+    ).on(table.uploadedByIdpUuid),
+    isActiveIdx: index('uploaded_resources_is_active_idx').on(table.isActive),
+    createdAtIdx: index('uploaded_resources_created_at_idx').on(
+      table.createdAt,
+    ),
+  }),
+);
+
+/**
  * 메시지 테이블
  * - 채팅 메시지를 저장
  */
@@ -144,6 +179,9 @@ export const messagesRelations = relations(messages, ({ one }) => ({
 // Types
 export type Admin = typeof admins.$inferSelect;
 export type NewAdmin = typeof admins.$inferInsert;
+
+export type UploadedResource = typeof uploadedResources.$inferSelect;
+export type NewUploadedResource = typeof uploadedResources.$inferInsert;
 
 export type WidgetKey = typeof widgetKeys.$inferSelect;
 export type NewWidgetKey = typeof widgetKeys.$inferInsert;

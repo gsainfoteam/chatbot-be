@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { InfoteamIdpModule } from '@lib/infoteam-idp';
 import { AdminJwtStrategy } from './strategies/admin-jwt.strategy';
 import { AdminJwtGuard } from './guards/admin-jwt.guard';
+import { SuperAdminGuard } from './guards/super-admin.guard';
 import { AdminAuthService } from './admin-auth.service';
 import { AuthController } from './auth.controller';
 import { DbModule } from '../db/db.module';
@@ -59,7 +60,18 @@ import { DbModule } from '../db/db.module';
     InfoteamIdpModule,
   ],
   controllers: [AuthController],
-  providers: [AdminAuthService, AdminJwtStrategy, AdminJwtGuard],
-  exports: [JwtModule, AdminAuthService, AdminJwtStrategy, AdminJwtGuard],
+  providers: [
+    AdminAuthService,
+    AdminJwtStrategy,
+    AdminJwtGuard,
+    SuperAdminGuard,
+  ],
+  exports: [
+    JwtModule,
+    AdminAuthService,
+    AdminJwtStrategy,
+    AdminJwtGuard,
+    SuperAdminGuard,
+  ],
 })
 export class AuthModule {}

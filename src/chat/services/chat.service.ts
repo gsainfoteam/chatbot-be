@@ -7,6 +7,7 @@ import {
 } from '../../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../../common/dto/paginated-messages.dto';
+import { MAX_QUESTIONS_PER_SESSION } from '../constants';
 
 @Injectable()
 export class ChatService {
@@ -21,10 +22,14 @@ export class ChatService {
   }
 
   /**
-   * context용: 해당 세션의 대화 전체 조회 (rate limit으로 최대 10개 수준)
+   * context용: 해당 세션의 대화 전체 조회 (최대 5개)
    */
   async getMessagesForContext(sessionId: string): Promise<ChatMessageDto[]> {
-    const result = await this.getMessages(sessionId, undefined, 50);
+    const result = await this.getMessages(
+      sessionId,
+      undefined,
+      MAX_QUESTIONS_PER_SESSION,
+    );
     return result.messages;
   }
 

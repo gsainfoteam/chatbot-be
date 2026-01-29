@@ -9,6 +9,7 @@ import { AdminModule } from './admin/admin.module';
 import { validate } from './config/env.validation';
 import { McpModule } from './mcp/mcp.module';
 import { ChatModule } from './chat/chat.module';
+import { UploadModule } from './upload/upload.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { ChatModule } from './chat/chat.module';
     AdminModule,
     McpModule,
     ChatModule,
+    UploadModule,
   ],
   controllers: [AppController],
   providers: [AppService],

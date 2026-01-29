@@ -110,6 +110,7 @@ This tool is essential for answering questions that require ${toolNameLower} fun
    * @param mcpTools 사용 가능한 MCP Tool 목록
    * @param model 사용할 LLM 모델 (선택사항)
    * @param options 추가 옵션 (temperature, emphasizeToolUsage 등)
+   * @param pastMessages 과거 대화 (시간순, user/assistant만) — context 유지용
    * @returns LLM 응답 (tool_calls 포함 가능)
    */
   async selectTool(
@@ -120,6 +121,7 @@ This tool is essential for answering questions that require ${toolNameLower} fun
       temperature?: number;
       emphasizeToolUsage?: boolean;
     },
+    pastMessages?: OpenRouterMessage[],
   ): Promise<OpenRouterResponse> {
     const tools = this.convertMcpToolsToOpenRouterFormat(mcpTools);
 
@@ -151,14 +153,9 @@ ${params}`;
     });
 
     const messages: OpenRouterMessage[] = [
-      {
-        role: 'system',
-        content: systemPrompt,
-      },
-      {
-        role: 'user',
-        content: userQuestion,
-      },
+      { role: 'system', content: systemPrompt },
+      ...(pastMessages ?? []),
+      { role: 'user', content: userQuestion },
     ];
 
     const request: OpenRouterRequest = {

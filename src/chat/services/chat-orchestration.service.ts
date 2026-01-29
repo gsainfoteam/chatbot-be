@@ -682,6 +682,13 @@ export class ChatOrchestrationService {
     resources: ResourceInfo[];
   }> {
     try {
+      // 0. 과거 대화 조회 (현재 user 저장 전 → 직전 대화까지 context)
+      const pastMessagesRaw =
+        await this.chatService.getMessagesForContext(sessionId);
+      const historyMessages: OpenRouterMessage[] = [...pastMessagesRaw]
+        .reverse()
+        .map((msg) => ({ role: msg.role, content: msg.content }));
+
       // 1. 사용자 메시지 저장
       await this.chatService.createMessage(sessionId, {
         role: MessageRole.USER,
@@ -695,14 +702,9 @@ export class ChatOrchestrationService {
         this.logger.warn('No MCP tools available');
         const stream = await this.openRouterService.generateFinalResponseStream(
           [
-            {
-              role: 'system',
-              content: NO_TOOLS_AVAILABLE_SYSTEM_PROMPT,
-            },
-            {
-              role: 'user',
-              content: userQuestion,
-            },
+            { role: 'system', content: NO_TOOLS_AVAILABLE_SYSTEM_PROMPT },
+            ...historyMessages,
+            { role: 'user', content: userQuestion },
           ],
           [],
         );
@@ -727,6 +729,7 @@ export class ChatOrchestrationService {
             attempt > 1
               ? { temperature: 0.1, emphasizeToolUsage: true }
               : undefined,
+            historyMessages,
           );
 
           toolCalls = this.openRouterService.parseToolCalls(
@@ -768,14 +771,9 @@ export class ChatOrchestrationService {
         );
         const stream = await this.openRouterService.generateFinalResponseStream(
           [
-            {
-              role: 'system',
-              content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
-            },
-            {
-              role: 'user',
-              content: userQuestion,
-            },
+            { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
+            ...historyMessages,
+            { role: 'user', content: userQuestion },
           ],
           [],
         );
@@ -826,14 +824,9 @@ export class ChatOrchestrationService {
       // 6. Tool 결과를 LLM에 전달하여 최종 응답 생성 (스트리밍)
       this.logger.debug('Generating final response with tool results...');
       const messages: OpenRouterMessage[] = [
-        {
-          role: 'system',
-          content: FINAL_RESPONSE_SYSTEM_PROMPT,
-        },
-        {
-          role: 'user',
-          content: userQuestion,
-        },
+        { role: 'system', content: FINAL_RESPONSE_SYSTEM_PROMPT },
+        ...historyMessages,
+        { role: 'user', content: userQuestion },
       ];
 
       // tool_calls가 있으면 하나의 assistant 메시지에 모든 tool_calls 포함

@@ -151,6 +151,14 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ChatMessage'
+        '401':
+          description: 인증 실패
+        '429':
+          description: 세션당 질문 횟수 초과 (user 메시지 최대 5회)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TooManyQuestionsError'
 
   # ----------------------------
   # 3. Admin Management
@@ -420,6 +428,21 @@ components:
         createdAt:
           type: string
           format: date-time
+
+    TooManyQuestionsError:
+      type: object
+      description: "세션당 질문 횟수 초과 시 429 응답"
+      properties:
+        statusCode:
+          type: integer
+          example: 429
+        message:
+          type: string
+          example: "이 세션에서는 최대 5개의 질문만 가능합니다."
+        limit:
+          type: integer
+          description: "세션당 최대 질문 횟수"
+          example: 5
 
     # --- Admin ---
     WidgetKey:

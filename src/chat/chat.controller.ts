@@ -10,6 +10,8 @@ import {
   DefaultValuePipe,
   Res,
   Logger,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -26,10 +28,14 @@ import { McpResourceService } from '../mcp/mcp-resource.service';
 import { WidgetSessionGuard } from '../auth/guards/widget-session.guard';
 import { CurrentSession } from '../auth/decorators/current-session.decorator';
 import type { SessionPayload } from '../auth/decorators/current-session.decorator';
-import { ChatMessageInputDto } from '../common/dto/chat-message-input.dto';
+import {
+  ChatMessageInputDto,
+  MessageRole,
+} from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';
 import { ChatRequestDto } from './dto/chat-request.dto';
+import { MAX_QUESTIONS_PER_SESSION } from './constants';
 
 @ApiTags('Widget Messages')
 @Controller('api/v1/widget/messages')
@@ -93,10 +99,29 @@ export class ChatController {
     status: 401,
     description: '인증 실패',
   })
+  @ApiResponse({
+    status: 429,
+    description: '세션당 질문 횟수 초과 (user 메시지 최대 5회)',
+  })
   async createMessage(
     @CurrentSession() session: SessionPayload,
     @Body() dto: ChatMessageInputDto,
   ): Promise<ChatMessageDto> {
+    if (dto.role === MessageRole.USER) {
+      const userMessageCount = await this.chatService.getUserMessageCount(
+        session.sessionId,
+      );
+      if (userMessageCount > MAX_QUESTIONS_PER_SESSION) {
+        throw new HttpException(
+          {
+            statusCode: HttpStatus.TOO_MANY_REQUESTS,
+            message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
+            limit: MAX_QUESTIONS_PER_SESSION,
+          },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
     return this.chatService.createMessage(session.sessionId, dto);
   }
 
@@ -129,6 +154,10 @@ export class ChatController {
     description: '인증 실패',
   })
   @ApiResponse({
+    status: 429,
+    description: '세션당 질문 횟수 초과 (최대 5회)',
+  })
+  @ApiResponse({
     status: 500,
     description: '서버 오류 (LLM 호출 실패, Tool 실행 실패 등)',
   })
@@ -137,6 +166,19 @@ export class ChatController {
     @Body() dto: ChatRequestDto,
     @Res() reply: FastifyReply,
   ): Promise<void> {
+    const userMessageCount = await this.chatService.getUserMessageCount(
+      session.sessionId,
+    );
+    if (userMessageCount > MAX_QUESTIONS_PER_SESSION) {
+      throw new HttpException(
+        {
+          statusCode: HttpStatus.TOO_MANY_REQUESTS,
+          message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
+          limit: MAX_QUESTIONS_PER_SESSION,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     return this.chatOrchestrationService.handleStreamingResponse(
       session.sessionId,
       dto.question,

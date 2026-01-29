@@ -167,7 +167,8 @@ export class UploadService {
   }
 
   /**
-   * 우리 DB에서 is_active = false 로 갱신 후 resource-center에서 삭제
+   * resource-center에서 삭제 성공 후 DB에서 is_active = false 및 metadata 갱신
+   * (DB는 DELETE 성공 후에만 갱신하여, 외부 삭제 실패 시 재시도 가능)
    */
   async delete(id: string): Promise<void> {
     const [row] = await this.db
@@ -182,12 +183,6 @@ export class UploadService {
     if (!row.isActive) {
       throw new NotFoundException(`Upload already deleted: ${id}`);
     }
-
-    const now = new Date();
-    await this.db
-      .update(uploadedResources)
-      .set({ isActive: false, updatedAt: now })
-      .where(eq(uploadedResources.id, id));
 
     const rawPath =
       typeof row.metadata?.gcs_path === 'string'
@@ -222,7 +217,7 @@ export class UploadService {
                   ? JSON.stringify(error.response.data)
                   : error.message;
               this.logger.error(
-                `Resource-center delete failed: ${status} ${message}`,
+                `Resource-center delete failed id=${id} deleteUrl=${deleteUrl} status=${status} ${message}`,
               );
               if (status === 404) {
                 throw new NotFoundException(
@@ -254,13 +249,19 @@ export class UploadService {
         ...deleteResponse,
       };
 
+      const now = new Date();
       await this.db
         .update(uploadedResources)
         .set({
+          isActive: false,
           metadata: mergedMetadata,
-          updatedAt: new Date(),
+          updatedAt: now,
         })
         .where(eq(uploadedResources.id, id));
+
+      this.logger.debug(
+        `Resource-center delete response applied to metadata: ${JSON.stringify(deleteResponse)}`,
+      );
     } catch (error) {
       if (
         error instanceof BadRequestException ||
@@ -268,7 +269,10 @@ export class UploadService {
       ) {
         throw error;
       }
-      this.logger.error('Delete failed', error);
+      this.logger.error(
+        `Delete failed id=${id} deleteUrl=${deleteUrl}`,
+        error instanceof Error ? error.stack : error,
+      );
       throw new BadRequestException(
         `Delete failed: ${error instanceof Error ? error.message : String(error)}`,
       );

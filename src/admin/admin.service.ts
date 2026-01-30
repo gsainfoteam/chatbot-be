@@ -16,6 +16,32 @@ import { WidgetKeyDto, WidgetKeyStatus } from '../common/dto/widget-key.dto';
 export class AdminService {
   constructor(@Inject(DB_CONNECTION) private db: Database) {}
 
+  async getDomains(
+    widgetKeyId: string,
+    adminUuid: string,
+  ): Promise<{ domains: string[] }> {
+    const [key] = await this.db
+      .select({
+        allowedDomains: widgetKeys.allowedDomains,
+        createdByIdpUuid: widgetKeys.createdByIdpUuid,
+      })
+      .from(widgetKeys)
+      .where(eq(widgetKeys.id, widgetKeyId))
+      .limit(1);
+
+    if (!key) {
+      throw new NotFoundException('Widget key not found');
+    }
+
+    if (key.createdByIdpUuid !== adminUuid) {
+      throw new ForbiddenException(
+        'You do not have permission to view this widget key',
+      );
+    }
+
+    return { domains: key.allowedDomains ?? [] };
+  }
+
   async getAllWidgetKeys(adminUuid: string): Promise<WidgetKeyDto[]> {
     const keys = await this.db
       .select()

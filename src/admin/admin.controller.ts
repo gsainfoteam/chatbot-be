@@ -6,6 +6,7 @@ import {
   Delete,
   Body,
   Param,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -14,12 +15,15 @@ import {
   ApiResponse,
   ApiBearerAuth,
   ApiParam,
+  ApiQuery,
 } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
+import { UsageService } from '../usage/usage.service';
 import { AdminJwtGuard } from '../auth/guards/admin-jwt.guard';
 import { CreateWidgetKeyDto } from '../common/dto/create-widget-key.dto';
 import { RegisterDomainsDto } from '../common/dto/register-domains.dto';
 import { WidgetKeyDto } from '../common/dto/widget-key.dto';
+import { WidgetKeyStatsDto } from '../common/dto/widget-key-usage.dto';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import { AdminContext } from '../auth/context/admin-context.entity';
 
@@ -28,7 +32,10 @@ import { AdminContext } from '../auth/context/admin-context.entity';
 @UseGuards(AdminJwtGuard)
 @ApiBearerAuth('bearerAuth')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly usageService: UsageService,
+  ) {}
 
   @Get('widget-keys')
   @ApiOperation({
@@ -49,6 +56,94 @@ export class AdminController {
     @CurrentAdmin() admin: AdminContext,
   ): Promise<WidgetKeyDto[]> {
     return this.adminService.getAllWidgetKeys(admin.uuid);
+  }
+
+  @Get('widget-keys/usage')
+  @ApiOperation({
+    summary: '위젯 키별 사용량 통계',
+    description:
+      '본인이 등록한 위젯 키별·도메인별 토큰/요청 사용량을 조회합니다. Admin JWT 인증이 필요합니다.',
+  })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    type: String,
+    description: '시작일 (YYYY-MM-DD), 기본값: 30일 전',
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    type: String,
+    description: '종료일 (YYYY-MM-DD), 기본값: 오늘',
+  })
+  @ApiQuery({
+    name: 'widgetKeyId',
+    required: false,
+    type: String,
+    description: '특정 위젯 키만 조회할 때',
+  })
+  @ApiQuery({
+    name: 'domain',
+    required: false,
+    type: String,
+    description: '특정 도메인만 필터링 (예: www.example.com)',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '성공',
+    type: [WidgetKeyStatsDto],
+  })
+  @ApiResponse({
+    status: 401,
+    description: '인증 실패',
+  })
+  async getWidgetKeyUsage(
+    @CurrentAdmin() admin: AdminContext,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('widgetKeyId') widgetKeyId?: string,
+    @Query('domain') domain?: string,
+  ): Promise<WidgetKeyStatsDto[]> {
+    return this.usageService.getWidgetKeyStats(admin.uuid, {
+      startDate,
+      endDate,
+      widgetKeyId,
+      domain,
+    });
+  }
+
+  @Get('widget-keys/:widgetKeyId/domains')
+  @ApiOperation({
+    summary: '위젯 키별 등록 도메인 목록 조회',
+    description:
+      '특정 위젯 키에 등록된 허용 도메인 목록을 조회합니다. 사용량 API(domain 필터) 등에서 도메인별 데이터를 보기 위해 사용합니다.',
+  })
+  @ApiParam({
+    name: 'widgetKeyId',
+    description: '도메인 목록을 조회할 위젯 키의 UUID',
+    type: String,
+  })
+  @ApiResponse({
+    status: 200,
+    description: '성공',
+    schema: {
+      type: 'object',
+      properties: {
+        domains: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: '인증 실패' })
+  @ApiResponse({
+    status: 403,
+    description: '권한 없음 (본인이 만든 키가 아님)',
+  })
+  @ApiResponse({ status: 404, description: '존재하지 않는 Key ID' })
+  async getDomains(
+    @CurrentAdmin() admin: AdminContext,
+    @Param('widgetKeyId') widgetKeyId: string,
+  ): Promise<{ domains: string[] }> {
+    return this.adminService.getDomains(widgetKeyId, admin.uuid);
   }
 
   @Post('widget-keys')

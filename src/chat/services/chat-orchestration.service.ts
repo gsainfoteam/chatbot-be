@@ -6,6 +6,7 @@ import {
 import { McpClientService } from '../../mcp/mcp-client.service';
 import { OpenRouterService } from './open-router.service';
 import { ChatService } from './chat.service';
+import { UsageService } from '../../usage/usage.service';
 import type { McpTool, OpenRouterMessage } from '../types/open-router.types';
 import { MessageRole } from '../../common/dto/chat-message-input.dto';
 import type { Readable } from 'stream';
@@ -47,6 +48,7 @@ export class ChatOrchestrationService {
     private readonly mcpClientService: McpClientService,
     private readonly openRouterService: OpenRouterService,
     private readonly chatService: ChatService,
+    private readonly usageService: UsageService,
   ) {}
 
   /**
@@ -947,6 +949,19 @@ export class ChatOrchestrationService {
                   resources: resources.length > 0 ? resources : undefined,
                 },
               });
+            }
+
+            if (usage?.total_tokens != null) {
+              try {
+                await this.usageService.recordUsage(sessionId, {
+                  totalTokens: usage.total_tokens,
+                });
+              } catch (err) {
+                this.logger.warn(
+                  'Failed to record usage',
+                  err instanceof Error ? err.message : String(err),
+                );
+              }
             }
 
             if (resources.length > 0) {

@@ -8,6 +8,9 @@ import {
   text,
   index,
   boolean,
+  integer,
+  date,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 
@@ -156,9 +159,38 @@ export const messages = pgTable(
   }),
 );
 
+/**
+ * 일별 사용량 집계 테이블
+ * - 위젯 키·날짜·도메인별 토큰/요청 수를 실시간 누적
+ * - 대시보드 조회 시 messages 테이블을 스캔하지 않고 이 테이블만 사용
+ */
+export const usageDaily = pgTable(
+  'usage_daily',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    widgetKeyId: uuid('widget_key_id')
+      .notNull()
+      .references(() => widgetKeys.id, { onDelete: 'cascade' }),
+    date: date('date', { mode: 'string' }).notNull(),
+    domain: varchar('domain', { length: 512 }).notNull(),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    totalRequests: integer('total_requests').notNull().default(0),
+  },
+  (table) => ({
+    widgetKeyDateIdx: index('usage_daily_widget_key_date_idx').on(
+      table.widgetKeyId,
+      table.date,
+    ),
+    uniqueWidgetKeyDateDomain: uniqueIndex(
+      'usage_daily_widget_key_id_date_domain_unique',
+    ).on(table.widgetKeyId, table.date, table.domain),
+  }),
+);
+
 // Relations
 export const widgetKeysRelations = relations(widgetKeys, ({ many }) => ({
   sessions: many(sessions),
+  usageDaily: many(usageDaily),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one, many }) => ({
@@ -173,6 +205,13 @@ export const messagesRelations = relations(messages, ({ one }) => ({
   session: one(sessions, {
     fields: [messages.sessionId],
     references: [sessions.id],
+  }),
+}));
+
+export const usageDailyRelations = relations(usageDaily, ({ one }) => ({
+  widgetKey: one(widgetKeys, {
+    fields: [usageDaily.widgetKeyId],
+    references: [widgetKeys.id],
   }),
 }));
 
@@ -191,3 +230,6 @@ export type NewSession = typeof sessions.$inferInsert;
 
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
+
+export type UsageDaily = typeof usageDaily.$inferSelect;
+export type NewUsageDaily = typeof usageDaily.$inferInsert;

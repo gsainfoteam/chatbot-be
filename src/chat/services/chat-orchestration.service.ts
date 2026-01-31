@@ -584,6 +584,8 @@ export class ChatOrchestrationService {
     name: string;
     content: string;
     resources: ResourceInfo[];
+    /** list_resources에서 실제 문서 내용을 붙였을 때만 true */
+    hadReferenceContent: boolean;
   }> {
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
@@ -609,6 +611,7 @@ export class ChatOrchestrationService {
         path: string;
         formats: string[];
       }> = [];
+      let hadReferenceContent = false;
       if (
         toolCall.name === 'list_resources' &&
         userQuestion &&
@@ -619,9 +622,13 @@ export class ChatOrchestrationService {
           userQuestion,
           toolResult.filteredResources,
         );
-        if (relevantResult.content) {
+        const hasActualContent =
+          typeof relevantResult.content === 'string' &&
+          relevantResult.content.trim().length > 0;
+        if (hasActualContent) {
           resultText += '\n\n' + relevantResult.content;
           usedResourcesFromContent = relevantResult.usedResources;
+          hadReferenceContent = true;
         }
       }
 
@@ -664,6 +671,7 @@ export class ChatOrchestrationService {
         name: toolCall.name,
         content: resultText,
         resources,
+        hadReferenceContent,
       };
     })();
 
@@ -709,6 +717,8 @@ export class ChatOrchestrationService {
             { role: 'user', content: userQuestion },
           ],
           [],
+          undefined,
+          { temperature: 0 },
         );
         return { stream, resources: [] };
       }
@@ -778,6 +788,8 @@ export class ChatOrchestrationService {
             { role: 'user', content: userQuestion },
           ],
           [],
+          undefined,
+          { temperature: 0 },
         );
         return { stream, resources: [] };
       }
@@ -797,6 +809,7 @@ export class ChatOrchestrationService {
               name: toolCall.name,
               content: `Tool execution failed: ${errorMessage}`,
               resources: [] as ResourceInfo[],
+              hadReferenceContent: false,
             };
           },
         ),
@@ -817,10 +830,35 @@ export class ChatOrchestrationService {
           name: result.name,
           content: result.content,
         });
-
-        if (result.resources.length > 0) {
-          allResources.push(...result.resources);
+        const resources = result.resources ?? [];
+        if (resources.length > 0) {
+          allResources.push(...resources);
         }
+      }
+
+      // 5.5 참조 문서가 없으면 LLM에 넘기지 않고 "관련 자료 없음" 응답으로 처리
+      // (참조 문서 없을 때 모델이 학습 지식으로 답하는 것 방지. hadReferenceContent는 fetchRelevantResourceContents에서 실제로 내용을 붙였을 때만 true)
+      const anyHadReferenceContent = toolExecutionResults.some(
+        (r) => r.hadReferenceContent === true,
+      );
+      const hasReferenceContent =
+        allResources.length > 0 || anyHadReferenceContent;
+      this.logger.debug(
+        `[5.5] allRes=${allResources.length} anyHadRef=${anyHadReferenceContent} → hasRef=${hasReferenceContent}`,
+      );
+      if (!hasReferenceContent) {
+        this.logger.warn('No reference documents available.');
+        const stream = await this.openRouterService.generateFinalResponseStream(
+          [
+            { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
+            ...historyMessages,
+            { role: 'user', content: userQuestion },
+          ],
+          [],
+          undefined,
+          { temperature: 0 },
+        );
+        return { stream, resources: [] };
       }
 
       // 6. Tool 결과를 LLM에 전달하여 최종 응답 생성 (스트리밍)

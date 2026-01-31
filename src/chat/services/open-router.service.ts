@@ -261,6 +261,7 @@ ${params}`;
       content: string;
     }>,
     model?: string,
+    options?: { temperature?: number },
   ): Promise<Readable> {
     // Tool 결과를 메시지에 추가
     const toolMessages: OpenRouterMessage[] = toolResults.map((result) => ({
@@ -275,7 +276,7 @@ ${params}`;
     const request: OpenRouterRequest & { stream: boolean } = {
       model: model || this.defaultModel,
       messages: updatedMessages,
-      temperature: 0.7,
+      temperature: options?.temperature ?? 0.7,
       max_tokens: 2000,
       stream: true,
     };

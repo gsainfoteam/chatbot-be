@@ -31,27 +31,39 @@ export type OpenRouterModelType = 'light' | 'normal' | 'heavy';
 export class OpenRouterService {
   private readonly logger = new Logger(OpenRouterService.name);
   private readonly apiKey: string;
-  private readonly baseUrl = 'https://openrouter.ai/api/v1';
+  private readonly baseUrl: string;
   private readonly modelLight: string;
   private readonly modelNormal: string;
   private readonly modelHeavy: string;
   private readonly defaultModel: string;
+  private readonly xTitle: string | undefined;
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
   ) {
-    this.apiKey = this.configService.getOrThrow<string>('LETSUR_AI_GATEWAY_API_KEY');
+    this.apiKey = this.configService.getOrThrow<string>(
+      'LETSUR_AI_GATEWAY_API_KEY',
+    );
+    this.baseUrl = this.configService
+      .getOrThrow<string>('LETSUR_AI_GATEWAY_BASE_URL')
+      .replace(/\/+$/, '');
     const fallback =
       this.configService.get<string>('LETSUR_AI_GATEWAY_MODEL') ||
-      'anthropic/claude-3.5-sonnet';
+      'gpt-4o-mini';
     this.modelLight =
-      this.configService.get<string>('LETSUR_AI_GATEWAY_MODEL_LIGHT') || fallback;
+      this.configService.get<string>('LETSUR_AI_GATEWAY_MODEL_LIGHT') ||
+      fallback;
     this.modelNormal =
-      this.configService.get<string>('LETSUR_AI_GATEWAY_MODEL_NORMAL') || fallback;
+      this.configService.get<string>('LETSUR_AI_GATEWAY_MODEL_NORMAL') ||
+      fallback;
     this.modelHeavy =
-      this.configService.get<string>('LETSUR_AI_GATEWAY_MODEL_HEAVY') || fallback;
+      this.configService.get<string>('LETSUR_AI_GATEWAY_MODEL_HEAVY') ||
+      fallback;
     this.defaultModel = this.modelNormal;
+    this.xTitle =
+      this.configService.get<string>('LETSUR_AI_GATEWAY_X_TITLE') ||
+      this.configService.get<string>('LETSUR_AI_GATEWAY_TITLE');
   }
 
   /** 용도별 모델 반환 (light: 선별, normal: 단순 응답, heavy: 최종 답변) */
@@ -213,7 +225,7 @@ ${params}`;
                 Authorization: `Bearer ${this.apiKey}`,
                 'Content-Type': 'application/json',
                 'HTTP-Referer': this.configService.get<string>('DOMAIN_NAME'),
-                'X-Title': this.configService.get<string>('LETSUR_AI_GATEWAY_TITLE'),
+                ...(this.xTitle ? { 'X-Title': this.xTitle } : {}),
               },
               timeout: 15000,
             },
@@ -414,7 +426,7 @@ ${params}`;
               Authorization: `Bearer ${this.apiKey}`,
               'Content-Type': 'application/json',
               'HTTP-Referer': this.configService.get<string>('DOMAIN_NAME'),
-              'X-Title': this.configService.get<string>('APP_NAME'),
+              ...(this.xTitle ? { 'X-Title': this.xTitle } : {}),
             },
             responseType: 'stream',
             timeout: 15000,
@@ -487,7 +499,7 @@ ${params}`;
                 Authorization: `Bearer ${this.apiKey}`,
                 'Content-Type': 'application/json',
                 'HTTP-Referer': this.configService.get<string>('DOMAIN_NAME'),
-                'X-Title': this.configService.get<string>('LETSUR_AI_GATEWAY_TITLE'),
+                ...(this.xTitle ? { 'X-Title': this.xTitle } : {}),
               },
               timeout: 15000,
             },

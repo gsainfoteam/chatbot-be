@@ -98,7 +98,11 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   IDP_CLIENT_SECRET: string;
 
-  // Open Router Configuration
+  // Letsur AI Gateway Configuration
+  @IsString()
+  @IsNotEmpty()
+  LETSUR_AI_GATEWAY_BASE_URL: string;
+
   @IsString()
   @IsNotEmpty()
   LETSUR_AI_GATEWAY_API_KEY: string;

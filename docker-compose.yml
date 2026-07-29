@@ -29,8 +29,8 @@ services:
       - '3000:3000'
     environment:
       # Database (Docker에서만 다른 값)
-      DB_HOST: postgres  # Docker 네트워크 내 서비스 이름
-      NODE_ENV: production  # Docker는 프로덕션 모드
+      DB_HOST: postgres # Docker 네트워크 내 서비스 이름
+      NODE_ENV: production # Docker는 프로덕션 모드
       # 나머지는 .env 파일에서 가져옴
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-postgres}
@@ -58,6 +58,7 @@ services:
       LETSUR_AI_GATEWAY_MODEL_NORMAL: ${LETSUR_AI_GATEWAY_MODEL_NORMAL:-}
       LETSUR_AI_GATEWAY_MODEL_HEAVY: ${LETSUR_AI_GATEWAY_MODEL_HEAVY:-}
       LETSUR_AI_GATEWAY_X_TITLE: ${LETSUR_AI_GATEWAY_X_TITLE:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-letsur}
     depends_on:
       postgres:
         condition: service_healthy

@@ -9,6 +9,7 @@ import {
   Min,
   Max,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -16,6 +17,11 @@ enum Environment {
   Development = 'development',
   Production = 'production',
   Test = 'test',
+}
+
+enum LlmProvider {
+  Letsur = 'letsur',
+  OpenRouter = 'openrouter',
 }
 
 /**
@@ -98,14 +104,39 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   IDP_CLIENT_SECRET: string;
 
-  // Letsur AI Gateway Configuration
+  // LLM Provider: letsur (default) | openrouter
+  @IsOptional()
+  @IsEnum(LlmProvider)
+  LLM_PROVIDER?: LlmProvider;
+
+  // Letsur AI Gateway Configuration (required when LLM_PROVIDER=letsur)
+  @ValidateIf(
+    (o: EnvironmentVariables) =>
+      (o.LLM_PROVIDER ?? LlmProvider.Letsur) === LlmProvider.Letsur,
+  )
   @IsString()
   @IsNotEmpty()
   LETSUR_AI_GATEWAY_BASE_URL: string;
 
+  @ValidateIf(
+    (o: EnvironmentVariables) =>
+      (o.LLM_PROVIDER ?? LlmProvider.Letsur) === LlmProvider.Letsur,
+  )
   @IsString()
   @IsNotEmpty()
   LETSUR_AI_GATEWAY_API_KEY: string;
+
+  // OpenRouter Configuration (required when LLM_PROVIDER=openrouter)
+  @ValidateIf(
+    (o: EnvironmentVariables) => o.LLM_PROVIDER === LlmProvider.OpenRouter,
+  )
+  @IsString()
+  @IsNotEmpty()
+  OPEN_ROUTER_API_KEY: string;
+
+  @IsOptional()
+  @IsString()
+  OPEN_ROUTER_BASE_URL?: string;
 
   // Client Domain Configuration
   @IsString()

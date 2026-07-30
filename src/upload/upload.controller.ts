@@ -21,14 +21,12 @@ import {
   ApiQuery,
 } from '@nestjs/swagger';
 import type { FastifyRequest } from 'fastify';
-import { UploadService } from './upload.service';
+import { UploadService, PDF_MIME } from './upload.service';
 import { AdminJwtGuard } from '../auth/guards/admin-jwt.guard';
 import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import { AdminContext } from '../auth/context/admin-context.entity';
 import { Readable } from 'stream';
-
-const PDF_MIME = 'application/pdf';
 
 async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -49,7 +47,7 @@ export class UploadController {
   @ApiOperation({
     summary: '내가 업로드한 문서 목록 조회 (Super Admin 전용)',
     description:
-      '현재 로그인한 Super Admin이 업로드한 문서 목록을 최신순으로 반환합니다. 삭제되지 않은(is_active) 문서만 포함됩니다.',
+      '현재 로그인한 Super Admin이 업로드한 문서 목록을 최신순으로 반환합니다. 삭제되지 않은 문서만 포함되며, 처리 상태(status)를 포함합니다.',
   })
   @ApiQuery({
     name: 'limit',
@@ -88,11 +86,26 @@ export class UploadController {
     });
   }
 
+  @Get(':id')
+  @ApiOperation({
+    summary: '문서 단건 조회 (상태 포함)',
+    description: '업로드한 문서의 처리 상태를 조회합니다.',
+  })
+  @ApiParam({ name: 'id', description: '문서 UUID' })
+  @ApiResponse({ status: 200, description: '성공' })
+  @ApiResponse({ status: 404, description: '문서 없음' })
+  async getOne(
+    @CurrentAdmin() admin: AdminContext,
+    @Param('id') id: string,
+  ) {
+    return this.uploadService.getById(id, admin.uuid);
+  }
+
   @Post()
   @ApiOperation({
     summary: 'PDF 파일 업로드 (Super Admin 전용)',
     description:
-      'PDF 파일을 resource-center에 업로드하고 우리 DB에 메타데이터를 기록합니다. Super Admin 역할만 호출 가능합니다.',
+      'PDF를 GCS에 저장하고 비동기 처리 큐에 등록합니다. 처리 완료를 기다리지 않으며 status=queued로 즉시 응답합니다.',
   })
   @ApiBody({
     schema: {
@@ -104,13 +117,14 @@ export class UploadController {
       },
     },
   })
-  @ApiResponse({ status: 201, description: '업로드 성공' })
+  @ApiResponse({ status: 201, description: '업로드 성공 (queued)' })
   @ApiResponse({
     status: 400,
     description: '잘못된 요청 (PDF 아님, 필드 누락 등)',
   })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
+  @ApiResponse({ status: 409, description: '동일 resource_name 문서가 이미 존재' })
   async upload(
     @CurrentAdmin() admin: AdminContext,
     @Req() req: FastifyRequest,
@@ -155,19 +169,25 @@ export class UploadController {
       throw new BadRequestException('Only PDF files are allowed');
     }
 
-    const record = await this.uploadService.upload(
+    return this.uploadService.upload(
       fileBuffer,
       filename,
       title.trim(),
       admin.uuid,
     );
+  }
 
-    return {
-      id: record.id,
-      title: record.title,
-      metadata: record.metadata,
-      uploadedAt: record.createdAt,
-    };
+  @Post(':id/reprocess')
+  @ApiOperation({
+    summary: '문서 재처리',
+    description:
+      '기존 청크를 비우고 status를 queued로 되돌려 워커가 다시 처리하도록 합니다.',
+  })
+  @ApiParam({ name: 'id', description: '문서 UUID' })
+  @ApiResponse({ status: 200, description: '재처리 큐 등록' })
+  @ApiResponse({ status: 404, description: '문서 없음' })
+  async reprocess(@Param('id') id: string) {
+    return this.uploadService.reprocess(id);
   }
 
   @Delete(':id')
@@ -175,15 +195,15 @@ export class UploadController {
   @ApiOperation({
     summary: '업로드 파일 삭제 (Super Admin 전용)',
     description:
-      '우리 DB에서 is_active를 false로 갱신하고 resource-center에서 해당 리소스를 삭제합니다. Super Admin 역할만 호출 가능합니다.',
+      'GCS 산출물을 삭제하고 DB에서 soft-delete 합니다. Super Admin 역할만 호출 가능합니다.',
   })
-  @ApiParam({ name: 'id', description: '업로드 기록 UUID', type: String })
+  @ApiParam({ name: 'id', description: '문서 UUID', type: String })
   @ApiResponse({ status: 204, description: '삭제 성공' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
   @ApiResponse({
     status: 404,
-    description: '업로드 기록 없음 또는 이미 삭제됨',
+    description: '문서 없음 또는 이미 삭제됨',
   })
   async delete(@Param('id') id: string): Promise<void> {
     await this.uploadService.delete(id);

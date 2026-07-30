@@ -32,9 +32,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
   ) {
     this.concurrency = Math.max(
       1,
-      Number(
-        this.configService.get<string>('PDF_PROCESSOR_CONCURRENCY') ?? 1,
-      ),
+      Number(this.configService.get<string>('PDF_PROCESSOR_CONCURRENCY') ?? 1),
     );
     this.pollIntervalMs = Math.max(
       500,
@@ -47,9 +45,8 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     this.staleProcessingMs = Math.max(
       60_000,
       Number(
-        this.configService.get<string>(
-          'PDF_PROCESSOR_STALE_PROCESSING_MS',
-        ) ?? 30 * 60 * 1000,
+        this.configService.get<string>('PDF_PROCESSOR_STALE_PROCESSING_MS') ??
+          30 * 60 * 1000,
       ),
     );
   }
@@ -99,10 +96,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     if (this.stopped || this.tickInFlight) return;
     this.tickInFlight = true;
     try {
-      if (
-        Date.now() - this.lastStaleCheckAt >=
-        this.staleCheckIntervalMs
-      ) {
+      if (Date.now() - this.lastStaleCheckAt >= this.staleCheckIntervalMs) {
         await this.requeueStale();
       }
 
@@ -149,7 +143,6 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
 
       generatedArtifactsMayExist = true;
       await this.gcs.uploadDocuments(result.documents);
-      await this.gcs.updateResourceIndex(resourceName, result.metadata);
       const completed = await this.documentsRepo.completeProcessing(
         doc.id,
         processingToken,
@@ -168,18 +161,13 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
         `Processing complete: ${resourceName} (${Object.keys(result.documents).length} files, ${result.chunks.length} chunks)`,
       );
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       this.logger.error(
         `Processing failed id=${doc.id} name=${resourceName}: ${message}`,
         error instanceof Error ? error.stack : undefined,
       );
       try {
-        await this.documentsRepo.markFailed(
-          doc.id,
-          processingToken,
-          message,
-        );
+        await this.documentsRepo.markFailed(doc.id, processingToken, message);
       } catch (markError) {
         this.logger.error(
           `Failed to persist processing error id=${doc.id}: ${markError instanceof Error ? markError.message : String(markError)}`,

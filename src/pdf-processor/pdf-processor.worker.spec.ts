@@ -41,7 +41,6 @@ function createWorker(completeProcessing: boolean) {
   const gcs = {
     downloadPdf: jest.fn(() => Promise.resolve(Buffer.from('%PDF-test'))),
     uploadDocuments: jest.fn(() => Promise.resolve()),
-    updateResourceIndex: jest.fn(() => Promise.resolve()),
     deleteProcessedArtifacts: jest.fn<(resourceName: string) => Promise<void>>(
       () => Promise.resolve(),
     ),

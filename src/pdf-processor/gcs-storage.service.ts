@@ -7,14 +7,11 @@ type GcsServiceAccountCredentials = {
   private_key: string;
 };
 
+/** Metadata shape produced by the PDF pipeline (kept for callers; not written to GCS index). */
 export type ResourceIndexEntry = {
   description: string;
   chunks: { path: string; description: string }[];
 };
-
-export type ResourceIndex = Record<string, ResourceIndexEntry>;
-
-const RESOURCES_INDEX_PATH = '_resources.json';
 
 export function decodeServiceAccountCredentials(
   encodedKey: string,
@@ -102,31 +99,11 @@ export class GcsStorageService {
    * Upload processed documents map (path → markdown string).
    * Binary (image) entries are skipped in phase 1.
    */
-  async uploadDocuments(
-    documents: Record<string, string>,
-  ): Promise<void> {
+  async uploadDocuments(documents: Record<string, string>): Promise<void> {
     for (const [path, content] of Object.entries(documents)) {
       await this.uploadMarkdown(path, content);
       this.logger.debug(`Uploaded: ${path}`);
     }
-  }
-
-  async updateResourceIndex(
-    resourceName: string,
-    metadata: ResourceIndexEntry,
-  ): Promise<void> {
-    const index = await this.readResourceIndex();
-    index[resourceName] = metadata;
-    await this.writeResourceIndex(index);
-    this.logger.log(`Updated ${RESOURCES_INDEX_PATH} for: ${resourceName}`);
-  }
-
-  async removeResourceIndexEntry(resourceName: string): Promise<void> {
-    const index = await this.readResourceIndex();
-    if (!(resourceName in index)) return;
-    delete index[resourceName];
-    await this.writeResourceIndex(index);
-    this.logger.log(`Removed ${RESOURCES_INDEX_PATH} entry: ${resourceName}`);
   }
 
   /**
@@ -139,7 +116,6 @@ export class GcsStorageService {
     ];
 
     await this.deleteFiles(toDelete);
-    await this.removeResourceIndexEntry(resourceName);
   }
 
   /**
@@ -148,15 +124,12 @@ export class GcsStorageService {
   async deleteProcessedArtifacts(resourceName: string): Promise<void> {
     const toDelete = await this.getProcessedArtifactFiles(resourceName);
     await this.deleteFiles(toDelete);
-    await this.removeResourceIndexEntry(resourceName);
   }
 
   private async getProcessedArtifactFiles(
     resourceName: string,
   ): Promise<File[]> {
-    const files: File[] = [
-      this.bucket.file(`${resourceName}.md`),
-    ];
+    const files: File[] = [this.bucket.file(`${resourceName}.md`)];
 
     const [prefixFiles] = await this.bucket.getFiles({
       prefix: `${resourceName}/`,
@@ -176,31 +149,6 @@ export class GcsStorageService {
           );
         }
       }),
-    );
-  }
-
-  private async readResourceIndex(): Promise<ResourceIndex> {
-    const file = this.bucket.file(RESOURCES_INDEX_PATH);
-    try {
-      const [exists] = await file.exists();
-      if (!exists) return {};
-      const [buf] = await file.download();
-      return JSON.parse(buf.toString('utf-8')) as ResourceIndex;
-    } catch (error) {
-      this.logger.warn(
-        `Failed to read ${RESOURCES_INDEX_PATH}, starting empty: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return {};
-    }
-  }
-
-  private async writeResourceIndex(index: ResourceIndex): Promise<void> {
-    await this.bucket.file(RESOURCES_INDEX_PATH).save(
-      Buffer.from(JSON.stringify(index, null, 2), 'utf-8'),
-      {
-        contentType: 'application/json; charset=utf-8',
-        resumable: false,
-      },
     );
   }
 }

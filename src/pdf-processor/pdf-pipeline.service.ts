@@ -2,10 +2,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PDF_PROCESSOR_PROMPT } from '../chat/prompts/pdf-processor';
 import { PDF_CHUNKING_PROMPT } from '../chat/prompts/pdf-chunking-prompt';
-import {
-  LLM_CLIENT,
-  type LlmClient,
-} from '../chat/llm/llm-client.interface';
+import { LLM_CLIENT, type LlmClient } from '../chat/llm/llm-client.interface';
 import { PdfTextService } from './pdf-text.service';
 import { parseChunksFromMarkdown } from './pdf-chunk-parser';
 import type { ResourceIndexEntry } from './gcs-storage.service';
@@ -115,10 +112,7 @@ export class PdfPipelineService {
     const prompt = PDF_PROCESSOR_PROMPT.replaceAll('{filename}', filename)
       .replaceAll('{total_pages}', String(totalPages))
       .replaceAll('{current_page}', String(currentPage))
-      .replaceAll(
-        '{previous_context}',
-        previousContext || '없음 (첫 페이지)',
-      );
+      .replaceAll('{previous_context}', previousContext || '없음 (첫 페이지)');
 
     const userText = pageText.trim()
       ? `${prompt}\n\n페이지 텍스트:\n${pageText}`

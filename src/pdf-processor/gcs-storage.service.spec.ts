@@ -13,12 +13,14 @@ describe('decodeServiceAccountCredentials', () => {
           type: 'service_account',
           project_id: 'test-project',
           client_email: 'storage@test-project.iam.gserviceaccount.com',
-          private_key: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n',
+          private_key:
+            '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n',
         }),
       ),
     ).toEqual({
       client_email: 'storage@test-project.iam.gserviceaccount.com',
-      private_key: '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n',
+      private_key:
+        '-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n',
     });
   });
 

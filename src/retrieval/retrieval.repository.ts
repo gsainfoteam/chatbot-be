@@ -1,0 +1,91 @@
+import { Inject, Injectable } from '@nestjs/common';
+import { and, asc, eq, inArray } from 'drizzle-orm';
+import { DB_CONNECTION, documents, documentChunks } from '../db';
+import type { Database } from '../db';
+
+export type ReadyDocumentWithChunks = {
+  id: string;
+  title: string;
+  resourceName: string;
+  summary: string | null;
+  chunks: Array<{
+    path: string;
+    description: string;
+    content: string;
+    sortOrder: number;
+  }>;
+};
+
+@Injectable()
+export class RetrievalRepository {
+  constructor(@Inject(DB_CONNECTION) private readonly db: Database) {}
+
+  /**
+   * Ready + active documents that have at least one chunk.
+   */
+  async listReadyWithChunks(): Promise<ReadyDocumentWithChunks[]> {
+    const rows = await this.db
+      .select({
+        documentId: documents.id,
+        title: documents.title,
+        resourceName: documents.resourceName,
+        summary: documents.summary,
+        chunkId: documentChunks.id,
+        chunkPath: documentChunks.path,
+        chunkDescription: documentChunks.description,
+        chunkContent: documentChunks.content,
+        chunkSortOrder: documentChunks.sortOrder,
+      })
+      .from(documents)
+      .innerJoin(documentChunks, eq(documentChunks.documentId, documents.id))
+      .where(and(eq(documents.status, 'ready'), eq(documents.isActive, true)))
+      .orderBy(asc(documents.createdAt), asc(documentChunks.sortOrder));
+
+    const byId = new Map<string, ReadyDocumentWithChunks>();
+    for (const row of rows) {
+      let doc = byId.get(row.documentId);
+      if (!doc) {
+        doc = {
+          id: row.documentId,
+          title: row.title,
+          resourceName: row.resourceName,
+          summary: row.summary,
+          chunks: [],
+        };
+        byId.set(row.documentId, doc);
+      }
+      doc.chunks.push({
+        path: row.chunkPath,
+        description: row.chunkDescription,
+        content: row.chunkContent,
+        sortOrder: row.chunkSortOrder,
+      });
+    }
+
+    return [...byId.values()];
+  }
+
+  async findChunkContentsByPaths(
+    paths: string[],
+  ): Promise<Array<{ path: string; content: string }>> {
+    if (paths.length === 0) return [];
+
+    const uniquePaths = [...new Set(paths)];
+    const rows = await this.db
+      .select({
+        path: documentChunks.path,
+        content: documentChunks.content,
+      })
+      .from(documentChunks)
+      .innerJoin(documents, eq(documentChunks.documentId, documents.id))
+      .where(
+        and(
+          inArray(documentChunks.path, uniquePaths),
+          eq(documents.status, 'ready'),
+          eq(documents.isActive, true),
+        ),
+      );
+
+    return rows;
+  }
+}

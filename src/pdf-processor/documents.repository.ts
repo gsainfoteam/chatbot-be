@@ -1,14 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import {
-  inArray,
-  notInArray,
-  sql,
-  eq,
-  and,
-  desc,
-  asc,
-  lt,
-} from 'drizzle-orm';
+import { inArray, notInArray, sql, eq, and, desc, asc, lt } from 'drizzle-orm';
 import { DB_CONNECTION, documents, documentChunks } from '../db';
 import type { Database, Document, DocumentChunk } from '../db';
 
@@ -50,7 +41,7 @@ export class DocumentsRepository {
     return row;
   }
 
-  async markQueuedAfterUpload(id: string): Promise<Document | null> {
+  async markQueuedAfterUpload(id: string) {
     const [row] = await this.db
       .update(documents)
       .set({
@@ -73,7 +64,7 @@ export class DocumentsRepository {
     await this.db.delete(documents).where(eq(documents.id, id));
   }
 
-  async findById(id: string): Promise<Document | null> {
+  async findById(id: string) {
     const [row] = await this.db
       .select()
       .from(documents)
@@ -82,9 +73,7 @@ export class DocumentsRepository {
     return row ?? null;
   }
 
-  async findActiveByResourceName(
-    resourceName: string,
-  ): Promise<Document | null> {
+  async findActiveByResourceName(resourceName: string) {
     const [row] = await this.db
       .select()
       .from(documents)
@@ -255,7 +244,7 @@ export class DocumentsRepository {
   /**
    * Cancel the current attempt before deleting external artifacts.
    */
-  async cancelAndSoftDelete(id: string): Promise<Document | null> {
+  async cancelAndSoftDelete(id: string) {
     const [row] = await this.db
       .update(documents)
       .set({
@@ -268,7 +257,7 @@ export class DocumentsRepository {
     return row ?? null;
   }
 
-  async enqueueReprocess(id: string): Promise<Document | null> {
+  async enqueueReprocess(id: string) {
     return this.db.transaction(async (tx) => {
       const [row] = await tx
         .update(documents)
@@ -290,9 +279,7 @@ export class DocumentsRepository {
         .returning();
       if (!row) return null;
 
-      await tx
-        .delete(documentChunks)
-        .where(eq(documentChunks.documentId, id));
+      await tx.delete(documentChunks).where(eq(documentChunks.documentId, id));
       return row;
     });
   }
@@ -304,5 +291,4 @@ export class DocumentsRepository {
       .where(eq(documentChunks.documentId, documentId))
       .orderBy(asc(documentChunks.sortOrder));
   }
-
 }

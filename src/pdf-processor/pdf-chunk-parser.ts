@@ -14,19 +14,51 @@ export type ChunkParseResult = {
 };
 
 /**
+ * Strip leading baseName prefixes so LLM-relative and LLM-absolute paths
+ * both normalize to the same relative segment.
+ */
+export function toRelativeChunkPath(raw: string, baseName: string): string {
+  let p = raw.trim().replace(/^\/+|\/+$/g, '');
+  const prefix = `${baseName}/`;
+  while (p === baseName || p.startsWith(prefix)) {
+    p = p === baseName ? '' : p.slice(prefix.length);
+  }
+  return p;
+}
+
+function resourceStem(resourceName: string): string {
+  if (
+    resourceName.includes('.') &&
+    resourceName.toLowerCase().endsWith('.pdf')
+  ) {
+    return resourceName.slice(0, -4);
+  }
+  if (resourceName.includes('.')) {
+    return resourceName.replace(/\.[^.]+$/, '');
+  }
+  return resourceName;
+}
+
+function extractOverviewMarkdown(markdown: string): string {
+  return markdown
+    .replace(/<summary>(.+?)<\/summary>/gs, '')
+    .replace(
+      /<document\s+path="[^"]+"\s+description="[^"]+">.*?<\/document>/gs,
+      '',
+    )
+    .trim();
+}
+
+/**
  * Parse <summary> and <document> tags from chunked markdown.
- * Ported from worker.py `_parse_chunks_from_markdown`.
+ * Ported from worker.py `_parse_chunks_from_markdown`, with path
+ * de-duplication and overview body preserved as a root chunk.
  */
 export function parseChunksFromMarkdown(
   markdown: string,
   resourceName: string,
 ): ChunkParseResult {
-  const baseName =
-    resourceName.includes('.') && resourceName.toLowerCase().endsWith('.pdf')
-      ? resourceName.slice(0, -4)
-      : resourceName.includes('.')
-        ? resourceName.replace(/\.[^.]+$/, '')
-        : resourceName;
+  const baseName = resourceStem(resourceName);
 
   const summaryMatch = markdown.match(/<summary>(.+?)<\/summary>/s);
   const summary = summaryMatch?.[1]?.trim() ?? '';
@@ -35,36 +67,53 @@ export function parseChunksFromMarkdown(
     /<document\s+path="([^"]+)"\s+description="([^"]+)">(.+?)<\/document>/gs;
   const chunks: ParsedChunk[] = [];
   for (const match of markdown.matchAll(chunkPattern)) {
+    const relative = toRelativeChunkPath(match[1], baseName);
+    if (!relative) continue;
     chunks.push({
-      path: match[1],
+      path: relative,
       description: match[2],
       content: match[3].trim(),
     });
   }
 
   if (chunks.length === 0) {
+    const overviewOnly = extractOverviewMarkdown(markdown);
+    const body =
+      overviewOnly ||
+      markdown.replace(/<summary>(.+?)<\/summary>/gs, '').trim();
     return {
-      documents: { [`${baseName}.md`]: markdown },
+      documents: { [`${baseName}.md`]: body || markdown },
       metadata: { description: summary, chunks: [] },
     };
   }
 
   const documents: Record<string, string> = {};
-  const mainDocParts: string[] = [];
+  const stubLinks: string[] = [];
   const chunkMetadata: { path: string; description: string }[] = [];
 
   for (const chunk of chunks) {
-    documents[`${baseName}/${chunk.path}.md`] = chunk.content;
-    mainDocParts.push(
-      `<document path="${baseName}/${chunk.path}" description="${chunk.description}"></document>`,
+    const fullPath = `${baseName}/${chunk.path}`;
+    documents[`${fullPath}.md`] = chunk.content;
+    stubLinks.push(
+      `<document path="${fullPath}" description="${chunk.description}"></document>`,
     );
     chunkMetadata.push({
-      path: `${baseName}/${chunk.path}`,
+      path: fullPath,
       description: chunk.description,
     });
   }
 
-  documents[`${baseName}.md`] = mainDocParts.join('\n\n');
+  const overview = extractOverviewMarkdown(markdown);
+  if (overview) {
+    const rootContent = [overview, '', ...stubLinks].join('\n').trim();
+    documents[`${baseName}.md`] = rootContent;
+    chunkMetadata.unshift({
+      path: baseName,
+      description: summary || '문서 개요',
+    });
+  } else {
+    documents[`${baseName}.md`] = stubLinks.join('\n\n');
+  }
 
   return {
     documents,

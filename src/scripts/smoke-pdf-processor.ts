@@ -6,7 +6,10 @@
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { parseChunksFromMarkdown, toResourceName } from '../pdf-processor/pdf-chunk-parser';
+import {
+  parseChunksFromMarkdown,
+  toResourceName,
+} from '../pdf-processor/pdf-chunk-parser';
 import {
   isLikelyMojibake,
   normalizeExtractedText,
@@ -78,9 +81,9 @@ async function main() {
   }
   console.log('OK mojibake');
 
-  // 3) chunk parser
+  // 3) chunk parser (relative path + overview preservation)
   const parsed = parseChunksFromMarkdown(
-    `<summary>요약</summary>\n<document path="a" description="설명">본문</document>`,
+    `<summary>요약</summary>\n\n# 개요\n\n소개입니다.\n\n<document path="a" description="설명">본문</document>`,
     'doc.pdf',
   );
   if (parsed.metadata.description !== '요약') {
@@ -88,6 +91,19 @@ async function main() {
   }
   if (parsed.documents['doc/a.md'] !== '본문') {
     throw new Error('chunk content parse failed');
+  }
+  if (!parsed.documents['doc.md']?.includes('소개입니다.')) {
+    throw new Error('overview content not preserved');
+  }
+  if (parsed.metadata.chunks[0]?.path !== 'doc') {
+    throw new Error('root chunk missing from metadata');
+  }
+  const deduped = parseChunksFromMarkdown(
+    `<summary>s</summary>\n# o\n\n<document path="doc/a" description="d">x</document>`,
+    'doc.pdf',
+  );
+  if (!deduped.documents['doc/a.md'] || deduped.documents['doc/doc/a.md']) {
+    throw new Error('baseName path dedupe failed');
   }
   console.log('OK chunk parser');
 

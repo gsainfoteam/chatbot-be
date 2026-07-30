@@ -157,9 +157,12 @@ export class PdfPipelineService {
         model,
         {
           temperature: 0.2,
-          max_tokens: 16000,
+          max_tokens: 48000,
           timeoutMs: this.llmTimeoutMs,
         },
+      );
+      this.logger.log(
+        `Pass 2 LLM finish_reason=${response.choices?.[0]?.finish_reason ?? 'missing'}`,
       );
       const chunked = response.choices?.[0]?.message?.content ?? markdown;
       return parseChunksFromMarkdown(chunked, filename);

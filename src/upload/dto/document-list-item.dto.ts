@@ -95,4 +95,19 @@ export class DocumentListItemDto {
     example: true,
   })
   canReprocess: boolean;
+
+  @ApiProperty({
+    description: '문서 유효기간 (ISO-8601). null이면 무기한',
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: '2026-12-31T23:59:59.000Z',
+  })
+  expiresAt: Date | null;
+
+  @ApiProperty({
+    description: '현재 시각 기준 만료 여부 (만료되어도 soft-delete되지 않음)',
+    example: false,
+  })
+  isExpired: boolean;
 }

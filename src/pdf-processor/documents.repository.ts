@@ -20,6 +20,7 @@ export type CreateDocumentInput = {
   resourceName: string;
   gcsPdfPath: string;
   uploadedByIdpUuid: string;
+  expiresAt?: Date | null;
 };
 
 export type ReplaceChunksInput = {
@@ -45,12 +46,25 @@ export class DocumentsRepository {
         resourceName: input.resourceName,
         gcsPdfPath: input.gcsPdfPath,
         uploadedByIdpUuid: input.uploadedByIdpUuid,
+        expiresAt: input.expiresAt ?? null,
         status: 'uploading',
         isActive: true,
       })
       .returning();
     if (!row) throw new Error('Failed to insert document');
     return row;
+  }
+
+  async updateExpiresAt(id: string, expiresAt: Date | null) {
+    const [row] = await this.db
+      .update(documents)
+      .set({
+        expiresAt,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(documents.id, id), eq(documents.isActive, true)))
+      .returning();
+    return row ?? null;
   }
 
   async markQueuedAfterUpload(id: string) {

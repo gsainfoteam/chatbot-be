@@ -1,9 +1,9 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { describe, expect, it, jest } from '@jest/globals';
 import type { Document } from '../db';
 import type { DocumentsRepository } from '../pdf-processor/documents.repository';
 import type { GcsStorageService } from '../pdf-processor/gcs-storage.service';
-import { UploadService } from './upload.service';
+import { parseExpiresAt, UploadService } from './upload.service';
 
 function document(overrides: Partial<Document> = {}): Document {
   return {
@@ -21,6 +21,7 @@ function document(overrides: Partial<Document> = {}): Document {
     updatedAt: new Date(),
     processedAt: null,
     lastReprocessedAt: null,
+    expiresAt: null,
     ...overrides,
   };
 }
@@ -28,10 +29,13 @@ function document(overrides: Partial<Document> = {}): Document {
 function createService() {
   const repo = {
     createUploading: jest.fn<(...args: unknown[]) => Promise<Document>>(),
-    markQueuedAfterUpload: jest.fn(),
+    markQueuedAfterUpload:
+      jest.fn<(id: string) => Promise<Document | null>>(),
     hardDelete: jest.fn(),
     cancelAndSoftDelete: jest.fn(),
     findById: jest.fn<(id: string) => Promise<Document | null>>(),
+    updateExpiresAt:
+      jest.fn<(id: string, expiresAt: Date | null) => Promise<Document | null>>(),
     enqueueReprocess:
       jest.fn<
         (
@@ -43,7 +47,8 @@ function createService() {
   };
   const gcs = {
     toGsPath: jest.fn((path: string) => `gs://bucket/${path}`),
-    uploadPdf: jest.fn(),
+    uploadPdf:
+      jest.fn<(resourceName: string, pdfBytes: Buffer) => Promise<string>>(),
     deleteResourceArtifacts: jest.fn(),
   };
   return {
@@ -190,4 +195,78 @@ describe('UploadService atomic transitions', () => {
       expect(result.canReprocess).toBe(false);
     },
   );
+
+  it('passes expiresAt into createUploading and returns isExpired=false', async () => {
+    const { service, repo, gcs } = createService();
+    const future = new Date(Date.now() + 60_000);
+    const reserved = document({ expiresAt: future });
+    const queued = document({ status: 'queued', expiresAt: future });
+    repo.createUploading.mockResolvedValue(reserved);
+    gcs.uploadPdf.mockResolvedValue('gs://bucket/test.pdf');
+    repo.markQueuedAfterUpload.mockResolvedValue(queued);
+
+    const result = await service.upload(
+      Buffer.from('%PDF-test'),
+      'test.pdf',
+      '테스트',
+      'admin-1',
+      future.toISOString(),
+    );
+
+    expect(repo.createUploading).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: expect.any(Date) }),
+    );
+    expect(result.expiresAt).toEqual(future);
+    expect(result.isExpired).toBe(false);
+  });
+
+  it('updates expiresAt for the owner and clears with null', async () => {
+    const { service, repo } = createService();
+    const current = document({ status: 'ready' });
+    const cleared = document({ status: 'ready', expiresAt: null });
+    repo.findById.mockResolvedValue(current);
+    repo.updateExpiresAt.mockResolvedValue(cleared);
+
+    const result = await service.updateExpiresAt(current.id, 'admin-1', null);
+
+    expect(repo.updateExpiresAt).toHaveBeenCalledWith(current.id, null);
+    expect(result.expiresAt).toBeNull();
+    expect(result.isExpired).toBe(false);
+  });
+
+  it('marks isExpired when expiresAt is in the past', async () => {
+    const { service, repo } = createService();
+    const past = new Date(Date.now() - 60_000);
+    repo.findById.mockResolvedValue(
+      document({ status: 'ready', expiresAt: past }),
+    );
+
+    const result = await service.getById(
+      '00000000-0000-0000-0000-000000000001',
+      'admin-1',
+    );
+    expect(result.isExpired).toBe(true);
+    expect(result.expiresAt).toEqual(past);
+  });
+});
+
+describe('parseExpiresAt', () => {
+  it('treats empty/undefined as null', () => {
+    expect(parseExpiresAt(undefined)).toBeNull();
+    expect(parseExpiresAt(null)).toBeNull();
+    expect(parseExpiresAt('')).toBeNull();
+    expect(parseExpiresAt('   ')).toBeNull();
+  });
+
+  it('rejects invalid and past values', () => {
+    expect(() => parseExpiresAt('not-a-date')).toThrow(BadRequestException);
+    expect(() =>
+      parseExpiresAt(new Date(Date.now() - 1000).toISOString()),
+    ).toThrow(BadRequestException);
+  });
+
+  it('accepts future ISO-8601', () => {
+    const future = new Date(Date.now() + 60_000).toISOString();
+    expect(parseExpiresAt(future)?.toISOString()).toBe(future);
+  });
 });

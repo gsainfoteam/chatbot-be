@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, or, SQL } from 'drizzle-orm';
 import { DB_CONNECTION, documents, documentChunks } from '../db';
 import type { Database } from '../db';
 
@@ -16,12 +16,26 @@ export type ReadyDocumentWithChunks = {
   }>;
 };
 
+/**
+ * Chat catalog/content eligibility: null expiresAt = never expires.
+ */
+export function notExpiredCondition(now: Date = new Date()): SQL | undefined {
+  return or(isNull(documents.expiresAt), gt(documents.expiresAt, now));
+}
+
+export function isExpiredAt(
+  expiresAt: Date | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  return expiresAt != null && expiresAt.getTime() <= now.getTime();
+}
+
 @Injectable()
 export class RetrievalRepository {
   constructor(@Inject(DB_CONNECTION) private readonly db: Database) {}
 
   /**
-   * Ready + active documents that have at least one chunk.
+   * Ready + active + not-expired documents that have at least one chunk.
    */
   async listReadyWithChunks(): Promise<ReadyDocumentWithChunks[]> {
     const rows = await this.db
@@ -38,7 +52,13 @@ export class RetrievalRepository {
       })
       .from(documents)
       .innerJoin(documentChunks, eq(documentChunks.documentId, documents.id))
-      .where(and(eq(documents.status, 'ready'), eq(documents.isActive, true)))
+      .where(
+        and(
+          eq(documents.status, 'ready'),
+          eq(documents.isActive, true),
+          notExpiredCondition(),
+        ),
+      )
       .orderBy(asc(documents.createdAt), asc(documentChunks.sortOrder));
 
     const byId = new Map<string, ReadyDocumentWithChunks>();
@@ -83,6 +103,7 @@ export class RetrievalRepository {
           inArray(documentChunks.path, uniquePaths),
           eq(documents.status, 'ready'),
           eq(documents.isActive, true),
+          notExpiredCondition(),
         ),
       );
 

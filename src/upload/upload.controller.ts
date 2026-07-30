@@ -1,7 +1,9 @@
 import {
+  Body,
   Controller,
   Get,
   Post,
+  Patch,
   Delete,
   Param,
   Query,
@@ -29,6 +31,7 @@ import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import { AdminContext } from '../auth/context/admin-context.entity';
 import { Readable } from 'stream';
 import { DocumentListItemDto } from './dto/document-list-item.dto';
+import { UpdateExpiresAtDto } from './dto/update-expires-at.dto';
 
 async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -126,6 +129,13 @@ export class UploadController {
       properties: {
         file: { type: 'string', format: 'binary', description: 'PDF 파일' },
         title: { type: 'string', description: '파일 제목' },
+        expiresAt: {
+          type: 'string',
+          format: 'date-time',
+          description:
+            '문서 유효기간 (ISO-8601, optional). 미전송/빈 값이면 무기한. 과거 시각은 400.',
+          nullable: true,
+        },
       },
     },
   })
@@ -136,7 +146,7 @@ export class UploadController {
   })
   @ApiResponse({
     status: 400,
-    description: '잘못된 요청 (PDF 아님, 필드 누락 등)',
+    description: '잘못된 요청 (PDF 아님, 필드 누락, 과거 expiresAt 등)',
   })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
@@ -158,6 +168,7 @@ export class UploadController {
 
     const parts = fastifyReq.parts();
     let title = '';
+    let expiresAt: string | undefined;
     let fileBuffer: Buffer | null = null;
     let filename = 'document.pdf';
     let mimetype = '';
@@ -167,6 +178,9 @@ export class UploadController {
         if (part.fieldname === 'title') {
           const v = part.value;
           title = typeof v === 'string' ? v : '';
+        } else if (part.fieldname === 'expiresAt') {
+          const v = part.value;
+          expiresAt = typeof v === 'string' ? v : undefined;
         }
       } else if (part.type === 'file' && part.fieldname === 'file') {
         const filePart = part;
@@ -193,7 +207,33 @@ export class UploadController {
       filename,
       title.trim(),
       admin.uuid,
+      expiresAt,
     );
+  }
+
+  @Patch(':id')
+  @ApiOperation({
+    summary: '문서 유효기간 변경',
+    description:
+      'expiresAt을 ISO-8601로 연장/변경하거나 null로 무기한 전환합니다. 과거 시각은 허용하지 않습니다.',
+  })
+  @ApiParam({ name: 'id', description: '문서 UUID' })
+  @ApiBody({ type: UpdateExpiresAtDto })
+  @ApiResponse({
+    status: 200,
+    description: '유효기간 변경 성공',
+    type: DocumentListItemDto,
+  })
+  @ApiResponse({ status: 400, description: '잘못된 expiresAt' })
+  @ApiResponse({ status: 401, description: '인증 실패' })
+  @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
+  @ApiResponse({ status: 404, description: '문서 없음' })
+  async updateExpiresAt(
+    @CurrentAdmin() admin: AdminContext,
+    @Param('id') id: string,
+    @Body() body: UpdateExpiresAtDto,
+  ) {
+    return this.uploadService.updateExpiresAt(id, admin.uuid, body.expiresAt);
   }
 
   @Post(':id/reprocess')

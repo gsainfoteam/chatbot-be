@@ -217,6 +217,7 @@ export const documents = pgTable(
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
     processedAt: timestamp('processed_at'),
     lastReprocessedAt: timestamp('last_reprocessed_at'),
+    expiresAt: timestamp('expires_at'),
   },
   (table) => ({
     resourceNameActiveUnique: uniqueIndex(
@@ -230,6 +231,7 @@ export const documents = pgTable(
     ),
     isActiveIdx: index('documents_is_active_idx').on(table.isActive),
     createdAtIdx: index('documents_created_at_idx').on(table.createdAt),
+    expiresAtIdx: index('documents_expires_at_idx').on(table.expiresAt),
   }),
 );
 

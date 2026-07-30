@@ -22,6 +22,7 @@ function processingDocument(): Document {
     updatedAt: new Date(),
     processedAt: null,
     lastReprocessedAt: null,
+    expiresAt: null,
   };
 }
 

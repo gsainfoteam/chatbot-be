@@ -10,6 +10,7 @@ import {
 import { DocumentsRepository } from '../pdf-processor/documents.repository';
 import { GcsStorageService } from '../pdf-processor/gcs-storage.service';
 import { toResourceName } from '../pdf-processor/pdf-chunk-parser';
+import { isExpiredAt } from '../retrieval/retrieval.repository';
 import type { Document } from '../db';
 import type { DocumentListItemDto } from './dto/document-list-item.dto';
 
@@ -17,6 +18,25 @@ const PDF_MIME = 'application/pdf';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 export const REPROCESS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Parse optional ISO-8601 expiresAt. Empty/undefined → null (never expires).
+ * Invalid or past timestamps → 400.
+ */
+export function parseExpiresAt(raw?: string | null): Date | null {
+  if (raw == null) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new BadRequestException('expiresAt must be a valid ISO-8601 datetime');
+  }
+  if (parsed.getTime() <= Date.now()) {
+    throw new BadRequestException('expiresAt must be in the future');
+  }
+  return parsed;
+}
 
 @Injectable()
 export class UploadService {
@@ -61,11 +81,13 @@ export class UploadService {
     filename: string,
     title: string,
     idpUuid: string,
+    expiresAtRaw?: string | null,
   ): Promise<DocumentListItemDto> {
     if (!fileBuffer?.length) {
       throw new BadRequestException('file is required');
     }
 
+    const expiresAt = parseExpiresAt(expiresAtRaw);
     const resourceName = toResourceName(filename || 'document.pdf');
     if (!resourceName.trim()) {
       throw new BadRequestException('Invalid filename');
@@ -79,6 +101,7 @@ export class UploadService {
         resourceName,
         gcsPdfPath,
         uploadedByIdpUuid: idpUuid,
+        expiresAt,
       });
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -174,6 +197,28 @@ export class UploadService {
     return this.toListItem(updated);
   }
 
+  async updateExpiresAt(
+    id: string,
+    idpUuid: string,
+    expiresAtRaw: string | null,
+  ): Promise<DocumentListItemDto> {
+    const row = await this.documentsRepo.findById(id);
+    if (!row || !row.isActive) {
+      throw new NotFoundException(`Document not found: ${id}`);
+    }
+    if (row.uploadedByIdpUuid !== idpUuid) {
+      throw new NotFoundException(`Document not found: ${id}`);
+    }
+
+    const expiresAt =
+      expiresAtRaw === null ? null : parseExpiresAt(expiresAtRaw);
+    const updated = await this.documentsRepo.updateExpiresAt(id, expiresAt);
+    if (!updated) {
+      throw new NotFoundException(`Document not found: ${id}`);
+    }
+    return this.toListItem(updated);
+  }
+
   private toListItem(row: Document): DocumentListItemDto {
     const reprocessAvailableAt = row.lastReprocessedAt
       ? new Date(row.lastReprocessedAt.getTime() + REPROCESS_COOLDOWN_MS)
@@ -197,6 +242,8 @@ export class UploadService {
       lastReprocessedAt: row.lastReprocessedAt,
       reprocessAvailableAt,
       canReprocess,
+      expiresAt: row.expiresAt,
+      isExpired: isExpiredAt(row.expiresAt),
     };
   }
 

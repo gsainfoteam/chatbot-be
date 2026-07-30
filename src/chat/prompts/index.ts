@@ -6,3 +6,5 @@ export * from './document-selection.prompt';
 export * from './resource-path-selection.prompt';
 export * from './final-response.prompt';
 export * from './error-messages.prompt';
+export * from './pdf-processor';
+export * from './pdf-chunking-prompt';

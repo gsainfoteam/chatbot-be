@@ -71,4 +71,28 @@ export class DocumentListItemDto {
     example: '2026-07-30T12:02:30.000Z',
   })
   processedAt: Date | null;
+
+  @ApiProperty({
+    description: '마지막 재처리 요청 일시',
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: '2026-07-30T13:00:00.000Z',
+  })
+  lastReprocessedAt: Date | null;
+
+  @ApiProperty({
+    description: '24시간 쿨다운 기준 다음 재처리 가능 일시',
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: '2026-07-31T13:00:00.000Z',
+  })
+  reprocessAvailableAt: Date | null;
+
+  @ApiProperty({
+    description: '현재 상태와 쿨다운을 반영한 재처리 가능 여부',
+    example: true,
+  })
+  canReprocess: boolean;
 }

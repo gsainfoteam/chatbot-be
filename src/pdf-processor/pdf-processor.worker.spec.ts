@@ -21,6 +21,7 @@ function processingDocument(): Document {
     createdAt: new Date(),
     updatedAt: new Date(),
     processedAt: null,
+    lastReprocessedAt: null,
   };
 }
 

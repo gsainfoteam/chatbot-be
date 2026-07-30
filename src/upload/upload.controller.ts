@@ -211,7 +211,22 @@ export class UploadController {
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
   @ApiResponse({ status: 404, description: '문서 없음' })
-  @ApiResponse({ status: 409, description: '문서 업로드가 아직 진행 중' })
+  @ApiResponse({
+    status: 409,
+    description: '현재 문서 상태가 재처리를 허용하지 않음',
+  })
+  @ApiResponse({
+    status: 429,
+    description: '문서별 24시간 재처리 쿨다운 적용 중',
+    schema: {
+      example: {
+        statusCode: 429,
+        message: 'Document reprocess cooldown is active',
+        error: 'Too Many Requests',
+        retryAt: '2026-07-31T13:00:00.000Z',
+      },
+    },
+  })
   async reprocess(@Param('id') id: string) {
     return this.uploadService.reprocess(id);
   }

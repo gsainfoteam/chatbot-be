@@ -4,6 +4,8 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { DocumentsRepository } from '../pdf-processor/documents.repository';
 import { GcsStorageService } from '../pdf-processor/gcs-storage.service';
@@ -14,6 +16,7 @@ import type { DocumentListItemDto } from './dto/document-list-item.dto';
 const PDF_MIME = 'application/pdf';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+export const REPROCESS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class UploadService {
@@ -147,13 +150,24 @@ export class UploadService {
     if (!row || !row.isActive) {
       throw new NotFoundException(`Document not found: ${id}`);
     }
-    if (row.status === 'uploading') {
-      throw new ConflictException('Document upload is still in progress');
-    }
 
-    const updated = await this.documentsRepo.enqueueReprocess(id);
+    const now = new Date();
+    this.assertReprocessEligible(row, now);
+
+    const cooldownBefore = new Date(now.getTime() - REPROCESS_COOLDOWN_MS);
+    const updated = await this.documentsRepo.enqueueReprocess(
+      id,
+      cooldownBefore,
+      now,
+    );
     if (!updated) {
-      throw new NotFoundException(`Document not found: ${id}`);
+      // Re-read to classify a concurrent state transition accurately.
+      const latest = await this.documentsRepo.findById(id);
+      if (!latest || !latest.isActive) {
+        throw new NotFoundException(`Document not found: ${id}`);
+      }
+      this.assertReprocessEligible(latest, new Date());
+      throw new ConflictException('Document reprocess state changed');
     }
 
     this.logger.log(`Document requeued: id=${id}`);
@@ -161,6 +175,15 @@ export class UploadService {
   }
 
   private toListItem(row: Document): DocumentListItemDto {
+    const reprocessAvailableAt = row.lastReprocessedAt
+      ? new Date(row.lastReprocessedAt.getTime() + REPROCESS_COOLDOWN_MS)
+      : null;
+    const statusAllowsReprocess =
+      row.status === 'ready' || row.status === 'failed';
+    const canReprocess =
+      statusAllowsReprocess &&
+      (!reprocessAvailableAt || reprocessAvailableAt.getTime() <= Date.now());
+
     return {
       id: row.id,
       title: row.title,
@@ -171,7 +194,34 @@ export class UploadService {
       errorMessage: row.errorMessage,
       uploadedAt: row.createdAt,
       processedAt: row.processedAt,
+      lastReprocessedAt: row.lastReprocessedAt,
+      reprocessAvailableAt,
+      canReprocess,
     };
+  }
+
+  private assertReprocessEligible(row: Document, now: Date): void {
+    if (row.status !== 'ready' && row.status !== 'failed') {
+      throw new ConflictException(
+        `Document cannot be reprocessed while status is "${row.status}"`,
+      );
+    }
+
+    if (!row.lastReprocessedAt) return;
+    const retryAt = new Date(
+      row.lastReprocessedAt.getTime() + REPROCESS_COOLDOWN_MS,
+    );
+    if (retryAt.getTime() <= now.getTime()) return;
+
+    throw new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: 'Document reprocess cooldown is active',
+        error: 'Too Many Requests',
+        retryAt: retryAt.toISOString(),
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
   }
 
   private async rollbackUpload(

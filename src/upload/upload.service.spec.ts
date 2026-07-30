@@ -20,18 +20,26 @@ function document(overrides: Partial<Document> = {}): Document {
     createdAt: new Date(),
     updatedAt: new Date(),
     processedAt: null,
+    lastReprocessedAt: null,
     ...overrides,
   };
 }
 
 function createService() {
   const repo = {
-    createUploading: jest.fn<
-      (...args: unknown[]) => Promise<Document>
-    >(),
+    createUploading: jest.fn<(...args: unknown[]) => Promise<Document>>(),
     markQueuedAfterUpload: jest.fn(),
     hardDelete: jest.fn(),
     cancelAndSoftDelete: jest.fn(),
+    findById: jest.fn<(id: string) => Promise<Document | null>>(),
+    enqueueReprocess:
+      jest.fn<
+        (
+          id: string,
+          cooldownBefore: Date,
+          now: Date,
+        ) => Promise<Document | null>
+      >(),
   };
   const gcs = {
     toGsPath: jest.fn((path: string) => `gs://bucket/${path}`),
@@ -83,12 +91,7 @@ describe('UploadService atomic transitions', () => {
     repo.createUploading.mockRejectedValue({ code: '23505' });
 
     await expect(
-      service.upload(
-        Buffer.from('%PDF-test'),
-        'test.pdf',
-        '테스트',
-        'admin-1',
-      ),
+      service.upload(Buffer.from('%PDF-test'), 'test.pdf', '테스트', 'admin-1'),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(gcs.uploadPdf).not.toHaveBeenCalled();
   });
@@ -109,4 +112,82 @@ describe('UploadService atomic transitions', () => {
 
     expect(calls).toEqual(['cancel', 'delete-artifacts']);
   });
+
+  it.each(['uploading', 'queued', 'processing'] as const)(
+    'rejects reprocess while status is %s',
+    async (status) => {
+      const { service, repo } = createService();
+      repo.findById.mockResolvedValue(document({ status }));
+
+      await expect(
+        service.reprocess('00000000-0000-0000-0000-000000000001'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(repo.enqueueReprocess).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects reprocess during the 24-hour cooldown', async () => {
+    const { service, repo } = createService();
+    repo.findById.mockResolvedValue(
+      document({
+        status: 'ready',
+        lastReprocessedAt: new Date(Date.now() - 23 * 60 * 60 * 1000),
+      }),
+    );
+
+    try {
+      await service.reprocess('00000000-0000-0000-0000-000000000001');
+      throw new Error('Expected reprocess to be rejected');
+    } catch (error) {
+      expect(error).toEqual(
+        expect.objectContaining({
+          status: 429,
+          response: expect.objectContaining({
+            retryAt: expect.any(String),
+          }),
+        }),
+      );
+    }
+    expect(repo.enqueueReprocess).not.toHaveBeenCalled();
+  });
+
+  it('allows reprocess after the 24-hour cooldown', async () => {
+    const { service, repo } = createService();
+    const current = document({
+      status: 'ready',
+      lastReprocessedAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+    });
+    repo.findById.mockResolvedValue(current);
+    repo.enqueueReprocess.mockResolvedValue(
+      document({ status: 'queued', lastReprocessedAt: new Date() }),
+    );
+
+    await expect(service.reprocess(current.id)).resolves.toEqual(
+      expect.objectContaining({ status: 'queued', canReprocess: false }),
+    );
+  });
+
+  it.each(['ready', 'failed'] as const)(
+    'atomically requeues a %s document',
+    async (status) => {
+      const { service, repo } = createService();
+      const current = document({ status });
+      const queued = document({
+        status: 'queued',
+        lastReprocessedAt: new Date(),
+      });
+      repo.findById.mockResolvedValue(current);
+      repo.enqueueReprocess.mockResolvedValue(queued);
+
+      const result = await service.reprocess(current.id);
+
+      expect(repo.enqueueReprocess).toHaveBeenCalledWith(
+        current.id,
+        expect.any(Date),
+        expect.any(Date),
+      );
+      expect(result.status).toBe('queued');
+      expect(result.canReprocess).toBe(false);
+    },
+  );
 });

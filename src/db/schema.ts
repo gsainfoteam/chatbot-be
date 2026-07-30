@@ -216,6 +216,7 @@ export const documents = pgTable(
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
     processedAt: timestamp('processed_at'),
+    lastReprocessedAt: timestamp('last_reprocessed_at'),
   },
   (table) => ({
     resourceNameActiveUnique: uniqueIndex(

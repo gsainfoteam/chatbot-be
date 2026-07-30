@@ -1,5 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { inArray, notInArray, sql, eq, and, desc, asc, lt } from 'drizzle-orm';
+import {
+  inArray,
+  notInArray,
+  sql,
+  eq,
+  and,
+  or,
+  isNull,
+  lte,
+  desc,
+  asc,
+  lt,
+} from 'drizzle-orm';
 import { DB_CONNECTION, documents, documentChunks } from '../db';
 import type { Database, Document, DocumentChunk } from '../db';
 
@@ -257,7 +269,7 @@ export class DocumentsRepository {
     return row ?? null;
   }
 
-  async enqueueReprocess(id: string) {
+  async enqueueReprocess(id: string, cooldownBefore: Date, now: Date) {
     return this.db.transaction(async (tx) => {
       const [row] = await tx
         .update(documents)
@@ -266,14 +278,18 @@ export class DocumentsRepository {
           errorMessage: null,
           processingToken: null,
           processedAt: null,
-          updatedAt: new Date(),
+          lastReprocessedAt: now,
+          updatedAt: now,
         })
         .where(
           and(
             eq(documents.id, id),
             eq(documents.isActive, true),
-            // An upload has no complete source in GCS yet.
-            sql`${documents.status} <> 'uploading'`,
+            inArray(documents.status, ['ready', 'failed']),
+            or(
+              isNull(documents.lastReprocessedAt),
+              lte(documents.lastReprocessedAt, cooldownBefore),
+            ),
           ),
         )
         .returning();

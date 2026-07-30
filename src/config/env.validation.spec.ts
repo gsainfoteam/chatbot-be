@@ -21,6 +21,8 @@ function baseEnv(overrides: Record<string, unknown> = {}) {
     DOMAIN_NAME: 'example.com',
     MCP_BASE_URL: 'https://mcp.example.com',
     MCP_RESOURCE_API_URL: 'https://mcp-resource.example.com',
+    GCS_BUCKET: 'ziggle-resources',
+    GCP_PROJECT_ID: 'ziggle-mcp-project',
     ...overrides,
   };
 }
@@ -56,5 +58,41 @@ describe('env validation for LLM_PROVIDER', () => {
         }),
       ),
     ).toThrow(/OPEN_ROUTER_API_KEY/);
+  });
+});
+
+describe('env validation for GCS credentials', () => {
+  const letsurEnv = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.letsur.ai/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'letsur-key',
+  };
+
+  it('accepts a base64-encoded service account JSON', () => {
+    const encoded = Buffer.from(
+      JSON.stringify({
+        client_email: 'storage@example.iam.gserviceaccount.com',
+        private_key: 'private-key',
+      }),
+    ).toString('base64');
+
+    expect(() =>
+      validate(
+        baseEnv({
+          ...letsurEnv,
+          GCS_SERVICE_ACCOUNT_KEY_BASE64: encoded,
+        }),
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects a non-base64 credential value', () => {
+    expect(() =>
+      validate(
+        baseEnv({
+          ...letsurEnv,
+          GCS_SERVICE_ACCOUNT_KEY_BASE64: 'not base64!',
+        }),
+      ),
+    ).toThrow(/base64/);
   });
 });

@@ -2,7 +2,7 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it, jest } from '@jest/globals';
 import { ChatOrchestrationService } from './chat-orchestration.service';
 import { MessageRole } from '../../common/dto/chat-message-input.dto';
-import type { ListResourcesResult } from '../../mcp/mcp-client.service';
+import type { ListResourcesResult } from '../../retrieval/retrieval.types';
 import type { LlmResponse } from '../types/llm.types';
 import { ResourceContentService } from './resource-content.service';
 import { ResourceSelectionService } from './resource-selection.service';
@@ -38,42 +38,35 @@ describe('ChatOrchestrationService', () => {
       texts: ['available school documents'],
       resourceLinks: [],
       embeddedResources: [],
-      filteredResources: [
-        { path: '학사편람/졸업요건.md', formats: ['md'] },
-        { path: '학사편람/수강신청.md', formats: ['md'] },
-        { path: '학사편람.pdf', formats: ['pdf'] },
+      filteredResources: [],
+      resources: [
+        {
+          path: '학사편람.pdf',
+          description: '학사 안내',
+          chunks: [
+            { path: '학사편람/졸업요건', description: '졸업요건' },
+            { path: '학사편람/수강신청', description: '수강신청' },
+          ],
+        },
       ],
+      chunks: [
+        { path: '학사편람/졸업요건', description: '졸업요건' },
+        { path: '학사편람/수강신청', description: '수강신청' },
+      ],
+      total: 1,
     };
 
-    const mcpClientService = {
-      withSession: jest.fn(async (fn: () => Promise<unknown>) => fn()),
-      callTool: jest.fn(async (name: string, args: { path?: string }) => {
-        if (name === 'list_resources') {
-          return listResult;
-        }
-
-        if (name === 'get_resource' && args.path === '학사편람/졸업요건') {
-          return {
-            raw: {},
-            texts: ['졸업요건 문서 본문입니다.'],
-            resourceLinks: [],
-            embeddedResources: [],
-            filteredResources: [],
-          };
-        }
-
-        if (name === 'get_resource' && args.path === '학사편람/수강신청') {
-          return {
-            raw: {},
-            texts: ['수강신청 문서 본문입니다.'],
-            resourceLinks: [],
-            embeddedResources: [],
-            filteredResources: [],
-          };
-        }
-
-        throw new Error(`Unexpected tool call: ${name}`);
-      }),
+    const retrievalService = {
+      listCatalog: jest.fn(async () => listResult),
+      getContentsByPaths: jest.fn(async (paths: string[]) =>
+        paths.map((path) => ({
+          path,
+          content:
+            path.includes('졸업')
+              ? '졸업요건 문서 본문입니다.'
+              : '수강신청 문서 본문입니다.',
+        })),
+      ),
     };
     type CallLLM = (...args: unknown[]) => Promise<LlmResponse>;
     type RecordUsage = (
@@ -85,7 +78,12 @@ describe('ChatOrchestrationService', () => {
       getModel: jest.fn((type: string) => `${type}-model`),
       callLLM: jest
         .fn<CallLLM>()
-        .mockResolvedValueOnce(createLlmResponse('1, 2', 100))
+        .mockResolvedValueOnce(
+          createLlmResponse(
+            JSON.stringify(['학사편람/졸업요건', '학사편람/수강신청']),
+            100,
+          ),
+        )
         .mockResolvedValueOnce(createLlmResponse('1', 200)),
       generateFinalResponseStream: jest.fn(async () => finalStream),
     };
@@ -105,7 +103,7 @@ describe('ChatOrchestrationService', () => {
       llmClient as never,
     );
     const resourceContentService = new ResourceContentService(
-      mcpClientService as never,
+      retrievalService as never,
       resourceSelectionService,
     );
     const chatStreamTransport = new ChatStreamTransport({
@@ -115,7 +113,7 @@ describe('ChatOrchestrationService', () => {
     } as never);
 
     const service = new ChatOrchestrationService(
-      mcpClientService as never,
+      retrievalService as never,
       llmClient as never,
       chatService as never,
       usageService as never,

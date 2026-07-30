@@ -1,17 +1,12 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { ResourceContentService } from './resource-content.service';
-import type { ListResourcesResult } from '../../mcp/mcp-client.service';
+import type { ListResourcesResult } from '../../retrieval/retrieval.types';
 import type { LlmUsage } from '../types/llm.types';
 
 describe('ResourceContentService', () => {
-  type CallTool = (
-    name: string,
-    args?: Record<string, unknown>,
-  ) => Promise<unknown>;
-
   it('appends unique top-level PDF entries for FE resources', () => {
     const service = new ResourceContentService(
-      { callTool: jest.fn() } as never,
+      { getContentsByPaths: jest.fn() } as never,
       {} as never,
     );
     const out: Array<{ path: string; formats: string[]; url: string }> = [];
@@ -40,14 +35,12 @@ describe('ResourceContentService', () => {
   });
 
   it('uses new-format chunk pipeline when resources+chunks exist', async () => {
-    const mcpClientService = {
-      callTool: jest.fn<CallTool>(async () => ({
-        raw: {},
-        texts: ['chunk body'],
-        resourceLinks: [],
-        embeddedResources: [],
-        filteredResources: [],
-      })),
+    const retrievalService = {
+      getContentsByPaths: jest.fn(
+        async (_paths: string[]) => [
+          { path: '학사편람/졸업', content: 'chunk body' },
+        ],
+      ),
     };
     const resourceSelectionService = {
       selectRelevantChunkPaths: jest
@@ -70,7 +63,7 @@ describe('ResourceContentService', () => {
     };
 
     const service = new ResourceContentService(
-      mcpClientService as never,
+      retrievalService as never,
       resourceSelectionService as never,
     );
 
@@ -108,9 +101,9 @@ describe('ResourceContentService', () => {
     expect(
       resourceSelectionService.selectRelevantResourcePaths,
     ).not.toHaveBeenCalled();
-    expect(mcpClientService.callTool).toHaveBeenCalledWith('get_resource', {
-      path: '학사편람/졸업',
-    });
+    expect(retrievalService.getContentsByPaths).toHaveBeenCalledWith([
+      '학사편람/졸업.md',
+    ]);
     expect(result.content).toContain('chunk body');
     expect(result.usedResources.some((r) => r.path.includes('학사편람'))).toBe(
       true,
@@ -119,7 +112,7 @@ describe('ResourceContentService', () => {
 
   it('returns empty when legacy filteredResources has no markdown', async () => {
     const service = new ResourceContentService(
-      { callTool: jest.fn() } as never,
+      { getContentsByPaths: jest.fn() } as never,
       {
         selectRelevantResourcePaths: jest.fn(),
       } as never,

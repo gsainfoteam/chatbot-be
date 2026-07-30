@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { ListResourceItem } from '../../mcp/mcp-client.service';
+import type { ListResourceItem } from '../../retrieval/retrieval.types';
 import { LLM_CLIENT, type LlmClient } from '../llm/llm-client.interface';
 import type { LlmUsage } from '../types/llm.types';
 import {

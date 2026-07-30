@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { ResourceSelectionService } from './resource-selection.service';
 import type { LlmResponse, LlmUsage } from '../types/llm.types';
-import type { ListResourceItem } from '../../mcp/mcp-client.service';
+import type { ListResourceItem } from '../../retrieval/retrieval.types';
 
 function createLlmResponse(content: string, totalTokens = 10): LlmResponse {
   return {

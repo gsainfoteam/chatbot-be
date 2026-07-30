@@ -4,7 +4,7 @@
  * - 신 형식: description + chunks → description 보고 chunk 경로 선택, JSON 배열 반환
  */
 
-import type { ListResourceItem } from '../../mcp/mcp-client.service';
+import type { ListResourceItem } from '../../retrieval/retrieval.types';
 
 export interface ResourcePathSelectionPromptParams {
   pathList: string;

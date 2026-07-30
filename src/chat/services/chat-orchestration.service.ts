@@ -4,8 +4,6 @@ import {
   Logger,
   InternalServerErrorException,
 } from '@nestjs/common';
-import type { ListResourcesResult } from '../../mcp/mcp-client.service';
-import { McpClientService } from '../../mcp/mcp-client.service';
 import { ChatService } from './chat.service';
 import { UsageService } from '../../usage/usage.service';
 import { LLM_CLIENT, type LlmClient } from '../llm/llm-client.interface';
@@ -22,6 +20,7 @@ import {
   type ResourceInfo,
 } from './resource-content.service';
 import { ChatStreamTransport } from './chat-stream.transport';
+import { RetrievalService } from '../../retrieval/retrieval.service';
 
 export type { ResourceInfo };
 
@@ -36,14 +35,14 @@ interface StreamingResponseOptions extends ProcessUserQuestionStreamOptions {
 
 /**
  * 채팅 오케스트레이션 서비스
- * 사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 생성합니다.
+ * 사용자 질문을 받아 DB Retrieval + LLM을 조합하여 답변을 생성합니다.
  */
 @Injectable()
 export class ChatOrchestrationService {
   private readonly logger = new Logger(ChatOrchestrationService.name);
 
   constructor(
-    private readonly mcpClientService: McpClientService,
+    private readonly retrievalService: RetrievalService,
     @Inject(LLM_CLIENT) private readonly llmClient: LlmClient,
     private readonly chatService: ChatService,
     private readonly usageService: UsageService,
@@ -118,12 +117,9 @@ export class ChatOrchestrationService {
       }
 
       t0 = Date.now();
-      this.logger.debug('Calling list_resources...');
-      const listResult = (await this.mcpClientService.callTool(
-        'list_resources',
-        {},
-      )) as ListResourcesResult;
-      this.logger.log(`[PERF] list_resources: ${Date.now() - t0}ms`);
+      this.logger.debug('Loading document catalog from DB...');
+      const listResult = await this.retrievalService.listCatalog();
+      this.logger.log(`[PERF] listCatalog: ${Date.now() - t0}ms`);
 
       const isNewFormat =
         listResult.resources &&
@@ -135,7 +131,7 @@ export class ChatOrchestrationService {
         : (listResult.filteredResources?.length ?? 0);
       const chunkCount = listResult.chunks?.length ?? 0;
       this.logger.log(
-        `[DEBUG] list_resources 결과: ${isNewFormat ? `신 형식 상위 ${listResult.resources?.length ?? 0}개, chunk ${chunkCount}개` : `구 형식 ${totalFromList}개 리소스`}`,
+        `[DEBUG] catalog 결과: ${isNewFormat ? `신 형식 상위 ${listResult.resources?.length ?? 0}개, chunk ${chunkCount}개` : `구 형식 ${totalFromList}개 리소스`}`,
       );
 
       const hasResources =
@@ -143,7 +139,7 @@ export class ChatOrchestrationService {
         (listResult.filteredResources &&
           listResult.filteredResources.length > 0);
       if (!hasResources) {
-        this.logger.warn('No resources from list_resources');
+        this.logger.warn('No resources from document catalog');
         const stream = await this.llmClient.generateFinalResponseStream(
           [
             { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
@@ -203,7 +199,7 @@ export class ChatOrchestrationService {
         MAX_TOOL_CONTENT_CHARS - relevantPart.length - separator.length,
       );
       const LIST_TRUNCATION_NOTE =
-        '\n\n[Truncated: list_resources preview too long]';
+        '\n\n[Truncated: document catalog preview too long]';
       let listPartForTool = listPart;
       let fullContentWasTruncated = false;
       if (listPart.length > maxListChars) {
@@ -335,12 +331,10 @@ export class ChatOrchestrationService {
         stream,
         resources,
         usage: reasoningUsage,
-      } = await this.mcpClientService.withSession(() =>
-        this.processUserQuestionStream(sessionId, userQuestion, {
-          persistUserMessage: options.persistUserMessage,
-          historyBefore: options.historyBefore,
-        }),
-      );
+      } = await this.processUserQuestionStream(sessionId, userQuestion, {
+        persistUserMessage: options.persistUserMessage,
+        historyBefore: options.historyBefore,
+      });
 
       let streamResult: {
         accumulatedContent: string;

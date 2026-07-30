@@ -15,29 +15,13 @@ import type {
   ListToolsRequest,
   CallToolRequest,
 } from '@modelcontextprotocol/sdk/types.js';
+import type {
+  ListResourceItem,
+  ListResourcesResult,
+} from '../retrieval/retrieval.types';
 
-/** list_resources 신 형식: 상위 리소스 (description + chunks) */
-export type ListResourceItem = {
-  path: string;
-  description: string;
-  chunks: Array<{ path: string; description: string }>;
-};
-
-/** list_resources 호출 결과 (캐시용) */
-export type ListResourcesResult = {
-  raw: unknown;
-  texts: string[];
-  resourceLinks: unknown[];
-  embeddedResources: unknown[];
-  /** 구 형식: 플랫 리스트 (경로 + formats) */
-  filteredResources: Array<{ path: string; formats: string[] }>;
-  /** 신 형식: 상위 리소스 목록 (path, description, chunks) */
-  resources?: ListResourceItem[];
-  /** 신 형식: 모든 chunk 평탄화 - LLM 선별용 */
-  chunks?: Array<{ path: string; description: string }>;
-  /** 신 형식: 상위 리소스 개수 */
-  total?: number;
-};
+/** @deprecated Prefer `src/retrieval/retrieval.types` */
+export type { ListResourceItem, ListResourcesResult };
 
 /** 한 턴(사용자 메시지 처리) 동안 재사용하는 MCP 연결 */
 type McpSession = {
@@ -78,7 +62,10 @@ export class McpClientService {
    * MCP 연결 생성 → fn 실행 → 반드시 연결 종료
    */
   private async runWithConnection<T>(
-    fn: (client: Client, transport: StreamableHTTPClientTransport) => Promise<T>,
+    fn: (
+      client: Client,
+      transport: StreamableHTTPClientTransport,
+    ) => Promise<T>,
   ): Promise<T> {
     const baseUrl = this.getBaseUrl();
     const client = new Client(

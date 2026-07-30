@@ -21,8 +21,8 @@ function baseEnv(overrides: Record<string, unknown> = {}) {
     DOMAIN_NAME: 'example.com',
     MCP_BASE_URL: 'https://mcp.example.com',
     MCP_RESOURCE_API_URL: 'https://mcp-resource.example.com',
-    GCS_BUCKET: 'ziggle-resources',
-    GCP_PROJECT_ID: 'ziggle-mcp-project',
+    GCS_BUCKET: 'test-bucket',
+    GCP_PROJECT_ID: 'test-project',
     ...overrides,
   };
 }

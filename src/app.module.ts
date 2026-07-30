@@ -10,6 +10,7 @@ import { validate } from './config/env.validation';
 import { McpModule } from './mcp/mcp.module';
 import { ChatModule } from './chat/chat.module';
 import { UploadModule } from './upload/upload.module';
+import { PdfProcessorModule } from './pdf-processor/pdf-processor.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { UploadModule } from './upload/upload.module';
     AdminModule,
     McpModule,
     ChatModule,
+    PdfProcessorModule,
     UploadModule,
   ],
   controllers: [AppController],

@@ -312,14 +312,7 @@ export class ResourceContentService {
     for (const doc of subDocuments) {
       const content = byNormalized.get(this.normalizeResourcePath(doc.path));
       if (!content) continue;
-      const documentTitle = this.extractDocumentTitle(
-        this.normalizeResourcePath(doc.path),
-        doc.path,
-        ['md'],
-      );
-      parts.push(
-        `\n\n## 하위 문서: ${documentTitle}\n\n**설명**: ${doc.description}\n\n${content}`,
-      );
+      parts.push(`\n\n## 관련 정보\n\n주제: ${doc.description}\n\n${content}`);
     }
     return parts.join('\n');
   }
@@ -341,16 +334,21 @@ export class ResourceContentService {
     );
 
     let t0 = Date.now();
-    const chunkPaths = await this.resourceSelectionService.selectRelevantChunkPaths(
-      question,
-      resources,
-      10,
-      tokenUsage,
-    );
+    const chunkSelection =
+      await this.resourceSelectionService.selectRelevantChunkPaths(
+        question,
+        resources,
+        5,
+        tokenUsage,
+      );
     this.logger.log(
       `[PERF] selectRelevantChunkPaths(LLM): ${Date.now() - t0}ms`,
     );
 
+    const chunkPaths = [
+      ...chunkSelection.rootPaths,
+      ...chunkSelection.detailPaths,
+    ];
     if (chunkPaths.length === 0) {
       return { content: '', usedResources: [] };
     }
@@ -368,7 +366,8 @@ export class ResourceContentService {
         return { title, content, path: chunkPath };
       })
       .filter(
-        (r): r is { title: string; content: string; path: string } => r !== null,
+        (r): r is { title: string; content: string; path: string } =>
+          r !== null,
       );
     this.logger.log(
       `[PERF] getContentsByPaths(신 형식, ${chunkPaths.length}개): ${Date.now() - t0}ms`,
@@ -379,48 +378,20 @@ export class ResourceContentService {
     }
 
     this.logger.log(
-      `[DEBUG] 2차 선별(본문 기준) 입력: 후보 문서 ${documentCandidates.length}개 → LLM에 전달`,
+      `[DEBUG] 최종 사용 문서: 루트 ${chunkSelection.rootPaths.length}개, 세부 chunk ${chunkSelection.detailPaths.length}개`,
     );
-
-    t0 = Date.now();
-    const selectedDocuments = await this.resourceSelectionService.selectMostRelevantDocuments(
-      question,
-      documentCandidates.map((doc) => ({
-        title: doc.title,
-        content: doc.content,
-        path: doc.path,
-      })),
-      tokenUsage,
-    );
-    this.logger.log(
-      `[PERF] selectMostRelevantDocuments(LLM, 신 형식): ${Date.now() - t0}ms`,
-    );
-
-    this.logger.log(
-      `[DEBUG] 2차 선별 결과(최종 사용 문서): ${selectedDocuments.length}개`,
-    );
-
-    if (selectedDocuments.length === 0) {
-      this.logger.log('No documents selected by LLM as relevant');
-      return { content: '', usedResources: [] };
-    }
 
     const contents: string[] = [];
     const mdUsed: Array<{ path: string; formats: string[] }> = [];
 
-    for (const selected of selectedDocuments) {
-      const doc = documentCandidates.find((d) => d.path === selected.path);
-      if (doc) {
-        contents.push(`\n\n## 리소스: ${doc.title}\n\n${doc.content}`);
-        mdUsed.push({ path: doc.path, formats: ['md'] });
-      }
+    for (const doc of documentCandidates) {
+      contents.push(`\n\n## 관련 정보\n\n${doc.content}`);
+      mdUsed.push({ path: doc.path, formats: ['md'] });
     }
 
-    const selectedPaths = selectedDocuments.map((s) => s.path);
+    const selectedPaths = documentCandidates.map((doc) => doc.path);
     const fromMarkdown: Array<{ path: string; formats: string[] }> = [];
-    for (const selected of selectedDocuments) {
-      const doc = documentCandidates.find((d) => d.path === selected.path);
-      if (!doc?.content) continue;
+    for (const doc of documentCandidates) {
       fromMarkdown.push(
         ...this.extractPdfPngReferencesFromMarkdown(doc.content, doc.path),
       );
@@ -498,12 +469,13 @@ export class ResourceContentService {
     );
 
     let t0 = Date.now();
-    const relevantResources = await this.resourceSelectionService.selectRelevantResourcePaths(
-      question,
-      mdResources,
-      10,
-      tokenUsage,
-    );
+    const relevantResources =
+      await this.resourceSelectionService.selectRelevantResourcePaths(
+        question,
+        mdResources,
+        10,
+        tokenUsage,
+      );
     this.logger.log(
       `[PERF] selectRelevantResourcePaths(LLM, 구 형식): ${Date.now() - t0}ms`,
     );
@@ -565,15 +537,16 @@ export class ResourceContentService {
     );
 
     t0 = Date.now();
-    const selectedDocuments = await this.resourceSelectionService.selectMostRelevantDocuments(
-      question,
-      documentCandidates.map((doc) => ({
-        title: doc.title,
-        content: doc.content,
-        path: doc.path,
-      })),
-      tokenUsage,
-    );
+    const selectedDocuments =
+      await this.resourceSelectionService.selectMostRelevantDocuments(
+        question,
+        documentCandidates.map((doc) => ({
+          title: doc.title,
+          content: doc.content,
+          path: doc.path,
+        })),
+        tokenUsage,
+      );
     this.logger.log(
       `[PERF] selectMostRelevantDocuments(LLM, 구 형식): ${Date.now() - t0}ms`,
     );
@@ -596,9 +569,7 @@ export class ResourceContentService {
         (d) => d.title === selected.title,
       );
       if (docCandidate) {
-        contents.push(
-          `\n\n## 리소스: ${docCandidate.title}\n\n${docCandidate.content}`,
-        );
+        contents.push(`\n\n## 관련 정보\n\n${docCandidate.content}`);
 
         const hasPdf = docCandidate.formats.includes('pdf');
         const hasPng = docCandidate.formats.includes('png');
@@ -688,7 +659,7 @@ export class ResourceContentService {
           `[PERF] fetchSubDocumentContents(${relevantSubDocuments.length}개): ${Date.now() - t0}ms`,
         );
         if (subDocumentContents) {
-          contents.push('\n\n---\n\n## 관련 하위 문서\n' + subDocumentContents);
+          contents.push('\n\n---\n\n## 추가 관련 정보\n' + subDocumentContents);
         }
       }
     }

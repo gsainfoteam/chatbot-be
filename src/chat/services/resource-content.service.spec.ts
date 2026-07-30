@@ -36,16 +36,22 @@ describe('ResourceContentService', () => {
 
   it('uses new-format chunk pipeline when resources+chunks exist', async () => {
     const retrievalService = {
-      getContentsByPaths: jest.fn(
-        async (_paths: string[]) => [
-          { path: '학사편람/졸업', content: 'chunk body' },
-        ],
-      ),
+      getContentsByPaths: jest.fn(async (_paths: string[]) => [
+        { path: '학사편람', content: 'root overview' },
+        { path: '학사편람/졸업', content: 'chunk body' },
+      ]),
     };
     const resourceSelectionService = {
       selectRelevantChunkPaths: jest
-        .fn<(...args: unknown[]) => Promise<string[]>>()
-        .mockResolvedValue(['학사편람/졸업.md']),
+        .fn<
+          (
+            ...args: unknown[]
+          ) => Promise<{ rootPaths: string[]; detailPaths: string[] }>
+        >()
+        .mockResolvedValue({
+          rootPaths: ['학사편람'],
+          detailPaths: ['학사편람/졸업'],
+        }),
       selectMostRelevantDocuments: jest
         .fn<
           (
@@ -102,9 +108,16 @@ describe('ResourceContentService', () => {
       resourceSelectionService.selectRelevantResourcePaths,
     ).not.toHaveBeenCalled();
     expect(retrievalService.getContentsByPaths).toHaveBeenCalledWith([
-      '학사편람/졸업.md',
+      '학사편람',
+      '학사편람/졸업',
     ]);
+    expect(
+      resourceSelectionService.selectMostRelevantDocuments,
+    ).not.toHaveBeenCalled();
+    expect(result.content).toContain('root overview');
     expect(result.content).toContain('chunk body');
+    expect(result.content).toContain('## 관련 정보');
+    expect(result.content).not.toContain('## 리소스:');
     expect(result.usedResources.some((r) => r.path.includes('학사편람'))).toBe(
       true,
     );

@@ -61,10 +61,9 @@ describe('ChatOrchestrationService', () => {
       getContentsByPaths: jest.fn(async (paths: string[]) =>
         paths.map((path) => ({
           path,
-          content:
-            path.includes('졸업')
-              ? '졸업요건 문서 본문입니다.'
-              : '수강신청 문서 본문입니다.',
+          content: path.includes('졸업')
+            ? '졸업요건 문서 본문입니다.'
+            : '수강신청 문서 본문입니다.',
         })),
       ),
     };
@@ -78,13 +77,7 @@ describe('ChatOrchestrationService', () => {
       getModel: jest.fn((type: string) => `${type}-model`),
       callLLM: jest
         .fn<CallLLM>()
-        .mockResolvedValueOnce(
-          createLlmResponse(
-            JSON.stringify(['학사편람/졸업요건', '학사편람/수강신청']),
-            100,
-          ),
-        )
-        .mockResolvedValueOnce(createLlmResponse('1', 200)),
+        .mockResolvedValueOnce(createLlmResponse(JSON.stringify([1, 2]), 100)),
       generateFinalResponseStream: jest.fn(async () => finalStream),
     };
     const chatService = {
@@ -163,9 +156,9 @@ describe('ChatOrchestrationService', () => {
 
     await handlePromise;
 
-    expect(llmClient.callLLM).toHaveBeenCalledTimes(2);
+    expect(llmClient.callLLM).toHaveBeenCalledTimes(1);
     expect(usageService.recordUsage).toHaveBeenCalledWith('session-id', {
-      totalTokens: 600,
+      totalTokens: 400,
     });
     expect(chatService.createMessage).toHaveBeenCalledWith(
       'session-id',
@@ -175,9 +168,9 @@ describe('ChatOrchestrationService', () => {
         metadata: expect.objectContaining({
           model: 'heavy-model',
           usage: {
-            prompt_tokens: 420,
-            completion_tokens: 180,
-            total_tokens: 600,
+            prompt_tokens: 280,
+            completion_tokens: 120,
+            total_tokens: 400,
           },
         }),
       }),

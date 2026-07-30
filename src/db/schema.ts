@@ -37,6 +37,14 @@ export const collaboratorStatusEnum = pgEnum('collaborator_status', [
   'ACCEPTED',
 ]);
 
+export const documentStatusEnum = pgEnum('document_status', [
+  'uploading',
+  'queued',
+  'processing',
+  'ready',
+  'failed',
+]);
+
 // Tables
 
 /**
@@ -187,6 +195,72 @@ export const uploadedResources = pgTable(
 );
 
 /**
+ * PDF 문서 테이블 (ingestion)
+ * - Admin 업로드 후 비동기 Pass1/2 처리 상태와 메타를 저장
+ */
+export const documents = pgTable(
+  'documents',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    title: varchar('title', { length: 512 }).notNull(),
+    resourceName: varchar('resource_name', { length: 512 }).notNull(),
+    summary: text('summary'),
+    gcsPdfPath: varchar('gcs_pdf_path', { length: 1024 }).notNull(),
+    status: documentStatusEnum('status').notNull().default('queued'),
+    errorMessage: text('error_message'),
+    processingToken: uuid('processing_token'),
+    uploadedByIdpUuid: varchar('uploaded_by_idp_uuid', {
+      length: 255,
+    }).notNull(),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    processedAt: timestamp('processed_at'),
+  },
+  (table) => ({
+    resourceNameActiveUnique: uniqueIndex(
+      'documents_resource_name_active_unique',
+    )
+      .on(table.resourceName)
+      .where(sql`${table.isActive} = true`),
+    statusIdx: index('documents_status_idx').on(table.status),
+    uploadedByIdpUuidIdx: index('documents_uploaded_by_idp_uuid_idx').on(
+      table.uploadedByIdpUuid,
+    ),
+    isActiveIdx: index('documents_is_active_idx').on(table.isActive),
+    createdAtIdx: index('documents_created_at_idx').on(table.createdAt),
+  }),
+);
+
+/**
+ * 문서 청크 테이블
+ * - Pass2 의미 청킹 결과 (path / description / content)
+ */
+export const documentChunks = pgTable(
+  'document_chunks',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    path: varchar('path', { length: 1024 }).notNull(),
+    description: text('description').notNull().default(''),
+    content: text('content').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    documentIdIdx: index('document_chunks_document_id_idx').on(
+      table.documentId,
+    ),
+    documentSortIdx: index('document_chunks_document_sort_idx').on(
+      table.documentId,
+      table.sortOrder,
+    ),
+  }),
+);
+
+/**
  * 메시지 테이블
  * - 채팅 메시지를 저장
  */
@@ -283,6 +357,17 @@ export const usageDaily = pgTable(
 );
 
 // Relations
+export const documentsRelations = relations(documents, ({ many }) => ({
+  chunks: many(documentChunks),
+}));
+
+export const documentChunksRelations = relations(documentChunks, ({ one }) => ({
+  document: one(documents, {
+    fields: [documentChunks.documentId],
+    references: [documents.id],
+  }),
+}));
+
 export const widgetKeysRelations = relations(widgetKeys, ({ many }) => ({
   sessions: many(sessions),
   usageDaily: many(usageDaily),
@@ -341,6 +426,13 @@ export type NewAdmin = typeof admins.$inferInsert;
 
 export type UploadedResource = typeof uploadedResources.$inferSelect;
 export type NewUploadedResource = typeof uploadedResources.$inferInsert;
+
+export type Document = typeof documents.$inferSelect;
+export type NewDocument = typeof documents.$inferInsert;
+export type DocumentStatus = (typeof documentStatusEnum.enumValues)[number];
+
+export type DocumentChunk = typeof documentChunks.$inferSelect;
+export type NewDocumentChunk = typeof documentChunks.$inferInsert;
 
 export type WidgetKey = typeof widgetKeys.$inferSelect;
 export type NewWidgetKey = typeof widgetKeys.$inferInsert;

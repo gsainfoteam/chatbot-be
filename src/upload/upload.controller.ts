@@ -19,6 +19,7 @@ import {
   ApiParam,
   ApiBody,
   ApiQuery,
+  ApiConsumes,
 } from '@nestjs/swagger';
 import type { FastifyRequest } from 'fastify';
 import { UploadService, PDF_MIME } from './upload.service';
@@ -27,6 +28,7 @@ import { SuperAdminGuard } from '../auth/guards/super-admin.guard';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import { AdminContext } from '../auth/context/admin-context.entity';
 import { Readable } from 'stream';
+import { DocumentListItemDto } from './dto/document-list-item.dto';
 
 async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -61,7 +63,13 @@ export class UploadController {
     type: Number,
     description: '건너뛸 개수 (페이지네이션)',
   })
-  @ApiResponse({ status: 200, description: '성공' })
+  @ApiResponse({
+    status: 200,
+    description: '성공',
+    type: DocumentListItemDto,
+    isArray: true,
+  })
+  @ApiResponse({ status: 400, description: '잘못된 limit 또는 offset' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
   async listMyUploads(
@@ -92,12 +100,15 @@ export class UploadController {
     description: '업로드한 문서의 처리 상태를 조회합니다.',
   })
   @ApiParam({ name: 'id', description: '문서 UUID' })
-  @ApiResponse({ status: 200, description: '성공' })
+  @ApiResponse({
+    status: 200,
+    description: '성공',
+    type: DocumentListItemDto,
+  })
+  @ApiResponse({ status: 401, description: '인증 실패' })
+  @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
   @ApiResponse({ status: 404, description: '문서 없음' })
-  async getOne(
-    @CurrentAdmin() admin: AdminContext,
-    @Param('id') id: string,
-  ) {
+  async getOne(@CurrentAdmin() admin: AdminContext, @Param('id') id: string) {
     return this.uploadService.getById(id, admin.uuid);
   }
 
@@ -107,6 +118,7 @@ export class UploadController {
     description:
       'PDF를 GCS에 저장하고 비동기 처리 큐에 등록합니다. 처리 완료를 기다리지 않으며 status=queued로 즉시 응답합니다.',
   })
+  @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {
       type: 'object',
@@ -117,14 +129,21 @@ export class UploadController {
       },
     },
   })
-  @ApiResponse({ status: 201, description: '업로드 성공 (queued)' })
+  @ApiResponse({
+    status: 201,
+    description: '업로드 성공 (queued)',
+    type: DocumentListItemDto,
+  })
   @ApiResponse({
     status: 400,
     description: '잘못된 요청 (PDF 아님, 필드 누락 등)',
   })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
-  @ApiResponse({ status: 409, description: '동일 resource_name 문서가 이미 존재' })
+  @ApiResponse({
+    status: 409,
+    description: '동일 resource_name 문서가 이미 존재',
+  })
   async upload(
     @CurrentAdmin() admin: AdminContext,
     @Req() req: FastifyRequest,
@@ -184,8 +203,15 @@ export class UploadController {
       '기존 청크를 비우고 status를 queued로 되돌려 워커가 다시 처리하도록 합니다.',
   })
   @ApiParam({ name: 'id', description: '문서 UUID' })
-  @ApiResponse({ status: 200, description: '재처리 큐 등록' })
+  @ApiResponse({
+    status: 200,
+    description: '재처리 큐 등록',
+    type: DocumentListItemDto,
+  })
+  @ApiResponse({ status: 401, description: '인증 실패' })
+  @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
   @ApiResponse({ status: 404, description: '문서 없음' })
+  @ApiResponse({ status: 409, description: '문서 업로드가 아직 진행 중' })
   async reprocess(@Param('id') id: string) {
     return this.uploadService.reprocess(id);
   }
@@ -199,6 +225,7 @@ export class UploadController {
   })
   @ApiParam({ name: 'id', description: '문서 UUID', type: String })
   @ApiResponse({ status: 204, description: '삭제 성공' })
+  @ApiResponse({ status: 400, description: 'GCS 산출물 삭제 실패' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
   @ApiResponse({

@@ -9,22 +9,11 @@ import { DocumentsRepository } from '../pdf-processor/documents.repository';
 import { GcsStorageService } from '../pdf-processor/gcs-storage.service';
 import { toResourceName } from '../pdf-processor/pdf-chunk-parser';
 import type { Document } from '../db';
+import type { DocumentListItemDto } from './dto/document-list-item.dto';
 
 const PDF_MIME = 'application/pdf';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
-
-export type DocumentListItem = {
-  id: string;
-  title: string;
-  resourceName: string;
-  status: Document['status'];
-  summary: string | null;
-  gcsPdfPath: string;
-  errorMessage: string | null;
-  uploadedAt: Date;
-  processedAt: Date | null;
-};
 
 @Injectable()
 export class UploadService {
@@ -38,7 +27,7 @@ export class UploadService {
   async listMyUploads(
     idpUuid: string,
     options: { limit?: number; offset?: number } = {},
-  ): Promise<DocumentListItem[]> {
+  ): Promise<DocumentListItemDto[]> {
     const limit = Math.min(options.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
     const offset = Math.max(0, options.offset ?? 0);
 
@@ -50,7 +39,7 @@ export class UploadService {
     return rows.map((row) => this.toListItem(row));
   }
 
-  async getById(id: string, idpUuid: string): Promise<DocumentListItem> {
+  async getById(id: string, idpUuid: string): Promise<DocumentListItemDto> {
     const row = await this.documentsRepo.findById(id);
     if (!row || !row.isActive) {
       throw new NotFoundException(`Document not found: ${id}`);
@@ -69,7 +58,7 @@ export class UploadService {
     filename: string,
     title: string,
     idpUuid: string,
-  ): Promise<DocumentListItem> {
+  ): Promise<DocumentListItemDto> {
     if (!fileBuffer?.length) {
       throw new BadRequestException('file is required');
     }
@@ -123,9 +112,7 @@ export class UploadService {
       );
     }
 
-    this.logger.log(
-      `Upload queued: id=${record.id} resource=${resourceName}`,
-    );
+    this.logger.log(`Upload queued: id=${record.id} resource=${resourceName}`);
     return this.toListItem(record);
   }
 
@@ -155,7 +142,7 @@ export class UploadService {
   /**
    * Clear chunks and re-enqueue for processing.
    */
-  async reprocess(id: string): Promise<DocumentListItem> {
+  async reprocess(id: string): Promise<DocumentListItemDto> {
     const row = await this.documentsRepo.findById(id);
     if (!row || !row.isActive) {
       throw new NotFoundException(`Document not found: ${id}`);
@@ -173,7 +160,7 @@ export class UploadService {
     return this.toListItem(updated);
   }
 
-  private toListItem(row: Document): DocumentListItem {
+  private toListItem(row: Document): DocumentListItemDto {
     return {
       id: row.id,
       title: row.title,

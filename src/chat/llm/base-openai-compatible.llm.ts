@@ -94,7 +94,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
         this.httpService
           .post<LlmResponse>(`${this.baseUrl}/chat/completions`, request, {
             headers: this.buildHeaders(),
-            timeout: 15000,
+            timeout: options?.timeoutMs ?? 15000,
           })
           .pipe(
             catchError((error: AxiosError) => {

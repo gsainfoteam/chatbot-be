@@ -11,6 +11,8 @@ export const LLM_CLIENT = Symbol('LLM_CLIENT');
 export type LlmCallOptions = {
   temperature?: number;
   max_tokens?: number;
+  /** axios request timeout in milliseconds (default 15000) */
+  timeoutMs?: number;
 };
 
 /**

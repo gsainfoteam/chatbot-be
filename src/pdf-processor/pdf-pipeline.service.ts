@@ -9,7 +9,11 @@ import {
   type MarkdownSection,
 } from './markdown-section-splitter';
 import { parseFiniteNumber } from './parse-finite-number';
-import { toRelativeChunkPath, toResourceName } from './pdf-chunk-parser';
+import {
+  normalizeRelativeChunkPath,
+  toRelativeChunkPath,
+  toResourceName,
+} from './pdf-chunk-parser';
 import type { ResourceIndexEntry } from './gcs-storage.service';
 
 export type PipelineChunk = {
@@ -374,7 +378,9 @@ export class PdfPipelineService {
         throw new Error(`Missing section for labeled index ${meta.index}`);
       }
 
-      let relative = toRelativeChunkPath(meta.path, baseName);
+      let relative = normalizeRelativeChunkPath(
+        toRelativeChunkPath(meta.path, baseName),
+      );
       if (!relative) {
         relative = slugifyTitle(section.title) || `section-${meta.index + 1}`;
       }

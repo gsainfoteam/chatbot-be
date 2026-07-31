@@ -154,6 +154,34 @@ describe('PdfPipelineService metadata pass', () => {
     ).rejects.toThrow(/incomplete batch/);
   });
 
+  it('falls back to the section title when metadata path traverses upward', async () => {
+    const callLLM = jest
+      .fn<(...args: unknown[]) => Promise<LlmResponse>>()
+      .mockResolvedValueOnce(llmResponse(`## 안전한 제목\n\n${'본문 '.repeat(700)}`))
+      .mockResolvedValueOnce(
+        llmResponse(
+          JSON.stringify({
+            summary: '요약',
+            chunks: [
+              {
+                index: 0,
+                path: '../외부/문서',
+                description: '설명',
+              },
+            ],
+          }),
+        ),
+      );
+
+    const pipeline = createPipeline({ pages: ['p1'], callLLM });
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(result.documents['doc/안전한-제목.md']).toBeDefined();
+    expect(Object.keys(result.documents).some((path) => path.includes('..'))).toBe(
+      false,
+    );
+  });
+
   it('throws when Pass 1 page LLM failures exceed the ratio threshold', async () => {
     const callLLM = jest
       .fn<(...args: unknown[]) => Promise<LlmResponse>>()

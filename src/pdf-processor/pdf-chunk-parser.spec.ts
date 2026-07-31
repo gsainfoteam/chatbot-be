@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 import {
+  normalizeRelativeChunkPath,
   parseChunksFromMarkdown,
   toRelativeChunkPath,
   toResourceName,
@@ -23,6 +24,18 @@ describe('toRelativeChunkPath', () => {
 
   it('returns empty when path is only the baseName', () => {
     expect(toRelativeChunkPath('테스트', '테스트')).toBe('');
+  });
+});
+
+describe('normalizeRelativeChunkPath', () => {
+  it('removes current-directory and empty segments', () => {
+    expect(normalizeRelativeChunkPath('./학사//졸업')).toBe('학사/졸업');
+  });
+
+  it('rejects parent traversal with slash or backslash separators', () => {
+    expect(normalizeRelativeChunkPath('../외부/문서')).toBe('');
+    expect(normalizeRelativeChunkPath('학사/../외부')).toBe('');
+    expect(normalizeRelativeChunkPath('학사\\..\\외부')).toBe('');
   });
 });
 

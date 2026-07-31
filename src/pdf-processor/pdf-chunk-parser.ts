@@ -26,6 +26,25 @@ export function toRelativeChunkPath(raw: string, baseName: string): string {
   return p;
 }
 
+/**
+ * Normalize an untrusted relative chunk path.
+ * Dot segments are removed, while parent traversal is rejected rather than
+ * resolved so an LLM path can never reference outside the document prefix.
+ */
+export function normalizeRelativeChunkPath(raw: string): string {
+  const segments = raw.replace(/\\/g, '/').split('/');
+  const normalized: string[] = [];
+
+  for (const segment of segments) {
+    const trimmed = segment.trim();
+    if (!trimmed || trimmed === '.') continue;
+    if (trimmed === '..') return '';
+    normalized.push(trimmed);
+  }
+
+  return normalized.join('/');
+}
+
 function resourceStem(resourceName: string): string {
   if (
     resourceName.includes('.') &&
@@ -67,7 +86,9 @@ export function parseChunksFromMarkdown(
     /<document\s+path="([^"]+)"\s+description="([^"]+)">(.+?)<\/document>/gs;
   const chunks: ParsedChunk[] = [];
   for (const match of markdown.matchAll(chunkPattern)) {
-    const relative = toRelativeChunkPath(match[1], baseName);
+    const relative = normalizeRelativeChunkPath(
+      toRelativeChunkPath(match[1], baseName),
+    );
     if (!relative) continue;
     chunks.push({
       path: relative,

@@ -8,6 +8,7 @@ import {
   splitMarkdownIntoSections,
   type MarkdownSection,
 } from './markdown-section-splitter';
+import { parseFiniteNumber } from './parse-finite-number';
 import { toRelativeChunkPath, toResourceName } from './pdf-chunk-parser';
 import type { ResourceIndexEntry } from './gcs-storage.service';
 
@@ -54,20 +55,22 @@ export class PdfPipelineService {
     private readonly configService: ConfigService,
     @Inject(LLM_CLIENT) private readonly llm: LlmClient,
   ) {
-    this.contextLength = Number(
-      this.configService.get<string>('PDF_PROCESSOR_CONTEXT_LENGTH') ?? 500,
+    this.contextLength = parseFiniteNumber(
+      this.configService.get<string>('PDF_PROCESSOR_CONTEXT_LENGTH'),
+      500,
+      { min: 1 },
     );
     this.llmTimeoutMs =
-      Number(
-        this.configService.get<string>('PDF_PROCESSOR_LLM_TIMEOUT') ?? 120,
+      parseFiniteNumber(
+        this.configService.get<string>('PDF_PROCESSOR_LLM_TIMEOUT'),
+        120,
+        { min: 1 },
       ) * 1000;
-    const ratio = Number(
-      this.configService.get<string>('PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO') ??
-        DEFAULT_PASS1_MAX_FAILURE_RATIO,
+    this.pass1MaxFailureRatio = parseFiniteNumber(
+      this.configService.get<string>('PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO'),
+      DEFAULT_PASS1_MAX_FAILURE_RATIO,
+      { min: 0, max: 1 },
     );
-    this.pass1MaxFailureRatio = Number.isFinite(ratio)
-      ? Math.min(1, Math.max(0, ratio))
-      : DEFAULT_PASS1_MAX_FAILURE_RATIO;
   }
 
   /**

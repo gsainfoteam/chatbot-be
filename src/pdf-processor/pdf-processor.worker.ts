@@ -7,6 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { DocumentsRepository } from './documents.repository';
 import { GcsStorageService } from './gcs-storage.service';
+import { parseFiniteNumber } from './parse-finite-number';
 import { PdfPipelineService } from './pdf-pipeline.service';
 import type { Document } from '../db';
 
@@ -30,24 +31,21 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     private readonly pipeline: PdfPipelineService,
     private readonly configService: ConfigService,
   ) {
-    this.concurrency = Math.max(
+    this.concurrency = parseFiniteNumber(
+      this.configService.get<string>('PDF_PROCESSOR_CONCURRENCY'),
       1,
-      Number(this.configService.get<string>('PDF_PROCESSOR_CONCURRENCY') ?? 1),
+      { min: 1 },
     );
-    this.pollIntervalMs = Math.max(
-      500,
-      Number(
-        this.configService.get<string>('PDF_PROCESSOR_POLL_INTERVAL_MS') ??
-          2000,
-      ),
+    this.pollIntervalMs = parseFiniteNumber(
+      this.configService.get<string>('PDF_PROCESSOR_POLL_INTERVAL_MS'),
+      2000,
+      { min: 500 },
     );
     // Default: requeue if stuck in processing > 30 minutes
-    this.staleProcessingMs = Math.max(
-      60_000,
-      Number(
-        this.configService.get<string>('PDF_PROCESSOR_STALE_PROCESSING_MS') ??
-          30 * 60 * 1000,
-      ),
+    this.staleProcessingMs = parseFiniteNumber(
+      this.configService.get<string>('PDF_PROCESSOR_STALE_PROCESSING_MS'),
+      30 * 60 * 1000,
+      { min: 60_000 },
     );
   }
 

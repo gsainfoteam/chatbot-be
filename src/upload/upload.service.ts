@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ServiceUnavailableException,
   HttpException,
   HttpStatus,
 } from '@nestjs/common';
@@ -30,7 +31,9 @@ export function parseExpiresAt(raw?: string | null): Date | null {
 
   const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) {
-    throw new BadRequestException('expiresAt must be a valid ISO-8601 datetime');
+    throw new BadRequestException(
+      'expiresAt must be a valid ISO-8601 datetime',
+    );
   }
   if (parsed.getTime() <= Date.now()) {
     throw new BadRequestException('expiresAt must be in the future');
@@ -120,8 +123,8 @@ export class UploadService {
         `GCS upload failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       await this.rollbackUpload(reservation.id, resourceName);
-      throw new BadRequestException(
-        `GCS upload failed: ${error instanceof Error ? error.message : String(error)}`,
+      throw new ServiceUnavailableException(
+        'Document storage is temporarily unavailable',
       );
     }
 
@@ -157,8 +160,8 @@ export class UploadService {
       this.logger.error(
         `GCS delete failed id=${id}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      throw new BadRequestException(
-        `GCS delete failed: ${error instanceof Error ? error.message : String(error)}`,
+      throw new ServiceUnavailableException(
+        'Document storage is temporarily unavailable',
       );
     }
 

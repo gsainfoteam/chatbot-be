@@ -154,6 +154,10 @@ export class UploadController {
     status: 409,
     description: '동일 resource_name 문서가 이미 존재',
   })
+  @ApiResponse({
+    status: 503,
+    description: '문서 저장소(GCS) 일시 장애',
+  })
   async upload(
     @CurrentAdmin() admin: AdminContext,
     @Req() req: FastifyRequest,
@@ -280,12 +284,15 @@ export class UploadController {
   })
   @ApiParam({ name: 'id', description: '문서 UUID', type: String })
   @ApiResponse({ status: 204, description: '삭제 성공' })
-  @ApiResponse({ status: 400, description: 'GCS 산출물 삭제 실패' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'Super Admin 권한 필요' })
   @ApiResponse({
     status: 404,
     description: '문서 없음 또는 이미 삭제됨',
+  })
+  @ApiResponse({
+    status: 503,
+    description: '문서 저장소(GCS) 일시 장애',
   })
   async delete(@Param('id') id: string): Promise<void> {
     await this.uploadService.delete(id);

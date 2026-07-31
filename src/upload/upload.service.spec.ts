@@ -29,13 +29,14 @@ function document(overrides: Partial<Document> = {}): Document {
 function createService() {
   const repo = {
     createUploading: jest.fn<(...args: unknown[]) => Promise<Document>>(),
-    markQueuedAfterUpload:
-      jest.fn<(id: string) => Promise<Document | null>>(),
-    hardDelete: jest.fn(),
-    cancelAndSoftDelete: jest.fn(),
+    markQueuedAfterUpload: jest.fn<(id: string) => Promise<Document | null>>(),
+    hardDelete: jest.fn<(id: string) => Promise<void>>(),
+    cancelAndSoftDelete: jest.fn<(id: string) => Promise<Document | null>>(),
     findById: jest.fn<(id: string) => Promise<Document | null>>(),
     updateExpiresAt:
-      jest.fn<(id: string, expiresAt: Date | null) => Promise<Document | null>>(),
+      jest.fn<
+        (id: string, expiresAt: Date | null) => Promise<Document | null>
+      >(),
     enqueueReprocess:
       jest.fn<
         (
@@ -49,7 +50,7 @@ function createService() {
     toGsPath: jest.fn((path: string) => `gs://bucket/${path}`),
     uploadPdf:
       jest.fn<(resourceName: string, pdfBytes: Buffer) => Promise<string>>(),
-    deleteResourceArtifacts: jest.fn(),
+    deleteResourceArtifacts: jest.fn<(resourceName: string) => Promise<void>>(),
   };
   return {
     service: new UploadService(
@@ -101,6 +102,23 @@ describe('UploadService atomic transitions', () => {
     expect(gcs.uploadPdf).not.toHaveBeenCalled();
   });
 
+  it('maps GCS upload failures to 503 without exposing the raw error', async () => {
+    const { service, repo, gcs } = createService();
+    repo.createUploading.mockResolvedValue(document());
+    gcs.uploadPdf.mockRejectedValue(new Error('bucket ACL denied xyz'));
+    repo.hardDelete.mockResolvedValue(undefined);
+
+    await expect(
+      service.upload(Buffer.from('%PDF-test'), 'test.pdf', '테스트', 'admin-1'),
+    ).rejects.toMatchObject({
+      response: {
+        statusCode: 503,
+        message: 'Document storage is temporarily unavailable',
+      },
+    });
+    expect(repo.hardDelete).toHaveBeenCalled();
+  });
+
   it('cancels the DB processing attempt before deleting GCS artifacts', async () => {
     const { service, repo, gcs } = createService();
     const calls: string[] = [];
@@ -116,6 +134,23 @@ describe('UploadService atomic transitions', () => {
     await service.delete('00000000-0000-0000-0000-000000000001');
 
     expect(calls).toEqual(['cancel', 'delete-artifacts']);
+  });
+
+  it('maps GCS delete failures to 503 without exposing the raw error', async () => {
+    const { service, repo, gcs } = createService();
+    repo.cancelAndSoftDelete.mockResolvedValue(document({ isActive: false }));
+    gcs.deleteResourceArtifacts.mockRejectedValue(
+      new Error('Permission denied on objects/test/'),
+    );
+
+    await expect(
+      service.delete('00000000-0000-0000-0000-000000000001'),
+    ).rejects.toMatchObject({
+      response: {
+        statusCode: 503,
+        message: 'Document storage is temporarily unavailable',
+      },
+    });
   });
 
   it.each(['uploading', 'queued', 'processing'] as const)(

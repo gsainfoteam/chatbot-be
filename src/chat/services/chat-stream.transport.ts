@@ -35,13 +35,14 @@ export class ChatStreamTransport {
     const corsOrigin =
       requestOrigin && allowedOrigins.includes(requestOrigin)
         ? requestOrigin
-        : (allowedOrigins[1] ?? '*');
+        : allowedOrigins[1];
 
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
       'Access-Control-Allow-Origin': corsOrigin,
+      'Access-Control-Allow-Credentials': 'true',
       'Access-Control-Allow-Methods': 'POST, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     });

@@ -27,6 +27,7 @@ describe('ChatStreamTransport', () => {
       expect.objectContaining({
         'Content-Type': 'text/event-stream',
         'Access-Control-Allow-Origin': 'http://localhost:5173',
+        'Access-Control-Allow-Credentials': 'true',
       }),
     );
   });

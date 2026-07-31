@@ -153,4 +153,80 @@ describe('PdfPipelineService metadata pass', () => {
       pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
     ).rejects.toThrow(/incomplete batch/);
   });
+
+  it('throws when Pass 1 page LLM failures exceed the ratio threshold', async () => {
+    const callLLM = jest
+      .fn<(...args: unknown[]) => Promise<LlmResponse>>()
+      .mockRejectedValueOnce(new Error('timeout of 120000ms exceeded'))
+      .mockRejectedValueOnce(new Error('timeout of 120000ms exceeded'))
+      .mockResolvedValueOnce(llmResponse(`## C\n\n${'본문 '.repeat(700)}`));
+
+    const pipeline = createPipeline({
+      pages: ['p1', 'p2', 'p3'],
+      callLLM,
+    });
+
+    // 2/3 ≈ 66% > default 10%
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold/);
+  });
+
+  it('continues when a small Pass 1 fallback stays within the threshold', async () => {
+    let pass1Calls = 0;
+    const callLLM = jest.fn<(...args: unknown[]) => Promise<LlmResponse>>(
+      async (...args) => {
+        const messages = args[0] as Array<{ content: string }>;
+        const content = messages[0]?.content ?? '';
+
+        if (/^index:\s*\d+/m.test(content)) {
+          const indexes = [...content.matchAll(/^index:\s*(\d+)\s*$/gm)].map(
+            (m) => Number(m[1]),
+          );
+          return llmResponse(
+            JSON.stringify({
+              summary: '요약',
+              chunks: indexes.map((index) => ({
+                index,
+                path: `sec-${index}`,
+                description: `desc-${index}`,
+              })),
+            }),
+          );
+        }
+
+        pass1Calls += 1;
+        if (pass1Calls === 1) {
+          throw new Error('timeout of 120000ms exceeded');
+        }
+        return llmResponse(
+          `## Section ${pass1Calls}\n\n${'본문내용입니다. '.repeat(500)}`,
+        );
+      },
+    );
+
+    // 1/10 = 10% is not > 0.1, so should proceed to Pass 2
+    const pipeline = createPipeline({
+      pages: Array.from({ length: 10 }, (_, i) => `p${i + 1}`),
+      callLLM,
+    });
+
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+    expect(result.chunks.length).toBeGreaterThan(0);
+  });
+
+  it('throws when every Pass 1 page falls back', async () => {
+    const callLLM = jest
+      .fn<(...args: unknown[]) => Promise<LlmResponse>>()
+      .mockRejectedValue(new Error('timeout of 120000ms exceeded'));
+
+    const pipeline = createPipeline({
+      pages: ['p1', 'p2'],
+      callLLM,
+    });
+
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold/);
+  });
 });

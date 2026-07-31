@@ -39,12 +39,15 @@ type MetadataBatchResponse = {
 const METADATA_BATCH_SIZE = 15;
 const SNIPPET_CHARS = 1_500;
 const OVERVIEW_CHARS = 2_500;
+/** Fail the whole job when Pass 1 LLM fallbacks exceed this fraction of pages. */
+const DEFAULT_PASS1_MAX_FAILURE_RATIO = 0.1;
 
 @Injectable()
 export class PdfPipelineService {
   private readonly logger = new Logger(PdfPipelineService.name);
   private readonly contextLength: number;
   private readonly llmTimeoutMs: number;
+  private readonly pass1MaxFailureRatio: number;
 
   constructor(
     private readonly pdfTextService: PdfTextService,
@@ -58,6 +61,13 @@ export class PdfPipelineService {
       Number(
         this.configService.get<string>('PDF_PROCESSOR_LLM_TIMEOUT') ?? 120,
       ) * 1000;
+    const ratio = Number(
+      this.configService.get<string>('PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO') ??
+        DEFAULT_PASS1_MAX_FAILURE_RATIO,
+    );
+    this.pass1MaxFailureRatio = Number.isFinite(ratio)
+      ? Math.min(1, Math.max(0, ratio))
+      : DEFAULT_PASS1_MAX_FAILURE_RATIO;
   }
 
   /**
@@ -74,24 +84,28 @@ export class PdfPipelineService {
     );
 
     const pageMarkdowns: string[] = [];
+    const failedPages: number[] = [];
     let previousContext = '';
 
     for (let i = 0; i < totalPages; i += 1) {
       const currentPage = i + 1;
       const pageText = pageTexts[i] ?? '';
-      const pageMarkdown = await this.convertPageToMarkdown({
+      const { markdown, usedFallback } = await this.convertPageToMarkdown({
         filename,
         totalPages,
         currentPage,
         pageText,
         previousContext,
       });
-      pageMarkdowns.push(pageMarkdown);
+      if (usedFallback) failedPages.push(currentPage);
+      pageMarkdowns.push(markdown);
       previousContext =
-        pageMarkdown.length > this.contextLength
-          ? pageMarkdown.slice(-this.contextLength)
-          : pageMarkdown;
+        markdown.length > this.contextLength
+          ? markdown.slice(-this.contextLength)
+          : markdown;
     }
+
+    this.assertPass1FailureWithinLimit(totalPages, failedPages);
 
     const combinedMarkdown = pageMarkdowns.join('\n\n');
     this.logger.log(
@@ -101,13 +115,38 @@ export class PdfPipelineService {
     return this.chunkMarkdownWithMetadata(combinedMarkdown, filename);
   }
 
+  private assertPass1FailureWithinLimit(
+    totalPages: number,
+    failedPages: number[],
+  ): void {
+    if (totalPages === 0) {
+      throw new Error('Pass 1 produced 0 pages');
+    }
+    if (failedPages.length === 0) return;
+
+    const ratio = failedPages.length / totalPages;
+    this.logger.warn(
+      `Pass 1 LLM fallbacks: ${failedPages.length}/${totalPages} pages (${(ratio * 100).toFixed(1)}%) pages=[${failedPages.join(',')}]`,
+    );
+
+    if (
+      failedPages.length === totalPages ||
+      ratio > this.pass1MaxFailureRatio
+    ) {
+      throw new Error(
+        `Pass 1 LLM failures exceeded threshold: ${failedPages.length}/${totalPages} pages failed ` +
+          `(max ratio ${this.pass1MaxFailureRatio}). pages=[${failedPages.join(',')}]`,
+      );
+    }
+  }
+
   private async convertPageToMarkdown(params: {
     filename: string;
     totalPages: number;
     currentPage: number;
     pageText: string;
     previousContext: string;
-  }): Promise<string> {
+  }): Promise<{ markdown: string; usedFallback: boolean }> {
     const { filename, totalPages, currentPage, pageText, previousContext } =
       params;
 
@@ -131,12 +170,25 @@ export class PdfPipelineService {
           timeoutMs: this.llmTimeoutMs,
         },
       );
-      return response.choices?.[0]?.message?.content ?? '';
+      const markdown = response.choices?.[0]?.message?.content ?? '';
+      if (!markdown.trim() && pageText.trim()) {
+        this.logger.warn(
+          `Empty LLM markdown for page ${currentPage}; using raw extracted text`,
+        );
+        return {
+          markdown: `## Page ${currentPage}\n\n${pageText}`,
+          usedFallback: true,
+        };
+      }
+      return { markdown, usedFallback: false };
     } catch (error) {
       this.logger.error(
         `Error calling LLM for page ${currentPage}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return `## Page ${currentPage}\n\n${pageText}`;
+      return {
+        markdown: `## Page ${currentPage}\n\n${pageText}`,
+        usedFallback: true,
+      };
     }
   }
 

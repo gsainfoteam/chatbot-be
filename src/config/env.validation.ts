@@ -185,6 +185,13 @@ export class EnvironmentVariables {
   @Min(1)
   PDF_PROCESSOR_LLM_TIMEOUT?: number;
 
+  /** Pass 1 page LLM fallback ratio above which the job fails (0–1). Default 0.1. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO?: number;
+
   @IsOptional()
   @IsNumber()
   @Min(500)

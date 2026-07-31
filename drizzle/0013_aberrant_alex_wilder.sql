@@ -1,0 +1,2 @@
+CREATE INDEX "document_chunks_path_idx" ON "document_chunks" USING btree ("path");--> statement-breakpoint
+CREATE UNIQUE INDEX "document_chunks_document_id_path_unique" ON "document_chunks" USING btree ("document_id","path");

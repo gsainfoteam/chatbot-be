@@ -260,6 +260,10 @@ export const documentChunks = pgTable(
       table.documentId,
       table.sortOrder,
     ),
+    pathIdx: index('document_chunks_path_idx').on(table.path),
+    documentPathUnique: uniqueIndex(
+      'document_chunks_document_id_path_unique',
+    ).on(table.documentId, table.path),
   }),
 );
 

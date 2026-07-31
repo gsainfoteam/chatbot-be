@@ -271,8 +271,11 @@ export class UploadController {
       },
     },
   })
-  async reprocess(@Param('id') id: string) {
-    return this.uploadService.reprocess(id);
+  async reprocess(
+    @CurrentAdmin() admin: AdminContext,
+    @Param('id') id: string,
+  ) {
+    return this.uploadService.reprocess(id, admin.uuid);
   }
 
   @Delete(':id')
@@ -294,8 +297,11 @@ export class UploadController {
     status: 503,
     description: '문서 저장소(GCS) 일시 장애',
   })
-  async delete(@Param('id') id: string): Promise<void> {
-    await this.uploadService.delete(id);
+  async delete(
+    @CurrentAdmin() admin: AdminContext,
+    @Param('id') id: string,
+  ): Promise<void> {
+    await this.uploadService.delete(id, admin.uuid);
   }
 }
 

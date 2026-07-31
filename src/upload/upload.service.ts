@@ -148,8 +148,8 @@ export class UploadService {
   /**
    * Soft-delete DB row and remove GCS artifacts.
    */
-  async delete(id: string): Promise<void> {
-    const row = await this.documentsRepo.cancelAndSoftDelete(id);
+  async delete(id: string, idpUuid: string): Promise<void> {
+    const row = await this.documentsRepo.cancelAndSoftDelete(id, idpUuid);
     if (!row) {
       throw new NotFoundException(`Document not found: ${id}`);
     }
@@ -171,9 +171,13 @@ export class UploadService {
   /**
    * Clear chunks and re-enqueue for processing.
    */
-  async reprocess(id: string): Promise<DocumentListItemDto> {
+  async reprocess(id: string, idpUuid: string): Promise<DocumentListItemDto> {
     const row = await this.documentsRepo.findById(id);
-    if (!row || !row.isActive) {
+    if (
+      !row ||
+      !row.isActive ||
+      row.uploadedByIdpUuid !== idpUuid
+    ) {
       throw new NotFoundException(`Document not found: ${id}`);
     }
 
@@ -183,13 +187,18 @@ export class UploadService {
     const cooldownBefore = new Date(now.getTime() - REPROCESS_COOLDOWN_MS);
     const updated = await this.documentsRepo.enqueueReprocess(
       id,
+      idpUuid,
       cooldownBefore,
       now,
     );
     if (!updated) {
       // Re-read to classify a concurrent state transition accurately.
       const latest = await this.documentsRepo.findById(id);
-      if (!latest || !latest.isActive) {
+      if (
+        !latest ||
+        !latest.isActive ||
+        latest.uploadedByIdpUuid !== idpUuid
+      ) {
         throw new NotFoundException(`Document not found: ${id}`);
       }
       this.assertReprocessEligible(latest, new Date());
@@ -215,7 +224,11 @@ export class UploadService {
 
     const expiresAt =
       expiresAtRaw === null ? null : parseExpiresAt(expiresAtRaw);
-    const updated = await this.documentsRepo.updateExpiresAt(id, expiresAt);
+    const updated = await this.documentsRepo.updateExpiresAt(
+      id,
+      idpUuid,
+      expiresAt,
+    );
     if (!updated) {
       throw new NotFoundException(`Document not found: ${id}`);
     }

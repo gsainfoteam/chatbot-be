@@ -55,14 +55,24 @@ export class DocumentsRepository {
     return row;
   }
 
-  async updateExpiresAt(id: string, expiresAt: Date | null) {
+  async updateExpiresAt(
+    id: string,
+    uploadedByIdpUuid: string,
+    expiresAt: Date | null,
+  ) {
     const [row] = await this.db
       .update(documents)
       .set({
         expiresAt,
         updatedAt: new Date(),
       })
-      .where(and(eq(documents.id, id), eq(documents.isActive, true)))
+      .where(
+        and(
+          eq(documents.id, id),
+          eq(documents.uploadedByIdpUuid, uploadedByIdpUuid),
+          eq(documents.isActive, true),
+        ),
+      )
       .returning();
     return row ?? null;
   }
@@ -292,7 +302,7 @@ export class DocumentsRepository {
   /**
    * Cancel the current attempt before deleting external artifacts.
    */
-  async cancelAndSoftDelete(id: string) {
+  async cancelAndSoftDelete(id: string, uploadedByIdpUuid: string) {
     const [row] = await this.db
       .update(documents)
       .set({
@@ -300,12 +310,23 @@ export class DocumentsRepository {
         processingToken: null,
         updatedAt: new Date(),
       })
-      .where(and(eq(documents.id, id), eq(documents.isActive, true)))
+      .where(
+        and(
+          eq(documents.id, id),
+          eq(documents.uploadedByIdpUuid, uploadedByIdpUuid),
+          eq(documents.isActive, true),
+        ),
+      )
       .returning();
     return row ?? null;
   }
 
-  async enqueueReprocess(id: string, cooldownBefore: Date, now: Date) {
+  async enqueueReprocess(
+    id: string,
+    uploadedByIdpUuid: string,
+    cooldownBefore: Date,
+    now: Date,
+  ) {
     return this.db.transaction(async (tx) => {
       const [row] = await tx
         .update(documents)
@@ -320,6 +341,7 @@ export class DocumentsRepository {
         .where(
           and(
             eq(documents.id, id),
+            eq(documents.uploadedByIdpUuid, uploadedByIdpUuid),
             eq(documents.isActive, true),
             inArray(documents.status, ['ready', 'failed']),
             or(

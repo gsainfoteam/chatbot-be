@@ -31,16 +31,22 @@ function createService() {
     createUploading: jest.fn<(...args: unknown[]) => Promise<Document>>(),
     markQueuedAfterUpload: jest.fn<(id: string) => Promise<Document | null>>(),
     hardDelete: jest.fn<(id: string) => Promise<void>>(),
-    cancelAndSoftDelete: jest.fn<(id: string) => Promise<Document | null>>(),
+    cancelAndSoftDelete:
+      jest.fn<(id: string, idpUuid: string) => Promise<Document | null>>(),
     findById: jest.fn<(id: string) => Promise<Document | null>>(),
     updateExpiresAt:
       jest.fn<
-        (id: string, expiresAt: Date | null) => Promise<Document | null>
+        (
+          id: string,
+          idpUuid: string,
+          expiresAt: Date | null,
+        ) => Promise<Document | null>
       >(),
     enqueueReprocess:
       jest.fn<
         (
           id: string,
+          idpUuid: string,
           cooldownBefore: Date,
           now: Date,
         ) => Promise<Document | null>
@@ -131,9 +137,16 @@ describe('UploadService atomic transitions', () => {
       return Promise.resolve();
     });
 
-    await service.delete('00000000-0000-0000-0000-000000000001');
+    await service.delete(
+      '00000000-0000-0000-0000-000000000001',
+      'admin-1',
+    );
 
     expect(calls).toEqual(['cancel', 'delete-artifacts']);
+    expect(repo.cancelAndSoftDelete).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000001',
+      'admin-1',
+    );
   });
 
   it('maps GCS delete failures to 503 without exposing the raw error', async () => {
@@ -144,13 +157,46 @@ describe('UploadService atomic transitions', () => {
     );
 
     await expect(
-      service.delete('00000000-0000-0000-0000-000000000001'),
+      service.delete(
+        '00000000-0000-0000-0000-000000000001',
+        'admin-1',
+      ),
     ).rejects.toMatchObject({
       response: {
         statusCode: 503,
         message: 'Document storage is temporarily unavailable',
       },
     });
+  });
+
+  it('returns 404 without touching GCS when delete ownership does not match', async () => {
+    const { service, repo, gcs } = createService();
+    repo.cancelAndSoftDelete.mockResolvedValue(null);
+
+    await expect(
+      service.delete(
+        '00000000-0000-0000-0000-000000000001',
+        'other-admin',
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(repo.cancelAndSoftDelete).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000001',
+      'other-admin',
+    );
+    expect(gcs.deleteResourceArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 when reprocess ownership does not match', async () => {
+    const { service, repo } = createService();
+    repo.findById.mockResolvedValue(document({ uploadedByIdpUuid: 'admin-1' }));
+
+    await expect(
+      service.reprocess(
+        '00000000-0000-0000-0000-000000000001',
+        'other-admin',
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(repo.enqueueReprocess).not.toHaveBeenCalled();
   });
 
   it.each(['uploading', 'queued', 'processing'] as const)(
@@ -160,7 +206,10 @@ describe('UploadService atomic transitions', () => {
       repo.findById.mockResolvedValue(document({ status }));
 
       await expect(
-        service.reprocess('00000000-0000-0000-0000-000000000001'),
+        service.reprocess(
+          '00000000-0000-0000-0000-000000000001',
+          'admin-1',
+        ),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(repo.enqueueReprocess).not.toHaveBeenCalled();
     },
@@ -176,7 +225,10 @@ describe('UploadService atomic transitions', () => {
     );
 
     try {
-      await service.reprocess('00000000-0000-0000-0000-000000000001');
+      await service.reprocess(
+        '00000000-0000-0000-0000-000000000001',
+        'admin-1',
+      );
       throw new Error('Expected reprocess to be rejected');
     } catch (error) {
       expect(error).toEqual(
@@ -202,7 +254,7 @@ describe('UploadService atomic transitions', () => {
       document({ status: 'queued', lastReprocessedAt: new Date() }),
     );
 
-    await expect(service.reprocess(current.id)).resolves.toEqual(
+    await expect(service.reprocess(current.id, 'admin-1')).resolves.toEqual(
       expect.objectContaining({ status: 'queued', canReprocess: false }),
     );
   });
@@ -219,10 +271,11 @@ describe('UploadService atomic transitions', () => {
       repo.findById.mockResolvedValue(current);
       repo.enqueueReprocess.mockResolvedValue(queued);
 
-      const result = await service.reprocess(current.id);
+      const result = await service.reprocess(current.id, 'admin-1');
 
       expect(repo.enqueueReprocess).toHaveBeenCalledWith(
         current.id,
+        'admin-1',
         expect.any(Date),
         expect.any(Date),
       );
@@ -264,7 +317,11 @@ describe('UploadService atomic transitions', () => {
 
     const result = await service.updateExpiresAt(current.id, 'admin-1', null);
 
-    expect(repo.updateExpiresAt).toHaveBeenCalledWith(current.id, null);
+    expect(repo.updateExpiresAt).toHaveBeenCalledWith(
+      current.id,
+      'admin-1',
+      null,
+    );
     expect(result.expiresAt).toBeNull();
     expect(result.isExpired).toBe(false);
   });

@@ -72,6 +72,47 @@ describe('ChatStreamTransport', () => {
     );
   });
 
+  it('ends the SSE response and rejects when the upstream stream errors', async () => {
+    const transport = createTransport();
+    const reply = {
+      raw: { write: jest.fn(), end: jest.fn(), writableEnded: false },
+    };
+    const stream = new PassThrough();
+    const consumePromise = transport.consumeAndForward(stream, reply as never);
+
+    stream.destroy(new Error('upstream timeout'));
+
+    await expect(consumePromise).rejects.toThrow('upstream timeout');
+    expect(reply.raw.write).toHaveBeenCalledWith(
+      `data: ${JSON.stringify({ error: 'upstream timeout' })}\n\n`,
+    );
+    expect(reply.raw.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not swallow SSE write failures as JSON parse failures', async () => {
+    const transport = createTransport();
+    const reply = {
+      raw: {
+        write: jest.fn(() => {
+          throw new Error('socket closed');
+        }),
+        end: jest.fn(),
+        writableEnded: false,
+      },
+    };
+    const stream = new PassThrough();
+    const consumePromise = transport.consumeAndForward(stream, reply as never);
+
+    stream.write(
+      `data: ${JSON.stringify({
+        choices: [{ delta: { content: '안녕' } }],
+      })}\n\n`,
+    );
+
+    await expect(consumePromise).rejects.toThrow('socket closed');
+    expect(reply.raw.end).toHaveBeenCalledTimes(1);
+  });
+
   it('writes resources and done events', () => {
     const transport = createTransport();
     const reply = {

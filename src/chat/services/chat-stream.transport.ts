@@ -61,8 +61,11 @@ export class ChatStreamTransport {
       let model = '';
       let usage: LlmUsage | null = null;
       let buffer = '';
+      let settled = false;
 
       stream.on('data', (chunk: Buffer) => {
+        if (settled) return;
+
         buffer += chunk.toString();
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -73,35 +76,73 @@ export class ChatStreamTransport {
           const data = line.slice(6).trim();
           if (!data || data === '[DONE]') continue;
 
+          let parsed: {
+            choices?: Array<{ delta?: { content?: string } }>;
+            model?: string;
+            usage?: LlmUsage;
+          };
           try {
-            const parsed = JSON.parse(data);
-            if (parsed.choices?.[0]?.delta?.content) {
-              const content = parsed.choices[0].delta.content;
-              accumulatedContent += content;
-              reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
-            }
-            if (parsed.model) {
-              model = parsed.model;
-            }
-            if (parsed.usage) {
-              usage = parsed.usage;
-            }
+            parsed = JSON.parse(data) as typeof parsed;
           } catch {
-            // JSON 파싱 실패 시 무시
+            // JSON 파싱 실패 시 해당 이벤트만 무시
+            continue;
+          }
+
+          const content = parsed.choices?.[0]?.delta?.content;
+          if (content) {
+            accumulatedContent += content;
+            try {
+              reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
+            } catch (error) {
+              settled = true;
+              const streamError =
+                error instanceof Error ? error : new Error(String(error));
+              this.logger.error('SSE write error:', streamError);
+              if (!reply.raw.writableEnded) {
+                try {
+                  reply.raw.end();
+                } catch {
+                  // Socket may already be unavailable.
+                }
+              }
+              if (!stream.destroyed) stream.destroy();
+              reject(streamError);
+              return;
+            }
+          }
+          if (parsed.model) {
+            model = parsed.model;
+          }
+          if (parsed.usage) {
+            usage = parsed.usage;
           }
         }
       });
 
       stream.on('error', (error: Error) => {
+        if (settled) return;
+        settled = true;
         this.logger.error('Stream error:', error);
-        reply.raw.write(
-          `data: ${JSON.stringify({ error: error.message || 'Stream error' })}\n\n`,
-        );
-        reply.raw.end();
+        try {
+          reply.raw.write(
+            `data: ${JSON.stringify({ error: error.message || 'Stream error' })}\n\n`,
+          );
+        } catch {
+          // Socket may already be unavailable.
+        }
+        if (!reply.raw.writableEnded) {
+          try {
+            reply.raw.end();
+          } catch {
+            // Socket may already be unavailable.
+          }
+        }
         reject(error);
       });
 
       stream.on('end', () => {
+        if (settled) return;
+        settled = true;
         resolve({ accumulatedContent, model, usage });
       });
     });

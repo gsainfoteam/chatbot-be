@@ -35,6 +35,9 @@ function createWorker(options: {
     sortOrder: number;
   }>;
   processPdfError?: Error;
+  uploadDocumentsError?: Error;
+  heartbeatOwned?: boolean;
+  markFailed?: boolean;
 }) {
   const chunks = options.chunks ?? [
     {
@@ -66,13 +69,18 @@ function createWorker(options: {
         processingToken: string,
         errorMessage: string,
       ) => Promise<boolean>
-    >(() => Promise.resolve(true)),
+    >(() => Promise.resolve(options.markFailed ?? true)),
+    heartbeatProcessing: jest.fn<
+      (id: string, processingToken: string) => Promise<boolean>
+    >(() => Promise.resolve(options.heartbeatOwned ?? true)),
     requeueStaleProcessing: jest.fn(() => Promise.resolve(0)),
     claimQueued: jest.fn(() => Promise.resolve([])),
   };
   const gcs = {
     downloadPdf: jest.fn(() => Promise.resolve(Buffer.from('%PDF-test'))),
-    uploadDocuments: jest.fn(() => Promise.resolve()),
+    uploadDocuments: options.uploadDocumentsError
+      ? jest.fn(() => Promise.reject(options.uploadDocumentsError))
+      : jest.fn(() => Promise.resolve()),
     deleteProcessedArtifacts: jest.fn<(resourceName: string) => Promise<void>>(
       () => Promise.resolve(),
     ),
@@ -116,7 +124,7 @@ function createWorker(options: {
 }
 
 describe('PdfProcessorWorker attempt ownership', () => {
-  it('deletes generated artifacts when a delete/reprocess cancels the attempt', async () => {
+  it('does not delete shared artifacts when completion loses ownership', async () => {
     const { worker, repo, gcs } = createWorker({ completeProcessing: false });
     const callable = worker as unknown as {
       processDocument(doc: Document): Promise<void>;
@@ -125,7 +133,7 @@ describe('PdfProcessorWorker attempt ownership', () => {
     await callable.processDocument(processingDocument());
 
     expect(repo.completeProcessing).toHaveBeenCalled();
-    expect(gcs.deleteProcessedArtifacts).toHaveBeenCalledWith('test');
+    expect(gcs.deleteProcessedArtifacts).not.toHaveBeenCalled();
   });
 
   it('keeps generated artifacts when the attempt completes successfully', async () => {
@@ -137,6 +145,53 @@ describe('PdfProcessorWorker attempt ownership', () => {
     await callable.processDocument(processingDocument());
 
     expect(repo.completeProcessing).toHaveBeenCalled();
+    expect(gcs.deleteProcessedArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('heartbeats the processing token while an attempt is active', async () => {
+    const { worker, repo } = createWorker({ completeProcessing: true });
+    const doc = processingDocument();
+    const callable = worker as unknown as {
+      processDocument(document: Document): Promise<void>;
+    };
+
+    await callable.processDocument(doc);
+
+    expect(repo.heartbeatProcessing).toHaveBeenCalledWith(
+      doc.id,
+      '00000000-0000-0000-0000-000000000002',
+    );
+  });
+
+  it('does not upload when the heartbeat reports ownership loss', async () => {
+    const { worker, repo, gcs } = createWorker({
+      completeProcessing: false,
+      heartbeatOwned: false,
+    });
+    const callable = worker as unknown as {
+      processDocument(document: Document): Promise<void>;
+    };
+
+    await callable.processDocument(processingDocument());
+
+    expect(repo.heartbeatProcessing).toHaveBeenCalled();
+    expect(gcs.uploadDocuments).not.toHaveBeenCalled();
+    expect(repo.completeProcessing).not.toHaveBeenCalled();
+  });
+
+  it('skips cleanup when markFailed reports ownership loss', async () => {
+    const { worker, repo, gcs } = createWorker({
+      completeProcessing: true,
+      uploadDocumentsError: new Error('upload interrupted'),
+      markFailed: false,
+    });
+    const callable = worker as unknown as {
+      processDocument(document: Document): Promise<void>;
+    };
+
+    await callable.processDocument(processingDocument());
+
+    expect(repo.markFailed).toHaveBeenCalled();
     expect(gcs.deleteProcessedArtifacts).not.toHaveBeenCalled();
   });
 

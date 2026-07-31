@@ -193,6 +193,28 @@ export class DocumentsRepository {
   }
 
   /**
+   * Refresh the stale-processing lease only while this exact attempt owns it.
+   */
+  async heartbeatProcessing(
+    documentId: string,
+    processingToken: string,
+  ): Promise<boolean> {
+    const result = await this.db
+      .update(documents)
+      .set({ updatedAt: new Date() })
+      .where(
+        and(
+          eq(documents.id, documentId),
+          eq(documents.status, 'processing'),
+          eq(documents.processingToken, processingToken),
+          eq(documents.isActive, true),
+        ),
+      )
+      .returning({ id: documents.id });
+    return result.length > 0;
+  }
+
+  /**
    * Persist chunks and mark ready only if this exact processing attempt still
    * owns the document. A delete/reprocess/stale recovery clears the token.
    */

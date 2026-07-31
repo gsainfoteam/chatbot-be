@@ -58,6 +58,23 @@ describe('RetrievalService', () => {
     expect(hits).toEqual([{ path: '학사편람/졸업요건', content: '졸업 본문' }]);
   });
 
+  it('preserves dotted path segments that are not known extensions', async () => {
+    const repo = {
+      listReadyWithChunks: jest.fn(),
+      findChunkContentsByPaths: jest.fn(async (paths: string[]) => {
+        expect(paths).toEqual(['규정/3.2', '가이드/v1.2']);
+        return paths.map((path) => ({ path, content: `${path} 본문` }));
+      }),
+    };
+    const service = new RetrievalService(
+      repo as unknown as RetrievalRepository,
+    );
+
+    const hits = await service.getContentsByPaths(['규정/3.2', '가이드/v1.2']);
+
+    expect(hits).toHaveLength(2);
+  });
+
   it('uses title when summary is empty', async () => {
     const repo = {
       listReadyWithChunks: jest.fn(async () => [

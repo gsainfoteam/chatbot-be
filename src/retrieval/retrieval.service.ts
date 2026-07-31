@@ -8,6 +8,16 @@ import type {
 
 @Injectable()
 export class RetrievalService {
+  private static readonly KNOWN_EXTENSIONS = new Set([
+    'md',
+    'pdf',
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+    'webp',
+  ]);
+
   private readonly logger = new Logger(RetrievalService.name);
 
   constructor(private readonly retrievalRepo: RetrievalRepository) {}
@@ -77,8 +87,8 @@ export class RetrievalService {
   private stripKnownExtension(path: string): string {
     if (!path.includes('.')) return path;
     const lastDot = path.lastIndexOf('.');
-    const extension = path.substring(lastDot + 1);
-    if (extension.length <= 5 && /^[a-z0-9]+$/i.test(extension)) {
+    const extension = path.substring(lastDot + 1).toLowerCase();
+    if (RetrievalService.KNOWN_EXTENSIONS.has(extension)) {
       return path.substring(0, lastDot);
     }
     return path;

@@ -139,16 +139,21 @@ export class GcsStorageService {
   }
 
   private async deleteFiles(files: File[]): Promise<void> {
-    await Promise.all(
-      files.map(async (file) => {
-        try {
-          await file.delete({ ignoreNotFound: true });
-        } catch (error) {
-          this.logger.warn(
-            `Failed to delete ${file.name}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }),
+    const results = await Promise.allSettled(
+      files.map((file) => file.delete({ ignoreNotFound: true })),
     );
+
+    let failureCount = 0;
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') return;
+      failureCount += 1;
+      this.logger.warn(
+        `Failed to delete ${files[index].name}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`,
+      );
+    });
+
+    if (failureCount > 0) {
+      throw new Error(`Failed to delete ${failureCount} GCS object(s)`);
+    }
   }
 }

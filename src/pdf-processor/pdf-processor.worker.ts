@@ -141,6 +141,12 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
         `${resourceName}.pdf`,
       );
 
+      if (!result.chunks.length) {
+        throw new Error(
+          `PDF pipeline produced 0 chunks for resource=${resourceName}`,
+        );
+      }
+
       generatedArtifactsMayExist = true;
       await this.gcs.uploadDocuments(result.documents);
       const completed = await this.documentsRepo.completeProcessing(

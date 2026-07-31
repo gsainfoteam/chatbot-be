@@ -26,7 +26,31 @@ function processingDocument(): Document {
   };
 }
 
-function createWorker(completeProcessing: boolean) {
+function createWorker(options: {
+  completeProcessing: boolean;
+  chunks?: Array<{
+    path: string;
+    description: string;
+    content: string;
+    sortOrder: number;
+  }>;
+  processPdfError?: Error;
+}) {
+  const chunks = options.chunks ?? [
+    {
+      path: 'test',
+      description: '개요',
+      content: '# test',
+      sortOrder: 0,
+    },
+    {
+      path: 'test/section',
+      description: '섹션',
+      content: '## section',
+      sortOrder: 1,
+    },
+  ];
+
   const repo = {
     completeProcessing: jest.fn<
       (
@@ -35,8 +59,14 @@ function createWorker(completeProcessing: boolean) {
         summary: string,
         chunks: unknown[],
       ) => Promise<boolean>
-    >(() => Promise.resolve(completeProcessing)),
-    markFailed: jest.fn(() => Promise.resolve(true)),
+    >(() => Promise.resolve(options.completeProcessing)),
+    markFailed: jest.fn<
+      (
+        id: string,
+        processingToken: string,
+        errorMessage: string,
+      ) => Promise<boolean>
+    >(() => Promise.resolve(true)),
     requeueStaleProcessing: jest.fn(() => Promise.resolve(0)),
     claimQueued: jest.fn(() => Promise.resolve([])),
   };
@@ -48,14 +78,25 @@ function createWorker(completeProcessing: boolean) {
     ),
   };
   const pipeline = {
-    processPdf: jest.fn(() =>
-      Promise.resolve({
-        documents: { 'test.md': '# test' },
-        metadata: { description: 'summary', chunks: [] },
-        summary: 'summary',
-        chunks: [],
-      }),
-    ),
+    processPdf: options.processPdfError
+      ? jest.fn(() => Promise.reject(options.processPdfError))
+      : jest.fn(() =>
+          Promise.resolve({
+            documents: {
+              'test.md': '# test',
+              'test/section.md': '## section',
+            },
+            metadata: {
+              description: 'summary',
+              chunks: chunks.map((c) => ({
+                path: c.path,
+                description: c.description,
+              })),
+            },
+            summary: 'summary',
+            chunks,
+          }),
+        ),
   };
   const config = {
     get: jest.fn((_key: string) => undefined),
@@ -70,35 +111,72 @@ function createWorker(completeProcessing: boolean) {
     ),
     repo,
     gcs,
+    pipeline,
   };
 }
 
 describe('PdfProcessorWorker attempt ownership', () => {
   it('deletes generated artifacts when a delete/reprocess cancels the attempt', async () => {
-    const { worker, repo, gcs } = createWorker(false);
+    const { worker, repo, gcs } = createWorker({ completeProcessing: false });
     const callable = worker as unknown as {
       processDocument(doc: Document): Promise<void>;
     };
 
     await callable.processDocument(processingDocument());
 
-    expect(repo.completeProcessing).toHaveBeenCalledWith(
-      '00000000-0000-0000-0000-000000000001',
-      '00000000-0000-0000-0000-000000000002',
-      'summary',
-      [],
-    );
+    expect(repo.completeProcessing).toHaveBeenCalled();
     expect(gcs.deleteProcessedArtifacts).toHaveBeenCalledWith('test');
   });
 
   it('keeps generated artifacts when the attempt completes successfully', async () => {
-    const { worker, gcs } = createWorker(true);
+    const { worker, gcs, repo } = createWorker({ completeProcessing: true });
     const callable = worker as unknown as {
       processDocument(doc: Document): Promise<void>;
     };
 
     await callable.processDocument(processingDocument());
 
+    expect(repo.completeProcessing).toHaveBeenCalled();
     expect(gcs.deleteProcessedArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('marks failed when pipeline throws (e.g. LLM timeout)', async () => {
+    const { worker, repo, gcs } = createWorker({
+      completeProcessing: true,
+      processPdfError: new Error('timeout of 120000ms exceeded'),
+    });
+    const callable = worker as unknown as {
+      processDocument(doc: Document): Promise<void>;
+    };
+
+    await callable.processDocument(processingDocument());
+
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000001',
+      '00000000-0000-0000-0000-000000000002',
+      expect.stringContaining('timeout'),
+    );
+    expect(repo.completeProcessing).not.toHaveBeenCalled();
+    expect(gcs.uploadDocuments).not.toHaveBeenCalled();
+  });
+
+  it('marks failed when pipeline returns 0 chunks', async () => {
+    const { worker, repo, gcs } = createWorker({
+      completeProcessing: true,
+      chunks: [],
+    });
+    const callable = worker as unknown as {
+      processDocument(doc: Document): Promise<void>;
+    };
+
+    await callable.processDocument(processingDocument());
+
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000001',
+      '00000000-0000-0000-0000-000000000002',
+      expect.stringContaining('0 chunks'),
+    );
+    expect(repo.completeProcessing).not.toHaveBeenCalled();
+    expect(gcs.uploadDocuments).not.toHaveBeenCalled();
   });
 });

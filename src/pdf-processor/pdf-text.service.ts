@@ -30,28 +30,39 @@ export class PdfTextService {
     const pdf = await loadingTask.promise;
     const pageTexts: string[] = [];
 
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
-      const page = await pdf.getPage(pageNum);
-      const textContent = await page.getTextContent();
-      const raw = textContent.items
-        .map((item) => ('str' in item ? String(item.str) : ''))
-        .join(' ');
+    try {
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
+        const page = await pdf.getPage(pageNum);
+        try {
+          const textContent = await page.getTextContent();
+          const raw = textContent.items
+            .map((item) => ('str' in item ? String(item.str) : ''))
+            .join(' ');
 
-      if (isLikelyMojibake(raw)) {
-        const normalized = normalizeExtractedText(raw);
-        if (!normalized) {
-          this.logger.warn(
-            `Page ${pageNum}: Mojibake detected but recovery failed, skipping extracted text`,
-          );
-        } else {
-          this.logger.log(`Page ${pageNum}: Fixed mojibake in extracted text`);
+          if (isLikelyMojibake(raw)) {
+            const normalized = normalizeExtractedText(raw);
+            if (!normalized) {
+              this.logger.warn(
+                `Page ${pageNum}: Mojibake detected but recovery failed, skipping extracted text`,
+              );
+            } else {
+              this.logger.log(
+                `Page ${pageNum}: Fixed mojibake in extracted text`,
+              );
+            }
+            pageTexts.push(normalized);
+          } else {
+            pageTexts.push(raw);
+          }
+        } finally {
+          page.cleanup();
         }
-        pageTexts.push(normalized);
-      } else {
-        pageTexts.push(raw);
       }
+      return pageTexts;
+    } finally {
+      // pdfjs-dist v6: document uses cleanup(); loadingTask.destroy() tears down the worker.
+      await pdf.cleanup();
+      await loadingTask.destroy();
     }
-
-    return pageTexts;
   }
 }

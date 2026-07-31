@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { ListResourceItem } from '../../mcp/mcp-client.service';
+import type { ListResourceItem } from '../../retrieval/retrieval.types';
 import { LLM_CLIENT, type LlmClient } from '../llm/llm-client.interface';
 import type { LlmUsage } from '../types/llm.types';
 import {
@@ -9,8 +9,14 @@ import {
   getResourcePathSelectionUserPrompt,
   CHUNK_SELECTION_SYSTEM_PROMPT,
   getChunkSelectionUserPrompt,
-  formatResourceListForChunkSelection,
+  buildChunkSelectionCandidates,
+  formatChunkCandidatesForSelection,
 } from '../prompts';
+
+export type RelevantChunkSelection = {
+  rootPaths: string[];
+  detailPaths: string[];
+};
 
 /**
  * LLM 기반 리소스/문서 선별 서비스
@@ -39,14 +45,19 @@ export class ResourceSelectionService {
   async selectRelevantChunkPaths(
     question: string,
     resources: ListResourceItem[],
-    maxResults: number = 10,
+    maxResults: number = 5,
     tokenUsage?: LlmUsage,
-  ): Promise<string[]> {
+  ): Promise<RelevantChunkSelection> {
     if (!resources?.length) {
-      return [];
+      return { rootPaths: [], detailPaths: [] };
     }
 
-    const resourceListText = formatResourceListForChunkSelection(resources);
+    const candidates = buildChunkSelectionCandidates(resources);
+    if (candidates.length === 0) {
+      return { rootPaths: [], detailPaths: [] };
+    }
+
+    const resourceListText = formatChunkCandidatesForSelection(candidates);
     const userPrompt = getChunkSelectionUserPrompt({
       question,
       resourceListText,
@@ -74,20 +85,40 @@ export class ResourceSelectionService {
       }
 
       const parsed = JSON.parse(selectedText) as unknown;
-      const paths = Array.isArray(parsed)
-        ? (parsed as string[]).filter(
-            (p) => typeof p === 'string' && p.length > 0,
+      const numbers = Array.isArray(parsed)
+        ? parsed.filter(
+            (value): value is number =>
+              typeof value === 'number' &&
+              Number.isInteger(value) &&
+              value >= 1 &&
+              value <= candidates.length,
           )
         : [];
 
-      const limited = paths.slice(0, maxResults);
-      this.logger.log(`[DEBUG] 1차 선별 결과(chunk 경로): ${limited.length}개`);
-      return limited;
+      const selected = [...new Set(numbers)]
+        .slice(0, maxResults)
+        .map((number) => candidates[number - 1]);
+      const rootPaths = new Set<string>();
+      const detailPaths: string[] = [];
+
+      for (const candidate of selected) {
+        if (candidate.isRoot) {
+          rootPaths.add(candidate.path);
+        } else {
+          detailPaths.push(candidate.path);
+          if (candidate.rootPath) rootPaths.add(candidate.rootPath);
+        }
+      }
+
+      this.logger.log(
+        `[DEBUG] 1차 선별 결과: 루트 ${rootPaths.size}개, 세부 chunk ${detailPaths.length}개`,
+      );
+      return { rootPaths: [...rootPaths], detailPaths };
     } catch (error) {
       this.logger.warn(
-        `Failed to select chunk paths by LLM: ${error instanceof Error ? error.message : String(error)}`,
+        `Failed to select chunks by LLM: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return [];
+      return { rootPaths: [], detailPaths: [] };
     }
   }
 

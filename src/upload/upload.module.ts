@@ -1,12 +1,12 @@
 import { Module } from '@nestjs/common';
-import { HttpModule } from '@nestjs/axios';
 import { UploadController } from './upload.controller';
 import { UploadService } from './upload.service';
 import { AuthModule } from '../auth/auth.module';
 import { DbModule } from '../db/db.module';
+import { PdfProcessorModule } from '../pdf-processor/pdf-processor.module';
 
 @Module({
-  imports: [HttpModule, AuthModule, DbModule],
+  imports: [AuthModule, DbModule, PdfProcessorModule],
   controllers: [UploadController],
   providers: [UploadService],
 })

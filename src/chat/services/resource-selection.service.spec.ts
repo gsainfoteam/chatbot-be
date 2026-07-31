@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { ResourceSelectionService } from './resource-selection.service';
 import type { LlmResponse, LlmUsage } from '../types/llm.types';
-import type { ListResourceItem } from '../../mcp/mcp-client.service';
+import type { ListResourceItem } from '../../retrieval/retrieval.types';
 
 function createLlmResponse(content: string, totalTokens = 10): LlmResponse {
   return {
@@ -43,16 +43,14 @@ describe('ResourceSelectionService', () => {
 
     await expect(
       service.selectRelevantChunkPaths('질문', [], 10),
-    ).resolves.toEqual([]);
+    ).resolves.toEqual({ rootPaths: [], detailPaths: [] });
     expect(callLLM).not.toHaveBeenCalled();
   });
 
-  it('parses chunk paths from JSON and accumulates token usage', async () => {
+  it('maps selected numbers to detail paths and adds their root overview', async () => {
     const callLLM = jest
       .fn<CallLLM>()
-      .mockResolvedValue(
-        createLlmResponse('```json\n["a/b.md", "c/d.md"]\n```', 100),
-      );
+      .mockResolvedValue(createLlmResponse('```json\n[2, 1]\n```', 100));
     const { service } = createService(callLLM);
     const usage: LlmUsage = {
       prompt_tokens: 0,
@@ -62,21 +60,52 @@ describe('ResourceSelectionService', () => {
 
     const resources: ListResourceItem[] = [
       {
-        path: 'root',
-        description: 'desc',
-        chunks: [{ path: 'a/b.md', description: 'b' }],
+        path: '학사편람.pdf',
+        description: '학사 안내',
+        chunks: [
+          { path: '학사편람', description: '문서 개요' },
+          { path: '학사편람/수강신청', description: '수강신청 방법' },
+          { path: '학사편람/졸업', description: '졸업 요건' },
+        ],
       },
     ];
 
-    const paths = await service.selectRelevantChunkPaths(
+    const selected = await service.selectRelevantChunkPaths(
       '질문',
       resources,
       10,
       usage,
     );
 
-    expect(paths).toEqual(['a/b.md', 'c/d.md']);
+    expect(selected).toEqual({
+      rootPaths: ['학사편람'],
+      detailPaths: ['학사편람/졸업', '학사편람/수강신청'],
+    });
     expect(usage.total_tokens).toBe(100);
+  });
+
+  it('ignores invalid and duplicate chunk numbers', async () => {
+    const callLLM = jest
+      .fn<CallLLM>()
+      .mockResolvedValue(createLlmResponse('[1, 1, 99, "경로"]'));
+    const { service } = createService(callLLM);
+    const resources: ListResourceItem[] = [
+      {
+        path: '학사편람.pdf',
+        description: '학사 안내',
+        chunks: [
+          { path: '학사편람', description: '문서 개요' },
+          { path: '학사편람/수강신청', description: '수강신청 방법' },
+        ],
+      },
+    ];
+
+    await expect(
+      service.selectRelevantChunkPaths('수강신청', resources, 5),
+    ).resolves.toEqual({
+      rootPaths: ['학사편람'],
+      detailPaths: ['학사편람/수강신청'],
+    });
   });
 
   it('returns empty when path selection says 없음', async () => {

@@ -2,8 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import type {
   ListResourcesResult,
   ListResourceItem,
-} from '../../mcp/mcp-client.service';
-import { McpClientService } from '../../mcp/mcp-client.service';
+} from '../../retrieval/retrieval.types';
+import { RetrievalService } from '../../retrieval/retrieval.service';
 import { ResourceSelectionService } from './resource-selection.service';
 import type { LlmUsage } from '../types/llm.types';
 
@@ -17,14 +17,14 @@ export interface ResourceInfo {
 }
 
 /**
- * MCP 리소스 내용 fetch·파싱·FE 리소스 조립
+ * DB Retrieval 기반 리소스 내용 fetch·파싱·FE 리소스 조립
  */
 @Injectable()
 export class ResourceContentService {
   private readonly logger = new Logger(ResourceContentService.name);
 
   constructor(
-    private readonly mcpClientService: McpClientService,
+    private readonly retrievalService: RetrievalService,
     private readonly resourceSelectionService: ResourceSelectionService,
   ) {}
 
@@ -101,54 +101,6 @@ export class ResourceContentService {
       formats: ['pdf'],
       url: this.generateResourceUrl(pathForFe),
     });
-  }
-
-  /**
-   * get_resource 툴 응답에서 텍스트 내용 추출
-   * MCP 서버는 문자열을 직접 반환하므로, texts 배열이나 raw.content에서 추출
-   */
-  private extractContentFromToolResult(
-    toolResult: Awaited<ReturnType<typeof this.mcpClientService.callTool>>,
-  ): string {
-    // texts 배열에서 내용 추출 (가장 일반적인 경우)
-    if (toolResult.texts.length > 0) {
-      // texts가 여러 개인 경우 합치기
-      const content = toolResult.texts.join('\n');
-      // JSON 문자열이 아닌 경우 그대로 반환
-      if (
-        content &&
-        !content.trim().startsWith('{') &&
-        !content.trim().startsWith('[')
-      ) {
-        return content;
-      }
-    }
-
-    // raw.content에서 text 타입 항목 추출
-    const raw = toolResult.raw as {
-      content?: Array<{ type: string; text?: string }>;
-    };
-    if (raw?.content) {
-      const textContents: string[] = [];
-      for (const item of raw.content) {
-        if (item.type === 'text' && 'text' in item) {
-          const text = item.text;
-          // JSON 문자열이 아닌 경우 그대로 추가
-          if (
-            text &&
-            !text.trim().startsWith('{') &&
-            !text.trim().startsWith('[')
-          ) {
-            textContents.push(text);
-          }
-        }
-      }
-      if (textContents.length > 0) {
-        return textContents.join('\n');
-      }
-    }
-
-    return '';
   }
 
   /**
@@ -346,38 +298,23 @@ export class ResourceContentService {
   }
 
   /**
-   * 하위 문서 내용 가져오기
+   * 하위 문서 내용 가져오기 (DB chunks)
    */
   private async fetchSubDocumentContents(
     subDocuments: Array<{ path: string; description: string }>,
   ): Promise<string> {
-    const results = await Promise.all(
-      subDocuments.map(async (doc) => {
-        try {
-          const resourcePath = this.normalizeResourcePath(doc.path);
-          this.logger.debug(`Fetching sub-document: ${resourcePath}`);
-          const toolResult = await this.mcpClientService.callTool(
-            'get_resource',
-            { path: resourcePath },
-          );
-          const content = this.extractContentFromToolResult(toolResult);
-          if (content) {
-            const documentTitle = this.extractDocumentTitle(
-              resourcePath,
-              doc.path,
-              ['md'],
-            );
-            return `\n\n## 하위 문서: ${documentTitle}\n\n**설명**: ${doc.description}\n\n${content}`;
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to fetch sub-document ${doc.path}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        return '';
-      }),
+    const hits = await this.retrievalService.getContentsByPaths(
+      subDocuments.map((d) => d.path),
     );
-    return results.filter(Boolean).join('\n');
+    const byNormalized = new Map(hits.map((h) => [h.path, h.content]));
+
+    const parts: string[] = [];
+    for (const doc of subDocuments) {
+      const content = byNormalized.get(this.normalizeResourcePath(doc.path));
+      if (!content) continue;
+      parts.push(`\n\n## 관련 정보\n\n주제: ${doc.description}\n\n${content}`);
+    }
+    return parts.join('\n');
   }
 
   /**
@@ -397,48 +334,43 @@ export class ResourceContentService {
     );
 
     let t0 = Date.now();
-    const chunkPaths = await this.resourceSelectionService.selectRelevantChunkPaths(
-      question,
-      resources,
-      10,
-      tokenUsage,
-    );
+    const chunkSelection =
+      await this.resourceSelectionService.selectRelevantChunkPaths(
+        question,
+        resources,
+        5,
+        tokenUsage,
+      );
     this.logger.log(
       `[PERF] selectRelevantChunkPaths(LLM): ${Date.now() - t0}ms`,
     );
 
+    const chunkPaths = [
+      ...chunkSelection.rootPaths,
+      ...chunkSelection.detailPaths,
+    ];
     if (chunkPaths.length === 0) {
       return { content: '', usedResources: [] };
     }
 
     t0 = Date.now();
-    const chunkResults = await Promise.all(
-      chunkPaths.map(async (chunkPath) => {
-        try {
-          const pathForTool = this.normalizeResourcePath(chunkPath);
-          this.logger.debug(`Fetching chunk: ${pathForTool}`);
-          const toolResult = await this.mcpClientService.callTool(
-            'get_resource',
-            { path: pathForTool },
-          );
-          const content = this.extractContentFromToolResult(toolResult);
-          if (content) {
-            const title = chunkPath.split('/').pop() || chunkPath || '문서';
-            return { title, content, path: chunkPath };
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to fetch chunk ${chunkPath}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        return null;
-      }),
-    );
-    const documentCandidates = chunkResults.filter(
-      (r): r is { title: string; content: string; path: string } => r !== null,
-    );
+    const hits = await this.retrievalService.getContentsByPaths(chunkPaths);
+    const contentByPath = new Map(hits.map((h) => [h.path, h.content]));
+    const documentCandidates = chunkPaths
+      .map((chunkPath) => {
+        const content = contentByPath.get(
+          this.normalizeResourcePath(chunkPath),
+        );
+        if (!content) return null;
+        const title = chunkPath.split('/').pop() || chunkPath || '문서';
+        return { title, content, path: chunkPath };
+      })
+      .filter(
+        (r): r is { title: string; content: string; path: string } =>
+          r !== null,
+      );
     this.logger.log(
-      `[PERF] get_resource 루프(신 형식, ${chunkPaths.length}개): ${Date.now() - t0}ms`,
+      `[PERF] getContentsByPaths(신 형식, ${chunkPaths.length}개): ${Date.now() - t0}ms`,
     );
 
     if (documentCandidates.length === 0) {
@@ -446,48 +378,20 @@ export class ResourceContentService {
     }
 
     this.logger.log(
-      `[DEBUG] 2차 선별(본문 기준) 입력: 후보 문서 ${documentCandidates.length}개 → LLM에 전달`,
+      `[DEBUG] 최종 사용 문서: 루트 ${chunkSelection.rootPaths.length}개, 세부 chunk ${chunkSelection.detailPaths.length}개`,
     );
-
-    t0 = Date.now();
-    const selectedDocuments = await this.resourceSelectionService.selectMostRelevantDocuments(
-      question,
-      documentCandidates.map((doc) => ({
-        title: doc.title,
-        content: doc.content,
-        path: doc.path,
-      })),
-      tokenUsage,
-    );
-    this.logger.log(
-      `[PERF] selectMostRelevantDocuments(LLM, 신 형식): ${Date.now() - t0}ms`,
-    );
-
-    this.logger.log(
-      `[DEBUG] 2차 선별 결과(최종 사용 문서): ${selectedDocuments.length}개`,
-    );
-
-    if (selectedDocuments.length === 0) {
-      this.logger.log('No documents selected by LLM as relevant');
-      return { content: '', usedResources: [] };
-    }
 
     const contents: string[] = [];
     const mdUsed: Array<{ path: string; formats: string[] }> = [];
 
-    for (const selected of selectedDocuments) {
-      const doc = documentCandidates.find((d) => d.path === selected.path);
-      if (doc) {
-        contents.push(`\n\n## 리소스: ${doc.title}\n\n${doc.content}`);
-        mdUsed.push({ path: doc.path, formats: ['md'] });
-      }
+    for (const doc of documentCandidates) {
+      contents.push(`\n\n## 관련 정보\n\n${doc.content}`);
+      mdUsed.push({ path: doc.path, formats: ['md'] });
     }
 
-    const selectedPaths = selectedDocuments.map((s) => s.path);
+    const selectedPaths = documentCandidates.map((doc) => doc.path);
     const fromMarkdown: Array<{ path: string; formats: string[] }> = [];
-    for (const selected of selectedDocuments) {
-      const doc = documentCandidates.find((d) => d.path === selected.path);
-      if (!doc?.content) continue;
+    for (const doc of documentCandidates) {
       fromMarkdown.push(
         ...this.extractPdfPngReferencesFromMarkdown(doc.content, doc.path),
       );
@@ -518,9 +422,9 @@ export class ResourceContentService {
   }
 
   /**
-   * list_resources tool 응답에서 관련 리소스 내용 가져오기
-   * - 신 형식(resources + chunks): description 보고 chunk 경로 선별 → get_resource(chunk_path)
-   * - 구 형식(filteredResources): 경로만 선별 후 get_resource
+   * 문서 catalog에서 관련 리소스 내용 가져오기
+   * - 신 형식(resources + chunks): description 보고 chunk 경로 선별 → DB content
+   * - 구 형식(filteredResources): 경로만 선별 후 DB content (dead path 가능)
    * @returns 문서 내용과 usedResources(선별 경로·formats; chunk는 md 포함). FE 참조 목록은 PDF/PNG만 노출.
    */
   async fetchRelevantResourceContents(
@@ -565,12 +469,13 @@ export class ResourceContentService {
     );
 
     let t0 = Date.now();
-    const relevantResources = await this.resourceSelectionService.selectRelevantResourcePaths(
-      question,
-      mdResources,
-      10,
-      tokenUsage,
-    );
+    const relevantResources =
+      await this.resourceSelectionService.selectRelevantResourcePaths(
+        question,
+        mdResources,
+        10,
+        tokenUsage,
+      );
     this.logger.log(
       `[PERF] selectRelevantResourcePaths(LLM, 구 형식): ${Date.now() - t0}ms`,
     );
@@ -584,39 +489,30 @@ export class ResourceContentService {
     );
 
     t0 = Date.now();
-    const resourceResults = await Promise.all(
-      relevantResources.map(async (resource) => {
-        try {
-          const resourcePath = this.normalizeResourcePath(resource.path);
-          this.logger.debug(`Fetching markdown resource: ${resourcePath}`);
-          const toolResult = await this.mcpClientService.callTool(
-            'get_resource',
-            { path: resourcePath },
-          );
-          const content = this.extractContentFromToolResult(toolResult);
-          if (content) {
-            const documentTitle = this.extractDocumentTitle(
-              resourcePath,
-              resource.path,
-              resource.formats,
-            );
-            const subDocuments = this.parseDocumentLinks(content);
-            return {
-              title: documentTitle,
-              content,
-              path: resource.path,
-              formats: resource.formats || [],
-              subDocuments,
-            };
-          }
-        } catch (error) {
-          this.logger.warn(
-            `Failed to fetch ${resource.path}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        return null;
-      }),
+    const hits = await this.retrievalService.getContentsByPaths(
+      relevantResources.map((r) => r.path),
     );
+    const contentByPath = new Map(hits.map((h) => [h.path, h.content]));
+    const resourceResults = relevantResources.map((resource) => {
+      const content = contentByPath.get(
+        this.normalizeResourcePath(resource.path),
+      );
+      if (!content) return null;
+      const resourcePath = this.normalizeResourcePath(resource.path);
+      const documentTitle = this.extractDocumentTitle(
+        resourcePath,
+        resource.path,
+        resource.formats,
+      );
+      const subDocuments = this.parseDocumentLinks(content);
+      return {
+        title: documentTitle,
+        content,
+        path: resource.path,
+        formats: resource.formats || [],
+        subDocuments,
+      };
+    });
     const documentCandidates = resourceResults.filter(
       (
         r,
@@ -629,7 +525,7 @@ export class ResourceContentService {
       } => r !== null,
     );
     this.logger.log(
-      `[PERF] get_resource 루프(구 형식, ${relevantResources.length}개): ${Date.now() - t0}ms`,
+      `[PERF] getContentsByPaths(구 형식, ${relevantResources.length}개): ${Date.now() - t0}ms`,
     );
 
     if (documentCandidates.length === 0) {
@@ -641,15 +537,16 @@ export class ResourceContentService {
     );
 
     t0 = Date.now();
-    const selectedDocuments = await this.resourceSelectionService.selectMostRelevantDocuments(
-      question,
-      documentCandidates.map((doc) => ({
-        title: doc.title,
-        content: doc.content,
-        path: doc.path,
-      })),
-      tokenUsage,
-    );
+    const selectedDocuments =
+      await this.resourceSelectionService.selectMostRelevantDocuments(
+        question,
+        documentCandidates.map((doc) => ({
+          title: doc.title,
+          content: doc.content,
+          path: doc.path,
+        })),
+        tokenUsage,
+      );
     this.logger.log(
       `[PERF] selectMostRelevantDocuments(LLM, 구 형식): ${Date.now() - t0}ms`,
     );
@@ -672,9 +569,7 @@ export class ResourceContentService {
         (d) => d.title === selected.title,
       );
       if (docCandidate) {
-        contents.push(
-          `\n\n## 리소스: ${docCandidate.title}\n\n${docCandidate.content}`,
-        );
+        contents.push(`\n\n## 관련 정보\n\n${docCandidate.content}`);
 
         const hasPdf = docCandidate.formats.includes('pdf');
         const hasPng = docCandidate.formats.includes('png');
@@ -764,7 +659,7 @@ export class ResourceContentService {
           `[PERF] fetchSubDocumentContents(${relevantSubDocuments.length}개): ${Date.now() - t0}ms`,
         );
         if (subDocumentContents) {
-          contents.push('\n\n---\n\n## 관련 하위 문서\n' + subDocumentContents);
+          contents.push('\n\n---\n\n## 추가 관련 정보\n' + subDocumentContents);
         }
       }
     }

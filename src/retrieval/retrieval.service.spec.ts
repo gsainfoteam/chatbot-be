@@ -15,7 +15,6 @@ describe('RetrievalService', () => {
             {
               path: '학사편람/졸업요건',
               description: '졸업',
-              content: '본문',
               sortOrder: 0,
             },
           ],
@@ -71,7 +70,6 @@ describe('RetrievalService', () => {
             {
               path: 'doc/a',
               description: 'a',
-              content: 'c',
               sortOrder: 0,
             },
           ],

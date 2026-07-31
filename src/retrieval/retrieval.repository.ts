@@ -11,7 +11,6 @@ export type ReadyDocumentWithChunks = {
   chunks: Array<{
     path: string;
     description: string;
-    content: string;
     sortOrder: number;
   }>;
 };
@@ -47,7 +46,6 @@ export class RetrievalRepository {
         chunkId: documentChunks.id,
         chunkPath: documentChunks.path,
         chunkDescription: documentChunks.description,
-        chunkContent: documentChunks.content,
         chunkSortOrder: documentChunks.sortOrder,
       })
       .from(documents)
@@ -77,7 +75,6 @@ export class RetrievalRepository {
       doc.chunks.push({
         path: row.chunkPath,
         description: row.chunkDescription,
-        content: row.chunkContent,
         sortOrder: row.chunkSortOrder,
       });
     }

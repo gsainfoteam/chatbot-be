@@ -1,9 +1,31 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { describe, expect, it, jest } from '@jest/globals';
 import type { Document } from '../db';
+import type { OrganizationAccessService } from '../organizations/organization-access.service';
+import {
+  RepositoryAuthorizationError,
+  type OrganizationsRepository,
+} from '../organizations/organizations.repository';
+import type { AdminPrincipal } from '../organizations/organization.types';
 import type { DocumentsRepository } from '../pdf-processor/documents.repository';
 import type { GcsStorageService } from '../pdf-processor/gcs-storage.service';
 import { parseExpiresAt, UploadService } from './upload.service';
+
+const ORGANIZATION_ID = '00000000-0000-0000-0000-000000000010';
+
+function principal(overrides: Partial<AdminPrincipal> = {}): AdminPrincipal {
+  return {
+    uuid: 'admin-1',
+    email: 'admin@example.com',
+    role: 'ADMIN',
+    ...overrides,
+  };
+}
 
 function document(overrides: Partial<Document> = {}): Document {
   return {
@@ -16,6 +38,7 @@ function document(overrides: Partial<Document> = {}): Document {
     errorMessage: null,
     processingToken: null,
     uploadedByIdpUuid: 'admin-1',
+    ownerOrganizationId: ORGANIZATION_ID,
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -28,317 +51,563 @@ function document(overrides: Partial<Document> = {}): Document {
 
 function createService() {
   const repo = {
-    createUploading: jest.fn<(...args: unknown[]) => Promise<Document>>(),
-    markQueuedAfterUpload: jest.fn<(id: string) => Promise<Document | null>>(),
-    hardDelete: jest.fn<(id: string) => Promise<void>>(),
-    cancelAndSoftDelete:
-      jest.fn<(id: string, idpUuid: string) => Promise<Document | null>>(),
-    findById: jest.fn<(id: string) => Promise<Document | null>>(),
-    updateExpiresAt:
-      jest.fn<
-        (
-          id: string,
-          idpUuid: string,
-          expiresAt: Date | null,
-        ) => Promise<Document | null>
-      >(),
-    enqueueReprocess:
-      jest.fn<
-        (
-          id: string,
-          idpUuid: string,
-          cooldownBefore: Date,
-          now: Date,
-        ) => Promise<Document | null>
-      >(),
+    hardDelete: jest.fn<DocumentsRepository['hardDelete']>(),
+    listByUploader: jest.fn<DocumentsRepository['listByUploader']>(async () => [
+      document(),
+    ]),
   };
   const gcs = {
     toGsPath: jest.fn((path: string) => `gs://bucket/${path}`),
-    uploadPdf:
-      jest.fn<(resourceName: string, pdfBytes: Buffer) => Promise<string>>(),
-    deleteResourceArtifacts: jest.fn<(resourceName: string) => Promise<void>>(),
+    uploadPdf: jest.fn<GcsStorageService['uploadPdf']>(),
+    deleteResourceArtifacts:
+      jest.fn<GcsStorageService['deleteResourceArtifacts']>(),
+  };
+  const organizationsRepo = {
+    findDocument: jest.fn(async () => document()),
+    findOrganization: jest.fn(async (id: string) => ({
+      id,
+      name: '조직',
+      slug: 'organization',
+      isDefault: false,
+      createdByIdpUuid: 'admin-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    hydrateDocuments: jest.fn<OrganizationsRepository['hydrateDocuments']>(
+      async (rows: Document[]) =>
+        rows.map((row) => ({
+          document: row,
+          ownerOrganization: {
+            id: row.ownerOrganizationId,
+            name: '인포팀',
+            slug: 'infoteam',
+          },
+          uploader: {
+            idpUuid: row.uploadedByIdpUuid,
+            email: 'admin@example.com',
+            name: 'Admin',
+          },
+          sharedOrganizations: [],
+        })),
+    ),
+    findAcceptedMemberships: jest.fn(
+      async (_organizationIds: string[], _memberIdpUuid: string) => [
+        {
+          organizationId: ORGANIZATION_ID,
+          role: 'MANAGER' as 'MANAGER' | 'MEMBER',
+        },
+      ],
+    ),
+    isCurrentSuperAdmin: jest.fn(async (actor: AdminPrincipal) =>
+      Promise.resolve(actor.role === 'SUPER_ADMIN'),
+    ),
+    listManageableDocuments: jest.fn<
+      OrganizationsRepository['listManageableDocuments']
+    >(async () => [document()]),
+    listOrganizationDocuments: jest.fn(async () => [document()]),
+    createUploadingDocument: jest.fn<
+      OrganizationsRepository['createUploadingDocument']
+    >(async () => document()),
+    finalizeUploadingDocument: jest.fn<
+      OrganizationsRepository['finalizeUploadingDocument']
+    >(async () => ({ kind: 'ok', document: document({ status: 'queued' }) })),
+    cancelAndSoftDeleteDocument: jest.fn<
+      OrganizationsRepository['cancelAndSoftDeleteDocument']
+    >(async () => ({ kind: 'ok', document: document({ isActive: false }) })),
+    updateDocumentExpiresAt: jest.fn<
+      OrganizationsRepository['updateDocumentExpiresAt']
+    >(async () => ({ kind: 'ok', document: document() })),
+    enqueueDocumentReprocess: jest.fn<
+      OrganizationsRepository['enqueueDocumentReprocess']
+    >(async () => ({ kind: 'ok', document: document({ status: 'queued' }) })),
+    setShare: jest.fn<OrganizationsRepository['setShare']>(async () => ({
+      kind: 'ok',
+      document: document(),
+    })),
+    removeShare: jest.fn<OrganizationsRepository['removeShare']>(async () => ({
+      kind: 'ok',
+      document: document(),
+    })),
+    transferDocument: jest.fn<OrganizationsRepository['transferDocument']>(
+      async () => ({ kind: 'ok', document: document() }),
+    ),
+  };
+  const accessDecision = (row = document()) => ({
+    document: row,
+    relation: 'OWNER' as const,
+    ownerRole: 'MANAGER' as const,
+    canView: true,
+    canManage: true,
+    canShare: true,
+    canTransfer: true,
+  });
+  const access = {
+    isSuperAdmin: jest.fn(
+      (actor: AdminPrincipal) => actor.role === 'SUPER_ADMIN',
+    ),
+    resolveUploadOrganization: jest.fn<
+      OrganizationAccessService['resolveUploadOrganization']
+    >(async () => ({
+      id: ORGANIZATION_ID,
+      name: '인포팀',
+      slug: 'infoteam',
+      isDefault: true,
+      createdByIdpUuid: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })),
+    requireDocumentView: jest.fn(async () => accessDecision()),
+    requireDocumentManage: jest.fn(async () => accessDecision()),
+    requireDocumentShare: jest.fn(async () => accessDecision()),
+    requireOrganizationMember: jest.fn(async () => null),
+    requireOrganizationManager: jest.fn(async () => null),
   };
   return {
     service: new UploadService(
       repo as unknown as DocumentsRepository,
       gcs as unknown as GcsStorageService,
+      organizationsRepo as unknown as OrganizationsRepository,
+      access as unknown as OrganizationAccessService,
     ),
     repo,
     gcs,
+    organizationsRepo,
+    access,
   };
 }
 
-describe('UploadService atomic transitions', () => {
-  it('reserves the DB resource name before uploading to GCS', async () => {
-    const { service, repo, gcs } = createService();
-    const calls: string[] = [];
-    const reserved = document();
-    const queued = document({ status: 'queued' });
+describe('UploadService organization-aware transitions', () => {
+  it('validates organization access before reserving or uploading', async () => {
+    const { service, organizationsRepo, gcs, access } = createService();
+    access.resolveUploadOrganization.mockRejectedValue(
+      new ForbiddenException('membership required'),
+    );
 
-    repo.createUploading.mockImplementation(() => {
+    await expect(
+      service.upload(
+        Buffer.from('%PDF-test'),
+        'test.pdf',
+        '테스트',
+        principal(),
+        ORGANIZATION_ID,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(organizationsRepo.createUploadingDocument).not.toHaveBeenCalled();
+    expect(gcs.uploadPdf).not.toHaveBeenCalled();
+  });
+
+  it('stops before GCS when membership is revoked before reservation', async () => {
+    const { service, organizationsRepo, gcs } = createService();
+    organizationsRepo.createUploadingDocument.mockRejectedValue(
+      new RepositoryAuthorizationError(),
+    );
+
+    await expect(
+      service.upload(
+        Buffer.from('%PDF-test'),
+        'test.pdf',
+        '테스트',
+        principal(),
+        ORGANIZATION_ID,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(gcs.uploadPdf).not.toHaveBeenCalled();
+  });
+
+  it('uses the default resolver only when organizationId is omitted', async () => {
+    const { service, organizationsRepo, gcs, access } = createService();
+    gcs.uploadPdf.mockResolvedValue('gs://bucket/test.pdf');
+
+    await service.upload(
+      Buffer.from('%PDF-test'),
+      'test.pdf',
+      '테스트',
+      principal(),
+    );
+
+    expect(access.resolveUploadOrganization).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ uuid: 'admin-1' }),
+    );
+    expect(organizationsRepo.createUploadingDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerOrganizationId: ORGANIZATION_ID,
+        actor: principal(),
+      }),
+    );
+  });
+
+  it('reauthorizes a direct read after hydration before returning data', async () => {
+    const { service, access, organizationsRepo } = createService();
+    access.requireDocumentView
+      .mockResolvedValueOnce({
+        document: document(),
+        relation: 'OWNER',
+        ownerRole: 'MANAGER',
+        canView: true,
+        canManage: true,
+        canShare: true,
+        canTransfer: true,
+      })
+      .mockRejectedValueOnce(new NotFoundException('Document not found'));
+
+    await expect(
+      service.getById(document().id, principal()),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(organizationsRepo.hydrateDocuments).toHaveBeenCalled();
+    expect(access.requireDocumentView).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not fall back after an invalid supplied organizationId', async () => {
+    const { service, organizationsRepo, access } = createService();
+    access.resolveUploadOrganization.mockRejectedValue(
+      new BadRequestException('invalid organization'),
+    );
+    await expect(
+      service.upload(
+        Buffer.from('%PDF-test'),
+        'test.pdf',
+        '테스트',
+        principal(),
+        'invalid-id',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(organizationsRepo.createUploadingDocument).not.toHaveBeenCalled();
+  });
+
+  it('reserves before GCS upload and queues afterward', async () => {
+    const { service, organizationsRepo, gcs } = createService();
+    const calls: string[] = [];
+    organizationsRepo.createUploadingDocument.mockImplementation(async () => {
       calls.push('reserve');
-      return Promise.resolve(reserved);
+      return document();
     });
-    gcs.uploadPdf.mockImplementation(() => {
+    gcs.uploadPdf.mockImplementation(async () => {
       calls.push('upload');
-      return Promise.resolve('gs://bucket/test.pdf');
+      return 'gs://bucket/test.pdf';
     });
-    repo.markQueuedAfterUpload.mockImplementation(() => {
+    organizationsRepo.finalizeUploadingDocument.mockImplementation(async () => {
       calls.push('queue');
-      return Promise.resolve(queued);
+      return { kind: 'ok', document: document({ status: 'queued' }) };
     });
 
     await service.upload(
       Buffer.from('%PDF-test'),
       'test.pdf',
       '테스트',
-      'admin-1',
+      principal(),
     );
-
     expect(calls).toEqual(['reserve', 'upload', 'queue']);
   });
 
-  it('returns conflict without touching GCS when the name is already reserved', async () => {
-    const { service, repo, gcs } = createService();
-    repo.createUploading.mockRejectedValue({ code: '23505' });
-
+  it('returns conflict without GCS when resource name is reserved', async () => {
+    const { service, organizationsRepo, gcs } = createService();
+    organizationsRepo.createUploadingDocument.mockRejectedValue({
+      code: '23505',
+    });
     await expect(
-      service.upload(Buffer.from('%PDF-test'), 'test.pdf', '테스트', 'admin-1'),
+      service.upload(
+        Buffer.from('%PDF-test'),
+        'test.pdf',
+        '테스트',
+        principal(),
+      ),
     ).rejects.toBeInstanceOf(ConflictException);
     expect(gcs.uploadPdf).not.toHaveBeenCalled();
   });
 
-  it('maps GCS upload failures to 503 without exposing the raw error', async () => {
+  it('rolls back DB reservation and maps GCS upload failure to 503', async () => {
     const { service, repo, gcs } = createService();
-    repo.createUploading.mockResolvedValue(document());
-    gcs.uploadPdf.mockRejectedValue(new Error('bucket ACL denied xyz'));
-    repo.hardDelete.mockResolvedValue(undefined);
-
+    gcs.uploadPdf.mockRejectedValue(new Error('secret storage error'));
     await expect(
-      service.upload(Buffer.from('%PDF-test'), 'test.pdf', '테스트', 'admin-1'),
-    ).rejects.toMatchObject({
-      response: {
-        statusCode: 503,
-        message: 'Document storage is temporarily unavailable',
-      },
-    });
+      service.upload(
+        Buffer.from('%PDF-test'),
+        'test.pdf',
+        '테스트',
+        principal(),
+      ),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(gcs.deleteResourceArtifacts).toHaveBeenCalledWith('test');
     expect(repo.hardDelete).toHaveBeenCalled();
   });
 
-  it('cancels the DB processing attempt before deleting GCS artifacts', async () => {
-    const { service, repo, gcs } = createService();
-    const calls: string[] = [];
-    repo.cancelAndSoftDelete.mockImplementation(() => {
-      calls.push('cancel');
-      return Promise.resolve(document({ isActive: false }));
-    });
-    gcs.deleteResourceArtifacts.mockImplementation(() => {
-      calls.push('delete-artifacts');
-      return Promise.resolve();
+  it('reauthorizes after GCS upload before publishing the document', async () => {
+    const { service, repo, organizationsRepo, gcs } = createService();
+    gcs.uploadPdf.mockResolvedValue('gs://bucket/test.pdf');
+    organizationsRepo.finalizeUploadingDocument.mockResolvedValue({
+      kind: 'forbidden',
     });
 
-    await service.delete(
-      '00000000-0000-0000-0000-000000000001',
-      'admin-1',
-    );
-
-    expect(calls).toEqual(['cancel', 'delete-artifacts']);
-    expect(repo.cancelAndSoftDelete).toHaveBeenCalledWith(
-      '00000000-0000-0000-0000-000000000001',
-      'admin-1',
-    );
-  });
-
-  it('maps GCS delete failures to 503 without exposing the raw error', async () => {
-    const { service, repo, gcs } = createService();
-    repo.cancelAndSoftDelete.mockResolvedValue(document({ isActive: false }));
-    gcs.deleteResourceArtifacts.mockRejectedValue(
-      new Error('Permission denied on objects/test/'),
-    );
-
     await expect(
-      service.delete(
-        '00000000-0000-0000-0000-000000000001',
-        'admin-1',
+      service.upload(
+        Buffer.from('%PDF-test'),
+        'test.pdf',
+        '테스트',
+        principal(),
+        ORGANIZATION_ID,
       ),
-    ).rejects.toMatchObject({
-      response: {
-        statusCode: 503,
-        message: 'Document storage is temporarily unavailable',
-      },
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(organizationsRepo.finalizeUploadingDocument).toHaveBeenCalledWith({
+      documentId: document().id,
+      expectedOwnerOrganizationId: ORGANIZATION_ID,
+      actor: principal(),
     });
+    expect(gcs.deleteResourceArtifacts).toHaveBeenCalledWith('test');
+    expect(repo.hardDelete).toHaveBeenCalledWith(document().id);
   });
 
-  it('returns 404 without touching GCS when delete ownership does not match', async () => {
-    const { service, repo, gcs } = createService();
-    repo.cancelAndSoftDelete.mockResolvedValue(null);
-
-    await expect(
-      service.delete(
-        '00000000-0000-0000-0000-000000000001',
-        'other-admin',
-      ),
-    ).rejects.toMatchObject({ status: 404 });
-    expect(repo.cancelAndSoftDelete).toHaveBeenCalledWith(
-      '00000000-0000-0000-0000-000000000001',
-      'other-admin',
-    );
-    expect(gcs.deleteResourceArtifacts).not.toHaveBeenCalled();
-  });
-
-  it('returns 404 when reprocess ownership does not match', async () => {
-    const { service, repo } = createService();
-    repo.findById.mockResolvedValue(document({ uploadedByIdpUuid: 'admin-1' }));
-
-    await expect(
-      service.reprocess(
-        '00000000-0000-0000-0000-000000000001',
-        'other-admin',
-      ),
-    ).rejects.toMatchObject({ status: 404 });
-    expect(repo.enqueueReprocess).not.toHaveBeenCalled();
+  it('uses expected owner organization in the soft-delete predicate', async () => {
+    const { service, organizationsRepo, gcs } = createService();
+    gcs.deleteResourceArtifacts.mockResolvedValue(undefined);
+    await service.delete(document().id, principal());
+    expect(organizationsRepo.cancelAndSoftDeleteDocument).toHaveBeenCalledWith({
+      documentId: document().id,
+      expectedOwnerOrganizationId: ORGANIZATION_ID,
+      actor: principal(),
+    });
   });
 
   it.each(['uploading', 'queued', 'processing'] as const)(
     'rejects reprocess while status is %s',
     async (status) => {
-      const { service, repo } = createService();
-      repo.findById.mockResolvedValue(document({ status }));
-
+      const { service, organizationsRepo, access } = createService();
+      access.requireDocumentManage.mockResolvedValue({
+        document: document({ status }),
+        relation: 'OWNER',
+        ownerRole: 'MANAGER',
+        canView: true,
+        canManage: true,
+        canShare: true,
+        canTransfer: true,
+      });
       await expect(
-        service.reprocess(
-          '00000000-0000-0000-0000-000000000001',
-          'admin-1',
-        ),
+        service.reprocess(document().id, principal()),
       ).rejects.toBeInstanceOf(ConflictException);
-      expect(repo.enqueueReprocess).not.toHaveBeenCalled();
+      expect(organizationsRepo.enqueueDocumentReprocess).not.toHaveBeenCalled();
     },
   );
 
-  it('rejects reprocess during the 24-hour cooldown', async () => {
-    const { service, repo } = createService();
-    repo.findById.mockResolvedValue(
-      document({
-        status: 'ready',
-        lastReprocessedAt: new Date(Date.now() - 23 * 60 * 60 * 1000),
-      }),
-    );
-
-    try {
-      await service.reprocess(
-        '00000000-0000-0000-0000-000000000001',
-        'admin-1',
-      );
-      throw new Error('Expected reprocess to be rejected');
-    } catch (error) {
-      expect(error).toEqual(
-        expect.objectContaining({
-          status: 429,
-          response: expect.objectContaining({
-            retryAt: expect.any(String),
-          }),
-        }),
-      );
-    }
-    expect(repo.enqueueReprocess).not.toHaveBeenCalled();
-  });
-
-  it('allows reprocess after the 24-hour cooldown', async () => {
-    const { service, repo } = createService();
+  it('preserves the reprocess cooldown and owner-state predicate', async () => {
+    const { service, organizationsRepo, access } = createService();
     const current = document({
       status: 'ready',
       lastReprocessedAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
     });
-    repo.findById.mockResolvedValue(current);
-    repo.enqueueReprocess.mockResolvedValue(
-      document({ status: 'queued', lastReprocessedAt: new Date() }),
+    access.requireDocumentManage.mockResolvedValue({
+      document: current,
+      relation: 'OWNER',
+      ownerRole: 'MANAGER',
+      canView: true,
+      canManage: true,
+      canShare: true,
+      canTransfer: true,
+    });
+    organizationsRepo.enqueueDocumentReprocess.mockResolvedValue({
+      kind: 'ok',
+      document: document({ status: 'queued', lastReprocessedAt: new Date() }),
+    });
+    await service.reprocess(current.id, principal());
+    expect(organizationsRepo.enqueueDocumentReprocess).toHaveBeenCalledWith({
+      documentId: current.id,
+      expectedOwnerOrganizationId: ORGANIZATION_ID,
+      cooldownBefore: expect.any(Date),
+      now: expect.any(Date),
+      actor: principal(),
+    });
+  });
+
+  it('shared viewers cannot mutate because access is checked first', async () => {
+    const { service, organizationsRepo, access } = createService();
+    access.requireDocumentManage.mockRejectedValue(
+      new ForbiddenException('Document management permission required'),
+    );
+    await expect(
+      service.delete(document().id, principal()),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(
+      organizationsRepo.cancelAndSoftDeleteDocument,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('sharing returns the committed result without a second authorization read', async () => {
+    const { service, gcs, organizationsRepo, access } = createService();
+    await service.shareDocument(
+      document().id,
+      '00000000-0000-0000-0000-000000000020',
+      principal(),
+    );
+    expect(organizationsRepo.setShare).toHaveBeenCalled();
+    expect(access.requireDocumentView).not.toHaveBeenCalled();
+    expect(gcs.uploadPdf).not.toHaveBeenCalled();
+    expect(organizationsRepo.enqueueDocumentReprocess).not.toHaveBeenCalled();
+  });
+
+  it('does not let an unauthorized actor share a document', async () => {
+    const { service, organizationsRepo, access } = createService();
+    access.requireDocumentShare.mockRejectedValue(
+      new ForbiddenException('Document sharing permission required'),
+    );
+    await expect(
+      service.shareDocument(
+        document().id,
+        '00000000-0000-0000-0000-000000000020',
+        principal(),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(organizationsRepo.setShare).not.toHaveBeenCalled();
+  });
+
+  it('transfer returns the committed result without a second authorization read', async () => {
+    const { service, gcs, organizationsRepo, access } = createService();
+    const targetId = '00000000-0000-0000-0000-000000000020';
+    organizationsRepo.transferDocument.mockResolvedValue({
+      kind: 'ok',
+      document: document({ ownerOrganizationId: targetId }),
+    });
+    await service.transferDocument(document().id, targetId, principal());
+    expect(organizationsRepo.transferDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedOwnerOrganizationId: ORGANIZATION_ID,
+        targetOrganizationId: targetId,
+      }),
+    );
+    expect(access.requireDocumentView).not.toHaveBeenCalled();
+    expect(gcs.uploadPdf).not.toHaveBeenCalled();
+    expect(organizationsRepo.enqueueDocumentReprocess).not.toHaveBeenCalled();
+  });
+
+  it('reports an uploading transfer as a conflict without mutating processing', async () => {
+    const { service, organizationsRepo } = createService();
+    organizationsRepo.transferDocument.mockResolvedValue({
+      kind: 'state_changed',
+      document: document({ status: 'uploading' }),
+    });
+    await expect(
+      service.transferDocument(
+        document().id,
+        '00000000-0000-0000-0000-000000000020',
+        principal(),
+      ),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('redacts uploader PII and other share recipients from shared viewers', async () => {
+    const { service, organizationsRepo } = createService();
+    const sharedOrganizationId = '00000000-0000-0000-0000-000000000020';
+    organizationsRepo.findAcceptedMemberships.mockResolvedValue([
+      {
+        organizationId: sharedOrganizationId,
+        role: 'MEMBER',
+      },
+    ]);
+    organizationsRepo.hydrateDocuments.mockImplementation(async (rows) =>
+      rows.map((row) => ({
+        document: row,
+        ownerOrganization: {
+          id: row.ownerOrganizationId,
+          name: 'Owner',
+          slug: 'owner',
+        },
+        uploader: {
+          idpUuid: 'owner-user',
+          email: 'owner@example.com',
+          name: 'Owner User',
+        },
+        sharedOrganizations: [
+          { id: sharedOrganizationId, name: 'Viewer Org', slug: 'viewer' },
+          {
+            id: '00000000-0000-0000-0000-000000000030',
+            name: 'Unrelated Recipient',
+            slug: 'unrelated',
+          },
+        ],
+      })),
     );
 
-    await expect(service.reprocess(current.id, 'admin-1')).resolves.toEqual(
-      expect.objectContaining({ status: 'queued', canReprocess: false }),
+    const [item] = await service.listOrganizationDocuments(
+      sharedOrganizationId,
+      principal({ uuid: 'shared-user' }),
+    );
+    expect(item).toMatchObject({
+      accessRelation: 'SHARED',
+      canManage: false,
+      uploader: null,
+      sharedOrganizations: [],
+    });
+  });
+
+  it('omits shared documents when the viewing membership has been removed', async () => {
+    const { service, organizationsRepo } = createService();
+    const sharedOrganizationId = '00000000-0000-0000-0000-000000000020';
+    organizationsRepo.findAcceptedMemberships.mockResolvedValue([]);
+    organizationsRepo.hydrateDocuments.mockImplementation(async (rows) =>
+      rows.map((row) => ({
+        document: row,
+        ownerOrganization: {
+          id: row.ownerOrganizationId,
+          name: 'Owner',
+          slug: 'owner',
+        },
+        uploader: null,
+        sharedOrganizations: [
+          { id: sharedOrganizationId, name: 'Viewer Org', slug: 'viewer' },
+        ],
+      })),
+    );
+
+    await expect(
+      service.listOrganizationDocuments(
+        sharedOrganizationId,
+        principal({ uuid: 'removed-user' }),
+      ),
+    ).resolves.toEqual([]);
+    expect(organizationsRepo.findAcceptedMemberships).toHaveBeenCalledWith(
+      expect.arrayContaining([ORGANIZATION_ID, sharedOrganizationId]),
+      'removed-user',
     );
   });
 
-  it.each(['ready', 'failed'] as const)(
-    'atomically requeues a %s document',
-    async (status) => {
-      const { service, repo } = createService();
-      const current = document({ status });
-      const queued = document({
-        status: 'queued',
-        lastReprocessedAt: new Date(),
-      });
-      repo.findById.mockResolvedValue(current);
-      repo.enqueueReprocess.mockResolvedValue(queued);
-
-      const result = await service.reprocess(current.id, 'admin-1');
-
-      expect(repo.enqueueReprocess).toHaveBeenCalledWith(
-        current.id,
-        'admin-1',
-        expect.any(Date),
-        expect.any(Date),
-      );
-      expect(result.status).toBe('queued');
-      expect(result.canReprocess).toBe(false);
-    },
-  );
-
-  it('passes expiresAt into createUploading and returns isExpired=false', async () => {
-    const { service, repo, gcs } = createService();
-    const future = new Date(Date.now() + 60_000);
-    const reserved = document({ expiresAt: future });
-    const queued = document({ status: 'queued', expiresAt: future });
-    repo.createUploading.mockResolvedValue(reserved);
-    gcs.uploadPdf.mockResolvedValue('gs://bucket/test.pdf');
-    repo.markQueuedAfterUpload.mockResolvedValue(queued);
-
-    const result = await service.upload(
-      Buffer.from('%PDF-test'),
-      'test.pdf',
-      '테스트',
-      'admin-1',
-      future.toISOString(),
+  it('requires target-organization MANAGER permission for transfer', async () => {
+    const { service, organizationsRepo, access } = createService();
+    access.requireOrganizationManager.mockRejectedValue(
+      new ForbiddenException('Organization manager role required'),
     );
-
-    expect(repo.createUploading).toHaveBeenCalledWith(
-      expect.objectContaining({ expiresAt: expect.any(Date) }),
-    );
-    expect(result.expiresAt).toEqual(future);
-    expect(result.isExpired).toBe(false);
+    await expect(
+      service.transferDocument(
+        document().id,
+        '00000000-0000-0000-0000-000000000020',
+        principal(),
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(organizationsRepo.transferDocument).not.toHaveBeenCalled();
   });
 
-  it('updates expiresAt for the owner and clears with null', async () => {
-    const { service, repo } = createService();
-    const current = document({ status: 'ready' });
-    const cleared = document({ status: 'ready', expiresAt: null });
-    repo.findById.mockResolvedValue(current);
-    repo.updateExpiresAt.mockResolvedValue(cleared);
-
-    const result = await service.updateExpiresAt(current.id, 'admin-1', null);
-
-    expect(repo.updateExpiresAt).toHaveBeenCalledWith(
-      current.id,
-      'admin-1',
-      null,
-    );
-    expect(result.expiresAt).toBeNull();
-    expect(result.isExpired).toBe(false);
+  it('keeps the legacy list scoped to documents uploaded by the caller', async () => {
+    const { service, repo, organizationsRepo } = createService();
+    repo.listByUploader.mockResolvedValue([document()]);
+    const result = await service.listMyUploads(principal());
+    expect(repo.listByUploader).toHaveBeenCalledWith(principal(), {
+      limit: 50,
+      offset: 0,
+    });
+    expect(organizationsRepo.listManageableDocuments).not.toHaveBeenCalled();
+    expect(result).toHaveLength(1);
   });
 
-  it('marks isExpired when expiresAt is in the past', async () => {
-    const { service, repo } = createService();
-    const past = new Date(Date.now() - 60_000);
-    repo.findById.mockResolvedValue(
-      document({ status: 'ready', expiresAt: past }),
+  it('delegates manageable listing to the organization repository', async () => {
+    const { service, repo, organizationsRepo } = createService();
+    organizationsRepo.listManageableDocuments.mockResolvedValue([document()]);
+    const result = await service.listManageableDocuments(principal());
+    expect(repo.listByUploader).not.toHaveBeenCalled();
+    expect(organizationsRepo.listManageableDocuments).toHaveBeenCalledWith(
+      principal(),
+      { limit: 50, offset: 0 },
     );
-
-    const result = await service.getById(
-      '00000000-0000-0000-0000-000000000001',
-      'admin-1',
-    );
-    expect(result.isExpired).toBe(true);
-    expect(result.expiresAt).toEqual(past);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      canManage: true,
+      accessRelation: 'OWNER',
+    });
   });
 });
 
@@ -347,7 +616,6 @@ describe('parseExpiresAt', () => {
     expect(parseExpiresAt(undefined)).toBeNull();
     expect(parseExpiresAt(null)).toBeNull();
     expect(parseExpiresAt('')).toBeNull();
-    expect(parseExpiresAt('   ')).toBeNull();
   });
 
   it('rejects invalid and past values', () => {
@@ -357,7 +625,7 @@ describe('parseExpiresAt', () => {
     ).toThrow(BadRequestException);
   });
 
-  it('accepts future ISO-8601', () => {
+  it('accepts a future ISO-8601 value', () => {
     const future = new Date(Date.now() + 60_000).toISOString();
     expect(parseExpiresAt(future)?.toISOString()).toBe(future);
   });

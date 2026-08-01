@@ -16,6 +16,27 @@ export interface DatabaseConnectionParams {
   sslEnabled: boolean;
 }
 
+const MIGRATION_LOCK_SQL = 'SELECT pg_advisory_lock(1128352846, 1667785076)';
+const MIGRATION_UNLOCK_SQL =
+  'SELECT pg_advisory_unlock(1128352846, 1667785076)';
+
+export interface MigrationAdvisoryLockClient {
+  unsafe(query: string): PromiseLike<unknown>;
+}
+
+/** Serialize startup migrators across every application instance. */
+export async function withMigrationAdvisoryLock<T>(
+  client: MigrationAdvisoryLockClient,
+  operation: () => Promise<T>,
+): Promise<T> {
+  await client.unsafe(MIGRATION_LOCK_SQL);
+  try {
+    return await operation();
+  } finally {
+    await client.unsafe(MIGRATION_UNLOCK_SQL);
+  }
+}
+
 // Database connection factory with SSL options
 export const createDatabaseConnection = (params: DatabaseConnectionParams) => {
   const options = {
@@ -59,7 +80,9 @@ export const runMigrations = async (params: DatabaseConnectionParams) => {
       : './drizzle'; // Local development path
 
   try {
-    await migrate(db, { migrationsFolder });
+    await withMigrationAdvisoryLock(migrationClient, () =>
+      migrate(db, { migrationsFolder }),
+    );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Migration failed:', errorMessage);

@@ -158,7 +158,6 @@ export class UploadController {
     type: DocumentListItemDto,
   })
   @ApiResponse({ status: 401, description: '인증 실패' })
-  @ApiResponse({ status: 403, description: '문서 조회 권한 없음' })
   @ApiResponse({ status: 404, description: '문서 없음' })
   async getOne(
     @CurrentAdmin() admin: AdminContext,

@@ -642,7 +642,7 @@ export class OrganizationsRepository {
           ),
         ),
       )
-      .orderBy(desc(documents.createdAt))
+      .orderBy(desc(documents.createdAt), desc(documents.id))
       .limit(options.limit)
       .offset(options.offset);
     if (ids.length === 0) return [];
@@ -655,7 +655,7 @@ export class OrganizationsRepository {
           ids.map((row) => row.id),
         ),
       )
-      .orderBy(desc(documents.createdAt));
+      .orderBy(desc(documents.createdAt), desc(documents.id));
   }
 
   async listManageableDocuments(
@@ -691,7 +691,7 @@ export class OrganizationsRepository {
           ),
         ),
       )
-      .orderBy(desc(documents.createdAt))
+      .orderBy(desc(documents.createdAt), desc(documents.id))
       .limit(options.limit)
       .offset(options.offset)
       .then((rows) => rows.map((row) => row.document));

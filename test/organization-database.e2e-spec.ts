@@ -930,6 +930,7 @@ describeDatabase('Organization database invariants (e2e)', () => {
       .values({
         documentId: created.id,
         path: `${testPrefix}/chunk`,
+        description: '',
         content: 'unchanged',
         sortOrder: 0,
       })

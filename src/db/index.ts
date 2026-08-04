@@ -16,6 +16,74 @@ export interface DatabaseConnectionParams {
   sslEnabled: boolean;
 }
 
+const MIGRATION_LOCK_SQL = 'SELECT pg_advisory_lock(1128352846, 1667785076)';
+const MIGRATION_UNLOCK_SQL =
+  'SELECT pg_advisory_unlock(1128352846, 1667785076)';
+const MIGRATION_LOCK_TIMEOUT_MS = 30_000;
+const MIGRATION_LOCK_TIMEOUT_SQL = `SET lock_timeout = '${MIGRATION_LOCK_TIMEOUT_MS}ms'`;
+const MIGRATION_LOCK_TIMEOUT_RESET_SQL = 'SET lock_timeout = DEFAULT';
+
+export interface MigrationAdvisoryLockClient {
+  unsafe(query: string): PromiseLike<unknown>;
+}
+
+export interface ReservedMigrationConnection extends MigrationAdvisoryLockClient {
+  release(): void;
+}
+
+export interface ReservableMigrationClient<
+  TConnection extends ReservedMigrationConnection = ReservedMigrationConnection,
+> {
+  reserve(): Promise<TConnection>;
+  end(): Promise<void>;
+}
+
+export async function withReservedMigrationConnection<
+  TConnection extends ReservedMigrationConnection,
+  T,
+>(
+  client: ReservableMigrationClient<TConnection>,
+  operation: (connection: TConnection) => Promise<T>,
+): Promise<T> {
+  let connection: TConnection | undefined;
+  try {
+    connection = await client.reserve();
+    return await operation(connection);
+  } finally {
+    try {
+      connection?.release();
+    } finally {
+      await client.end();
+    }
+  }
+}
+
+/** Serialize startup migrators across every application instance. */
+export async function withMigrationAdvisoryLock<T>(
+  client: MigrationAdvisoryLockClient,
+  operation: () => Promise<T>,
+): Promise<T> {
+  await client.unsafe(MIGRATION_LOCK_TIMEOUT_SQL);
+  await client.unsafe(MIGRATION_LOCK_SQL);
+  let operationFailed = false;
+  let operationError: unknown;
+  let result: T | undefined;
+  try {
+    await client.unsafe(MIGRATION_LOCK_TIMEOUT_RESET_SQL);
+    result = await operation();
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+  try {
+    await client.unsafe(MIGRATION_UNLOCK_SQL);
+  } catch (unlockError) {
+    if (!operationFailed) throw unlockError;
+  }
+  if (operationFailed) throw operationError;
+  return result as T;
+}
+
 // Database connection factory with SSL options
 export const createDatabaseConnection = (params: DatabaseConnectionParams) => {
   const options = {
@@ -50,8 +118,6 @@ export const runMigrations = async (params: DatabaseConnectionParams) => {
     max: 1,
     ssl: params.sslEnabled ? { rejectUnauthorized: false } : false,
   });
-  const db = drizzle(migrationClient);
-
   // Determine migrations folder path based on environment
   const migrationsFolder =
     process.env.NODE_ENV === 'production'
@@ -59,13 +125,15 @@ export const runMigrations = async (params: DatabaseConnectionParams) => {
       : './drizzle'; // Local development path
 
   try {
-    await migrate(db, { migrationsFolder });
+    await withReservedMigrationConnection(migrationClient, (connection) =>
+      withMigrationAdvisoryLock(connection, () =>
+        migrate(drizzle(connection), { migrationsFolder }),
+      ),
+    );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Migration failed:', errorMessage);
     throw error;
-  } finally {
-    await migrationClient.end();
   }
 };
 

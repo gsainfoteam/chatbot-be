@@ -11,6 +11,7 @@ import { McpModule } from './mcp/mcp.module';
 import { ChatModule } from './chat/chat.module';
 import { UploadModule } from './upload/upload.module';
 import { PdfProcessorModule } from './pdf-processor/pdf-processor.module';
+import { OrganizationsModule } from './organizations/organizations.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { PdfProcessorModule } from './pdf-processor/pdf-processor.module';
     McpModule,
     ChatModule,
     PdfProcessorModule,
+    OrganizationsModule,
     UploadModule,
   ],
   controllers: [AppController],

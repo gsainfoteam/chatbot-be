@@ -1,18 +1,29 @@
 import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
-  BadRequestException,
-  ConflictException,
   ServiceUnavailableException,
-  HttpException,
-  HttpStatus,
 } from '@nestjs/common';
+import type { Document } from '../db';
 import { DocumentsRepository } from '../pdf-processor/documents.repository';
 import { GcsStorageService } from '../pdf-processor/gcs-storage.service';
 import { toResourceName } from '../pdf-processor/pdf-chunk-parser';
 import { isExpiredAt } from '../retrieval/retrieval.repository';
-import type { Document } from '../db';
+import { OrganizationAccessService } from '../organizations/organization-access.service';
+import { evaluateDocumentAccess } from '../organizations/organization-access.policy';
+import {
+  OrganizationsRepository,
+  RepositoryAuthorizationError,
+} from '../organizations/organizations.repository';
+import type {
+  AdminPrincipal,
+  DocumentAccessDecision,
+} from '../organizations/organization.types';
 import type { DocumentListItemDto } from './dto/document-list-item.dto';
 
 const PDF_MIME = 'application/pdf';
@@ -20,10 +31,6 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 export const REPROCESS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
-/**
- * Parse optional ISO-8601 expiresAt. Empty/undefined → null (never expires).
- * Invalid or past timestamps → 400.
- */
 export function parseExpiresAt(raw?: string | null): Date | null {
   if (raw == null) return null;
   const trimmed = raw.trim();
@@ -48,48 +55,79 @@ export class UploadService {
   constructor(
     private readonly documentsRepo: DocumentsRepository,
     private readonly gcs: GcsStorageService,
+    private readonly organizationsRepo: OrganizationsRepository,
+    private readonly access: OrganizationAccessService,
   ) {}
 
   async listMyUploads(
-    idpUuid: string,
+    principal: AdminPrincipal,
     options: { limit?: number; offset?: number } = {},
   ): Promise<DocumentListItemDto[]> {
-    const limit = Math.min(options.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
-    const offset = Math.max(0, options.offset ?? 0);
-
-    const rows = await this.documentsRepo.listByUploader(idpUuid, {
-      limit,
-      offset,
-    });
-
-    return rows.map((row) => this.toListItem(row));
+    const paging = this.normalizePaging(options);
+    const rows = await this.documentsRepo.listByUploader(principal, paging);
+    return this.toListItems(rows, principal, undefined, [], true);
   }
 
-  async getById(id: string, idpUuid: string): Promise<DocumentListItemDto> {
-    const row = await this.documentsRepo.findById(id);
-    if (!row || !row.isActive) {
-      throw new NotFoundException(`Document not found: ${id}`);
-    }
-    if (row.uploadedByIdpUuid !== idpUuid) {
-      throw new NotFoundException(`Document not found: ${id}`);
-    }
-    return this.toListItem(row);
+  async listManageableDocuments(
+    principal: AdminPrincipal,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<DocumentListItemDto[]> {
+    const paging = this.normalizePaging(options);
+    const rows = await this.organizationsRepo.listManageableDocuments(
+      principal,
+      paging,
+    );
+    return this.toListItems(rows, principal, undefined, [], true);
   }
 
-  /**
-   * Upload PDF to GCS and enqueue processing (status=queued).
-   */
+  async listOrganizationDocuments(
+    organizationId: string,
+    principal: AdminPrincipal,
+    options: { limit?: number; offset?: number } = {},
+  ): Promise<DocumentListItemDto[]> {
+    await this.access.requireOrganizationMember(organizationId, principal);
+    const rows = await this.organizationsRepo.listOrganizationDocuments(
+      organizationId,
+      principal,
+      this.normalizePaging(options),
+    );
+    return this.toListItems(rows, principal, organizationId, [], true);
+  }
+
+  async getById(
+    id: string,
+    principal: AdminPrincipal,
+  ): Promise<DocumentListItemDto> {
+    const decision = await this.access.requireDocumentView(id, principal);
+    return (
+      await this.toListItems(
+        [decision.document],
+        principal,
+        undefined,
+        [decision],
+        false,
+        true,
+      )
+    )[0];
+  }
+
   async upload(
     fileBuffer: Buffer,
     filename: string,
     title: string,
-    idpUuid: string,
+    principal: AdminPrincipal,
+    organizationId?: string,
     expiresAtRaw?: string | null,
   ): Promise<DocumentListItemDto> {
     if (!fileBuffer?.length) {
       throw new BadRequestException('file is required');
     }
 
+    // Permission is checked before reserving a DB row or touching GCS.
+    const organization = await this.access.resolveUploadOrganization(
+      organizationId,
+      principal,
+    );
     const expiresAt = parseExpiresAt(expiresAtRaw);
     const resourceName = toResourceName(filename || 'document.pdf');
     if (!resourceName.trim()) {
@@ -99,18 +137,22 @@ export class UploadService {
     const gcsPdfPath = this.gcs.toGsPath(`${resourceName}.pdf`);
     let reservation: Document;
     try {
-      reservation = await this.documentsRepo.createUploading({
+      reservation = await this.organizationsRepo.createUploadingDocument({
         title,
         resourceName,
         gcsPdfPath,
-        uploadedByIdpUuid: idpUuid,
+        ownerOrganizationId: organization.id,
         expiresAt,
+        actor: principal,
       });
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConflictException(
           `An active document with resource name "${resourceName}" already exists`,
         );
+      }
+      if (error instanceof RepositoryAuthorizationError) {
+        throw new ForbiddenException('Organization membership changed');
       }
       throw error;
     }
@@ -130,29 +172,38 @@ export class UploadService {
 
     let record: Document | null;
     try {
-      record = await this.documentsRepo.markQueuedAfterUpload(reservation.id);
-      if (!record) {
-        throw new Error('Upload reservation is no longer active');
+      const result = await this.organizationsRepo.finalizeUploadingDocument({
+        documentId: reservation.id,
+        expectedOwnerOrganizationId: organization.id,
+        actor: principal,
+      });
+      this.assertDocumentMutation(result);
+      if (result.kind !== 'ok') {
+        throw new ConflictException('Upload reservation state changed');
       }
+      record = result.document;
     } catch (error) {
       await this.rollbackUpload(reservation.id, resourceName);
+      if (error instanceof HttpException) throw error;
       throw new Error(
         `Failed to enqueue the uploaded document: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
 
     this.logger.log(`Upload queued: id=${record.id} resource=${resourceName}`);
-    return this.toListItem(record);
+    return (await this.toListItems([record], principal))[0];
   }
 
-  /**
-   * Soft-delete DB row and remove GCS artifacts.
-   */
-  async delete(id: string, idpUuid: string): Promise<void> {
-    const row = await this.documentsRepo.cancelAndSoftDelete(id, idpUuid);
-    if (!row) {
-      throw new NotFoundException(`Document not found: ${id}`);
-    }
+  async delete(id: string, principal: AdminPrincipal): Promise<void> {
+    const decision = await this.access.requireDocumentManage(id, principal);
+    const result = await this.organizationsRepo.cancelAndSoftDeleteDocument({
+      documentId: id,
+      expectedOwnerOrganizationId: decision.document.ownerOrganizationId,
+      actor: principal,
+    });
+    this.assertDocumentMutation(result);
+    if (result.kind !== 'ok') return;
+    const row = result.document;
 
     try {
       await this.gcs.deleteResourceArtifacts(row.resourceName);
@@ -164,103 +215,293 @@ export class UploadService {
         'Document storage is temporarily unavailable',
       );
     }
-
     this.logger.log(`Document deleted: id=${id} resource=${row.resourceName}`);
   }
 
-  /**
-   * Clear chunks and re-enqueue for processing.
-   */
-  async reprocess(id: string, idpUuid: string): Promise<DocumentListItemDto> {
-    const row = await this.documentsRepo.findById(id);
-    if (
-      !row ||
-      !row.isActive ||
-      row.uploadedByIdpUuid !== idpUuid
-    ) {
-      throw new NotFoundException(`Document not found: ${id}`);
-    }
-
+  async reprocess(
+    id: string,
+    principal: AdminPrincipal,
+  ): Promise<DocumentListItemDto> {
+    const decision = await this.access.requireDocumentManage(id, principal);
     const now = new Date();
-    this.assertReprocessEligible(row, now);
+    this.assertReprocessEligible(decision.document, now);
 
-    const cooldownBefore = new Date(now.getTime() - REPROCESS_COOLDOWN_MS);
-    const updated = await this.documentsRepo.enqueueReprocess(
-      id,
-      idpUuid,
-      cooldownBefore,
+    const result = await this.organizationsRepo.enqueueDocumentReprocess({
+      documentId: id,
+      expectedOwnerOrganizationId: decision.document.ownerOrganizationId,
+      cooldownBefore: new Date(now.getTime() - REPROCESS_COOLDOWN_MS),
       now,
-    );
-    if (!updated) {
-      // Re-read to classify a concurrent state transition accurately.
-      const latest = await this.documentsRepo.findById(id);
-      if (
-        !latest ||
-        !latest.isActive ||
-        latest.uploadedByIdpUuid !== idpUuid
-      ) {
-        throw new NotFoundException(`Document not found: ${id}`);
-      }
-      this.assertReprocessEligible(latest, new Date());
+      actor: principal,
+    });
+    if (result.kind === 'state_changed') {
+      this.assertReprocessEligible(result.document, new Date());
       throw new ConflictException('Document reprocess state changed');
     }
-
+    this.assertDocumentMutation(result);
+    if (result.kind !== 'ok') {
+      throw new ConflictException('Document reprocess state changed');
+    }
+    const updated = result.document;
     this.logger.log(`Document requeued: id=${id}`);
-    return this.toListItem(updated);
+    return (await this.toListItems([updated], principal))[0];
   }
 
   async updateExpiresAt(
     id: string,
-    idpUuid: string,
+    principal: AdminPrincipal,
     expiresAtRaw: string | null,
   ): Promise<DocumentListItemDto> {
-    const row = await this.documentsRepo.findById(id);
-    if (!row || !row.isActive) {
-      throw new NotFoundException(`Document not found: ${id}`);
-    }
-    if (row.uploadedByIdpUuid !== idpUuid) {
-      throw new NotFoundException(`Document not found: ${id}`);
-    }
-
+    const decision = await this.access.requireDocumentManage(id, principal);
     const expiresAt =
       expiresAtRaw === null ? null : parseExpiresAt(expiresAtRaw);
-    const updated = await this.documentsRepo.updateExpiresAt(
-      id,
-      idpUuid,
+    const result = await this.organizationsRepo.updateDocumentExpiresAt({
+      documentId: id,
+      expectedOwnerOrganizationId: decision.document.ownerOrganizationId,
       expiresAt,
-    );
-    if (!updated) {
-      throw new NotFoundException(`Document not found: ${id}`);
+      actor: principal,
+    });
+    this.assertDocumentMutation(result);
+    if (result.kind !== 'ok') {
+      throw new ConflictException('Document ownership or state changed');
     }
-    return this.toListItem(updated);
+    const updated = result.document;
+    return (await this.toListItems([updated], principal))[0];
   }
 
-  private toListItem(row: Document): DocumentListItemDto {
-    const reprocessAvailableAt = row.lastReprocessedAt
-      ? new Date(row.lastReprocessedAt.getTime() + REPROCESS_COOLDOWN_MS)
-      : null;
-    const statusAllowsReprocess =
-      row.status === 'ready' || row.status === 'failed';
-    const canReprocess =
-      statusAllowsReprocess &&
-      (!reprocessAvailableAt || reprocessAvailableAt.getTime() <= Date.now());
+  async shareDocument(
+    id: string,
+    targetOrganizationId: string,
+    principal: AdminPrincipal,
+  ): Promise<DocumentListItemDto> {
+    const decision = await this.access.requireDocumentShare(id, principal);
+    if (decision.document.ownerOrganizationId === targetOrganizationId) {
+      throw new BadRequestException(
+        'Owning organization cannot be a share target',
+      );
+    }
+    if (
+      !(await this.organizationsRepo.findOrganization(targetOrganizationId))
+    ) {
+      throw new NotFoundException('Target organization not found');
+    }
+    const result = await this.organizationsRepo.setShare({
+      documentId: id,
+      expectedOwnerOrganizationId: decision.document.ownerOrganizationId,
+      targetOrganizationId,
+      actor: principal,
+    });
+    this.assertDocumentMutation(result);
+    if (result.kind !== 'ok') {
+      throw new ConflictException('Document sharing state changed');
+    }
+    return (
+      await this.toListItems([result.document], principal, undefined, [
+        { ...decision, document: result.document },
+      ])
+    )[0];
+  }
 
+  async unshareDocument(
+    id: string,
+    targetOrganizationId: string,
+    principal: AdminPrincipal,
+  ): Promise<void> {
+    const decision = await this.access.requireDocumentShare(id, principal);
+    const result = await this.organizationsRepo.removeShare({
+      documentId: id,
+      expectedOwnerOrganizationId: decision.document.ownerOrganizationId,
+      targetOrganizationId,
+      actor: principal,
+    });
+    this.assertDocumentMutation(result);
+  }
+
+  async transferDocument(
+    id: string,
+    targetOrganizationId: string,
+    principal: AdminPrincipal,
+  ): Promise<DocumentListItemDto> {
+    const decision = await this.access.requireDocumentShare(id, principal);
+    if (decision.document.ownerOrganizationId === targetOrganizationId) {
+      throw new BadRequestException(
+        'Document is already owned by target organization',
+      );
+    }
+    if (
+      !(await this.organizationsRepo.findOrganization(targetOrganizationId))
+    ) {
+      throw new NotFoundException('Target organization not found');
+    }
+    await this.access.requireOrganizationManager(
+      targetOrganizationId,
+      principal,
+    );
+    const result = await this.organizationsRepo.transferDocument({
+      documentId: id,
+      expectedOwnerOrganizationId: decision.document.ownerOrganizationId,
+      targetOrganizationId,
+      actor: principal,
+    });
+    this.assertDocumentMutation(result);
+    if (result.kind !== 'ok') {
+      throw new ConflictException('Document transfer state changed');
+    }
+    return (
+      await this.toListItems([result.document], principal, undefined, [
+        {
+          document: result.document,
+          relation: 'OWNER',
+          ownerRole: this.access.isSuperAdmin(principal) ? null : 'MANAGER',
+          canView: true,
+          canManage: true,
+          canShare: true,
+          canTransfer: true,
+        },
+      ])
+    )[0];
+  }
+
+  private async toListItems(
+    rows: Document[],
+    principal: AdminPrincipal,
+    organizationContextId?: string,
+    knownDecisions: DocumentAccessDecision[] = [],
+    omitUnauthorized = false,
+    reauthorizeKnownDecisions = false,
+  ): Promise<DocumentListItemDto[]> {
+    const records = await this.organizationsRepo.hydrateDocuments(rows);
+    const currentSuperAdmin =
+      await this.organizationsRepo.isCurrentSuperAdmin(principal);
+    const authorizationOrganizationIds = [
+      ...new Set([
+        ...rows.map((row) => row.ownerOrganizationId),
+        ...(organizationContextId ? [organizationContextId] : []),
+      ]),
+    ];
+    const memberships = currentSuperAdmin
+      ? []
+      : await this.organizationsRepo.findAcceptedMemberships(
+          authorizationOrganizationIds,
+          principal.uuid,
+        );
+    const roleByOrganization = new Map(
+      memberships.map((membership) => [
+        membership.organizationId,
+        membership.role,
+      ]),
+    );
+    const currentKnownDecisions = reauthorizeKnownDecisions
+      ? await Promise.all(
+          knownDecisions.map((decision) =>
+            this.access.requireDocumentView(decision.document.id, principal),
+          ),
+        )
+      : knownDecisions;
+    const decisions = new Map(
+      currentKnownDecisions.map((decision) => [decision.document.id, decision]),
+    );
+
+    const items = records.map((record): DocumentListItemDto | null => {
+      const row = record.document;
+      let decision = decisions.get(row.id);
+      if (!decision) {
+        if (currentSuperAdmin) {
+          decision = {
+            document: row,
+            relation:
+              organizationContextId &&
+              organizationContextId !== row.ownerOrganizationId
+                ? 'SHARED'
+                : 'OWNER',
+            ownerRole: null,
+            canView: true,
+            canManage: true,
+            canShare: true,
+            canTransfer: true,
+          };
+        } else {
+          const ownerRole =
+            roleByOrganization.get(row.ownerOrganizationId) ?? null;
+          decision = evaluateDocumentAccess({
+            document: row,
+            actorIdpUuid: principal.uuid,
+            ownerRole,
+            shared:
+              !ownerRole &&
+              Boolean(
+                organizationContextId &&
+                roleByOrganization.has(organizationContextId) &&
+                record.sharedOrganizations.some(
+                  (organization) => organization.id === organizationContextId,
+                ),
+              ),
+          });
+        }
+      }
+
+      if (omitUnauthorized && !decision.canView) return null;
+
+      const reprocessAvailableAt = row.lastReprocessedAt
+        ? new Date(row.lastReprocessedAt.getTime() + REPROCESS_COOLDOWN_MS)
+        : null;
+      const statusAllowsReprocess =
+        row.status === 'ready' || row.status === 'failed';
+      return {
+        id: row.id,
+        title: row.title,
+        resourceName: row.resourceName,
+        status: row.status,
+        summary: row.summary,
+        gcsPdfPath: row.gcsPdfPath,
+        errorMessage: row.errorMessage,
+        uploadedAt: row.createdAt,
+        processedAt: row.processedAt,
+        lastReprocessedAt: row.lastReprocessedAt,
+        reprocessAvailableAt,
+        canReprocess:
+          decision.canManage &&
+          statusAllowsReprocess &&
+          (!reprocessAvailableAt ||
+            reprocessAvailableAt.getTime() <= Date.now()),
+        expiresAt: row.expiresAt,
+        isExpired: isExpiredAt(row.expiresAt),
+        ownerOrganization: record.ownerOrganization,
+        uploader:
+          !currentSuperAdmin && decision.relation === 'SHARED'
+            ? null
+            : record.uploader,
+        sharedOrganizations:
+          !currentSuperAdmin && decision.relation === 'SHARED'
+            ? []
+            : record.sharedOrganizations,
+        accessRelation: decision.relation,
+        canManage: decision.canManage,
+        canShare: decision.canShare,
+        canTransfer: decision.canTransfer,
+      };
+    });
+    return items.filter((item): item is DocumentListItemDto => item !== null);
+  }
+
+  private normalizePaging(options: { limit?: number; offset?: number }) {
     return {
-      id: row.id,
-      title: row.title,
-      resourceName: row.resourceName,
-      status: row.status,
-      summary: row.summary,
-      gcsPdfPath: row.gcsPdfPath,
-      errorMessage: row.errorMessage,
-      uploadedAt: row.createdAt,
-      processedAt: row.processedAt,
-      lastReprocessedAt: row.lastReprocessedAt,
-      reprocessAvailableAt,
-      canReprocess,
-      expiresAt: row.expiresAt,
-      isExpired: isExpiredAt(row.expiresAt),
+      limit: Math.min(options.limit ?? DEFAULT_LIMIT, MAX_LIMIT),
+      offset: Math.max(0, options.offset ?? 0),
     };
+  }
+
+  private assertDocumentMutation(result: {
+    kind: 'ok' | 'not_found' | 'stale_owner' | 'forbidden' | 'state_changed';
+  }): void {
+    if (result.kind === 'ok') return;
+    if (result.kind === 'not_found')
+      throw new NotFoundException('Document not found');
+    if (result.kind === 'forbidden') {
+      throw new ForbiddenException('Organization permission changed');
+    }
+    if (result.kind === 'state_changed')
+      throw new ConflictException('Document state changed');
+    throw new ConflictException('Document ownership changed');
   }
 
   private assertReprocessEligible(row: Document, now: Date): void {
@@ -269,13 +510,11 @@ export class UploadService {
         `Document cannot be reprocessed while status is "${row.status}"`,
       );
     }
-
     if (!row.lastReprocessedAt) return;
     const retryAt = new Date(
       row.lastReprocessedAt.getTime() + REPROCESS_COOLDOWN_MS,
     );
     if (retryAt.getTime() <= now.getTime()) return;
-
     throw new HttpException(
       {
         statusCode: HttpStatus.TOO_MANY_REQUESTS,

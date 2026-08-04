@@ -9,6 +9,28 @@ const DOCUMENT_STATUSES: DocumentStatus[] = [
   'failed',
 ];
 
+export class DocumentOrganizationSummaryDto {
+  @ApiProperty({ format: 'uuid' })
+  id: string;
+
+  @ApiProperty()
+  name: string;
+
+  @ApiProperty()
+  slug: string;
+}
+
+export class DocumentUploaderSummaryDto {
+  @ApiProperty()
+  idpUuid: string;
+
+  @ApiProperty()
+  email: string;
+
+  @ApiProperty()
+  name: string;
+}
+
 export class DocumentListItemDto {
   @ApiProperty({
     description: '문서 UUID',
@@ -110,4 +132,48 @@ export class DocumentListItemDto {
     example: false,
   })
   isExpired: boolean;
+
+  @ApiProperty({
+    description: '문서 소유 조직',
+    type: () => DocumentOrganizationSummaryDto,
+    example: {
+      id: '550e8400-e29b-41d4-a716-446655440000',
+      name: '인포팀',
+      slug: 'infoteam',
+    },
+  })
+  ownerOrganization: DocumentOrganizationSummaryDto;
+
+  @ApiProperty({
+    description:
+      '업로더 IDP 식별자와 공개 관리자 정보 (관리자 레코드가 없으면 null)',
+    type: () => DocumentUploaderSummaryDto,
+    nullable: true,
+    example: {
+      idpUuid: 'idp-user-uuid',
+      email: 'admin@example.com',
+      name: '관리자',
+    },
+  })
+  uploader: DocumentUploaderSummaryDto | null;
+
+  @ApiProperty({
+    description: '문서가 공유된 조직 목록',
+    type: () => DocumentOrganizationSummaryDto,
+    isArray: true,
+    example: [],
+  })
+  sharedOrganizations: DocumentOrganizationSummaryDto[];
+
+  @ApiProperty({ enum: ['OWNER', 'SHARED'] })
+  accessRelation: 'OWNER' | 'SHARED';
+
+  @ApiProperty({ description: '수정/삭제/재처리/유효기간 변경 가능 여부' })
+  canManage: boolean;
+
+  @ApiProperty({ description: '다른 조직으로 공유/공유 해제 가능 여부' })
+  canShare: boolean;
+
+  @ApiProperty({ description: '소유권 이전을 시작할 수 있는 권한 여부' })
+  canTransfer: boolean;
 }

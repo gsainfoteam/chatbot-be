@@ -6,22 +6,19 @@ import {
   eq,
   and,
   or,
-  isNull,
-  lte,
   desc,
   asc,
   lt,
 } from 'drizzle-orm';
-import { DB_CONNECTION, documents, documentChunks } from '../db';
+import {
+  admins,
+  DB_CONNECTION,
+  documents,
+  documentChunks,
+  organizationMemberships,
+} from '../db';
 import type { Database, Document, DocumentChunk } from '../db';
-
-export type CreateDocumentInput = {
-  title: string;
-  resourceName: string;
-  gcsPdfPath: string;
-  uploadedByIdpUuid: string;
-  expiresAt?: Date | null;
-};
+import type { AdminPrincipal } from '../organizations/organization.types';
 
 export type ReplaceChunksInput = {
   path: string;
@@ -33,68 +30,6 @@ export type ReplaceChunksInput = {
 @Injectable()
 export class DocumentsRepository {
   constructor(@Inject(DB_CONNECTION) private readonly db: Database) {}
-
-  /**
-   * Atomically reserve an active resource name before uploading to GCS.
-   * The worker only claims `queued`, so it cannot observe a partial upload.
-   */
-  async createUploading(input: CreateDocumentInput): Promise<Document> {
-    const [row] = await this.db
-      .insert(documents)
-      .values({
-        title: input.title,
-        resourceName: input.resourceName,
-        gcsPdfPath: input.gcsPdfPath,
-        uploadedByIdpUuid: input.uploadedByIdpUuid,
-        expiresAt: input.expiresAt ?? null,
-        status: 'uploading',
-        isActive: true,
-      })
-      .returning();
-    if (!row) throw new Error('Failed to insert document');
-    return row;
-  }
-
-  async updateExpiresAt(
-    id: string,
-    uploadedByIdpUuid: string,
-    expiresAt: Date | null,
-  ) {
-    const [row] = await this.db
-      .update(documents)
-      .set({
-        expiresAt,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(documents.id, id),
-          eq(documents.uploadedByIdpUuid, uploadedByIdpUuid),
-          eq(documents.isActive, true),
-        ),
-      )
-      .returning();
-    return row ?? null;
-  }
-
-  async markQueuedAfterUpload(id: string) {
-    const [row] = await this.db
-      .update(documents)
-      .set({
-        status: 'queued',
-        errorMessage: null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(documents.id, id),
-          eq(documents.status, 'uploading'),
-          eq(documents.isActive, true),
-        ),
-      )
-      .returning();
-    return row ?? null;
-  }
 
   async hardDelete(id: string): Promise<void> {
     await this.db.delete(documents).where(eq(documents.id, id));
@@ -124,16 +59,35 @@ export class DocumentsRepository {
   }
 
   async listByUploader(
-    idpUuid: string,
+    principal: AdminPrincipal,
     options: { limit: number; offset: number },
   ): Promise<Document[]> {
+    const currentSuperAdmin =
+      principal.role === 'SUPER_ADMIN'
+        ? sql<boolean>`EXISTS (
+            SELECT 1
+            FROM ${admins}
+            WHERE ${admins.idpUuid} = ${principal.uuid}
+              AND ${admins.role} = 'SUPER_ADMIN'
+          )`
+        : sql<boolean>`false`;
     return this.db
       .select()
       .from(documents)
       .where(
         and(
-          eq(documents.uploadedByIdpUuid, idpUuid),
+          eq(documents.uploadedByIdpUuid, principal.uuid),
           eq(documents.isActive, true),
+          or(
+            currentSuperAdmin,
+            sql<boolean>`EXISTS (
+              SELECT 1
+              FROM ${organizationMemberships}
+              WHERE ${organizationMemberships.organizationId} = ${documents.ownerOrganizationId}
+                AND ${organizationMemberships.memberIdpUuid} = ${principal.uuid}
+                AND ${organizationMemberships.status} = 'ACCEPTED'
+            )`,
+          ),
         ),
       )
       .orderBy(desc(documents.createdAt))
@@ -297,65 +251,6 @@ export class DocumentsRepository {
       )
       .returning({ id: documents.id });
     return result.length > 0;
-  }
-
-  /**
-   * Cancel the current attempt before deleting external artifacts.
-   */
-  async cancelAndSoftDelete(id: string, uploadedByIdpUuid: string) {
-    const [row] = await this.db
-      .update(documents)
-      .set({
-        isActive: false,
-        processingToken: null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(documents.id, id),
-          eq(documents.uploadedByIdpUuid, uploadedByIdpUuid),
-          eq(documents.isActive, true),
-        ),
-      )
-      .returning();
-    return row ?? null;
-  }
-
-  async enqueueReprocess(
-    id: string,
-    uploadedByIdpUuid: string,
-    cooldownBefore: Date,
-    now: Date,
-  ) {
-    return this.db.transaction(async (tx) => {
-      const [row] = await tx
-        .update(documents)
-        .set({
-          status: 'queued',
-          errorMessage: null,
-          processingToken: null,
-          processedAt: null,
-          lastReprocessedAt: now,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(documents.id, id),
-            eq(documents.uploadedByIdpUuid, uploadedByIdpUuid),
-            eq(documents.isActive, true),
-            inArray(documents.status, ['ready', 'failed']),
-            or(
-              isNull(documents.lastReprocessedAt),
-              lte(documents.lastReprocessedAt, cooldownBefore),
-            ),
-          ),
-        )
-        .returning();
-      if (!row) return null;
-
-      await tx.delete(documentChunks).where(eq(documentChunks.documentId, id));
-      return row;
-    });
   }
 
   async listChunks(documentId: string): Promise<DocumentChunk[]> {

@@ -17,6 +17,7 @@ function processingDocument(): Document {
     errorMessage: null,
     processingToken: '00000000-0000-0000-0000-000000000002',
     uploadedByIdpUuid: 'admin-1',
+    ownerOrganizationId: '00000000-0000-0000-0000-000000000010',
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -79,7 +80,7 @@ function createWorker(options: {
   const gcs = {
     downloadPdf: jest.fn(() => Promise.resolve(Buffer.from('%PDF-test'))),
     uploadDocuments: options.uploadDocumentsError
-      ? jest.fn(() => Promise.reject(options.uploadDocumentsError))
+      ? jest.fn(() => Promise.reject(options.uploadDocumentsError!))
       : jest.fn(() => Promise.resolve()),
     deleteProcessedArtifacts: jest.fn<(resourceName: string) => Promise<void>>(
       () => Promise.resolve(),
@@ -87,7 +88,7 @@ function createWorker(options: {
   };
   const pipeline = {
     processPdf: options.processPdfError
-      ? jest.fn(() => Promise.reject(options.processPdfError))
+      ? jest.fn(() => Promise.reject(options.processPdfError!))
       : jest.fn(() =>
           Promise.resolve({
             documents: {

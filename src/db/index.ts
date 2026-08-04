@@ -125,15 +125,17 @@ export const runMigrations = async (params: DatabaseConnectionParams) => {
       : './drizzle'; // Local development path
 
   try {
-    await withReservedMigrationConnection(migrationClient, (connection) =>
-      withMigrationAdvisoryLock(connection, () =>
-        migrate(drizzle(connection), { migrationsFolder }),
-      ),
+    // max:1 keeps advisory lock + migrate on the same session. Do not pass
+    // reserve() to drizzle — that wrapper lacks options.parsers.
+    await withMigrationAdvisoryLock(migrationClient, () =>
+      migrate(drizzle(migrationClient), { migrationsFolder }),
     );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('Migration failed:', errorMessage);
     throw error;
+  } finally {
+    await migrationClient.end();
   }
 };
 

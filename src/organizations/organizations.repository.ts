@@ -5,7 +5,6 @@ import {
   desc,
   eq,
   gt,
-  ilike,
   inArray,
   isNotNull,
   isNull,
@@ -571,7 +570,7 @@ export class OrganizationsRepository {
       const [document] = await tx
         .insert(documents)
         .values({
-          title: input.title,
+          title: input.title.normalize('NFC'),
           resourceName: input.resourceName,
           gcsPdfPath: input.gcsPdfPath,
           uploadedByIdpUuid: input.actor.uuid,
@@ -1218,8 +1217,12 @@ export class OrganizationsRepository {
 
     const query = options.query?.trim();
     if (query) {
-      const escaped = query.replace(/[%_\\]/g, '\\$&');
-      conditions.push(ilike(documents.title, `%${escaped}%`));
+      // Titles may be stored as NFD (common for macOS filenames), while users
+      // type NFC Hangul. Normalize both sides before ILIKE.
+      const escaped = query.normalize('NFC').replace(/[%_\\]/g, '\\$&');
+      conditions.push(
+        sql`normalize(${documents.title}, NFC) ILIKE ${`%${escaped}%`} ESCAPE '\\'`,
+      );
     }
 
     const status = options.status ?? 'all';

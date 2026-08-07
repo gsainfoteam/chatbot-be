@@ -1,14 +1,17 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   and,
+  asc,
   desc,
   eq,
+  gt,
   inArray,
   isNotNull,
   isNull,
   lte,
   or,
   sql,
+  type SQL,
 } from 'drizzle-orm';
 import {
   admins,
@@ -42,6 +45,33 @@ export type DocumentMutationResult =
   | { kind: 'stale_owner' }
   | { kind: 'forbidden' }
   | { kind: 'state_changed'; document: Document };
+
+export type AccessibleDocumentStatusFilter =
+  | 'all'
+  | 'active'
+  | 'processing'
+  | 'failed'
+  | 'expired';
+
+export type AccessibleDocumentSort = 'recent' | 'name' | 'expiry';
+
+export interface AccessibleDocumentsFilter {
+  organizationId?: string;
+  query?: string;
+  status?: AccessibleDocumentStatusFilter;
+  now?: Date;
+}
+
+export interface AccessibleDocumentsPageQuery extends AccessibleDocumentsFilter {
+  page: number;
+  size: number;
+  sort?: AccessibleDocumentSort;
+}
+
+export interface AccessibleDocumentsSummary {
+  totalDocuments: number;
+  organizationCounts: Record<string, number>;
+}
 
 export class RepositoryAuthorizationError extends Error {
   constructor() {
@@ -540,7 +570,7 @@ export class OrganizationsRepository {
       const [document] = await tx
         .insert(documents)
         .values({
-          title: input.title,
+          title: input.title.normalize('NFC'),
           resourceName: input.resourceName,
           gcsPdfPath: input.gcsPdfPath,
           uploadedByIdpUuid: input.actor.uuid,
@@ -658,37 +688,136 @@ export class OrganizationsRepository {
       .orderBy(desc(documents.createdAt), desc(documents.id));
   }
 
-  async listManageableDocuments(
+  async listAccessibleDocuments(
     principal: AdminPrincipal,
-    options: { limit: number; offset: number },
-  ) {
-    return this.db
-      .selectDistinct({ document: documents })
+    options: AccessibleDocumentsPageQuery,
+  ): Promise<{ rows: Document[]; filteredTotal: number }> {
+    const page = Math.max(1, options.page);
+    const size = Math.min(Math.max(1, options.size), 100);
+    const offset = (page - 1) * size;
+    const where = this.accessibleDocumentsWhere(principal, options);
+    const orderBy = this.accessibleDocumentsOrderBy(options.sort ?? 'recent');
+
+    const [countRow, idRows] = await Promise.all([
+      this.db
+        .select({
+          count: sql<number>`count(distinct ${documents.id})::int`,
+        })
+        .from(documents)
+        .where(where)
+        .then((rows) => rows[0]),
+      this.db
+        .select({
+          id: documents.id,
+          createdAt: documents.createdAt,
+          title: documents.title,
+          expiresAt: documents.expiresAt,
+        })
+        .from(documents)
+        .where(where)
+        .orderBy(...orderBy)
+        .limit(size)
+        .offset(offset),
+    ]);
+
+    const filteredTotal = countRow?.count ?? 0;
+    if (idRows.length === 0) return { rows: [], filteredTotal };
+
+    const rows = await this.db
+      .select()
       .from(documents)
-      .leftJoin(
-        organizationMemberships,
-        and(
-          eq(
-            organizationMemberships.organizationId,
-            documents.ownerOrganizationId,
-          ),
-          eq(organizationMemberships.memberIdpUuid, principal.uuid),
-          eq(organizationMemberships.status, 'ACCEPTED'),
-        ),
-      )
       .where(
-        and(
-          eq(documents.isActive, true),
-          or(
-            this.currentSuperAdminCondition(principal),
-            isNotNull(organizationMemberships.id),
-          ),
+        inArray(
+          documents.id,
+          idRows.map((row) => row.id),
         ),
-      )
-      .orderBy(desc(documents.createdAt), desc(documents.id))
-      .limit(options.limit)
-      .offset(options.offset)
-      .then((rows) => rows.map((row) => row.document));
+      );
+
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return {
+      filteredTotal,
+      rows: idRows
+        .map((row) => byId.get(row.id))
+        .filter((row): row is Document => row != null),
+    };
+  }
+
+  async summarizeAccessibleDocuments(
+    principal: AdminPrincipal,
+  ): Promise<AccessibleDocumentsSummary> {
+    const accessibleOrganizations =
+      await this.listAccessibleOrganizations(principal);
+    const organizationIds = accessibleOrganizations.map(
+      (row) => row.organization.id,
+    );
+    const organizationCounts: Record<string, number> = Object.fromEntries(
+      organizationIds.map((id) => [id, 0]),
+    );
+
+    const [totalRow, ownedCounts, sharedCounts] = await Promise.all([
+      this.db
+        .select({
+          count: sql<number>`count(distinct ${documents.id})::int`,
+        })
+        .from(documents)
+        .where(this.accessibleDocumentsWhere(principal, {}))
+        .then((rows) => rows[0]),
+      organizationIds.length === 0
+        ? Promise.resolve(
+            [] as Array<{ organizationId: string; count: number }>,
+          )
+        : this.db
+            .select({
+              organizationId: documents.ownerOrganizationId,
+              count: sql<number>`count(*)::int`,
+            })
+            .from(documents)
+            .where(
+              and(
+                eq(documents.isActive, true),
+                inArray(documents.ownerOrganizationId, organizationIds),
+              ),
+            )
+            .groupBy(documents.ownerOrganizationId),
+      organizationIds.length === 0
+        ? Promise.resolve(
+            [] as Array<{ organizationId: string; count: number }>,
+          )
+        : this.db
+            .select({
+              organizationId: documentOrganizationShares.organizationId,
+              count: sql<number>`count(distinct ${documentOrganizationShares.documentId})::int`,
+            })
+            .from(documentOrganizationShares)
+            .innerJoin(
+              documents,
+              eq(documents.id, documentOrganizationShares.documentId),
+            )
+            .where(
+              and(
+                eq(documents.isActive, true),
+                inArray(
+                  documentOrganizationShares.organizationId,
+                  organizationIds,
+                ),
+              ),
+            )
+            .groupBy(documentOrganizationShares.organizationId),
+    ]);
+
+    for (const row of ownedCounts) {
+      organizationCounts[row.organizationId] =
+        (organizationCounts[row.organizationId] ?? 0) + row.count;
+    }
+    for (const row of sharedCounts) {
+      organizationCounts[row.organizationId] =
+        (organizationCounts[row.organizationId] ?? 0) + row.count;
+    }
+
+    return {
+      totalDocuments: totalRow?.count ?? 0,
+      organizationCounts,
+    };
   }
 
   async hydrateDocuments(
@@ -1053,6 +1182,105 @@ export class OrganizationsRepository {
       .limit(2)
       .for('share');
     return matches.length === 1 && matches[0]?.idpUuid === actorIdpUuid;
+  }
+
+  private accessibleDocumentsWhere(
+    principal: AdminPrincipal,
+    options: AccessibleDocumentsFilter,
+  ): SQL {
+    const now = options.now ?? new Date();
+    const conditions: SQL[] = [
+      eq(documents.isActive, true),
+      this.principalDocumentAccessCondition(principal),
+    ];
+
+    if (options.organizationId) {
+      conditions.push(
+        and(
+          this.organizationAccessCondition(
+            options.organizationId,
+            principal,
+            false,
+          ),
+          or(
+            eq(documents.ownerOrganizationId, options.organizationId),
+            sql`EXISTS (
+              SELECT 1
+              FROM "document_organization_shares" AS "accessible_share"
+              WHERE "accessible_share"."document_id" = ${documents.id}
+                AND "accessible_share"."organization_id" = ${options.organizationId}
+            )`,
+          ),
+        )!,
+      );
+    }
+
+    const query = options.query?.trim();
+    if (query) {
+      // Titles may be stored as NFD (common for macOS filenames), while users
+      // type NFC Hangul. Normalize both sides before ILIKE.
+      const escaped = query.normalize('NFC').replace(/[%_\\]/g, '\\$&');
+      conditions.push(
+        sql`normalize(${documents.title}, NFC) ILIKE ${`%${escaped}%`} ESCAPE '\\'`,
+      );
+    }
+
+    const status = options.status ?? 'all';
+    if (status === 'active') {
+      conditions.push(
+        and(
+          eq(documents.status, 'ready'),
+          or(isNull(documents.expiresAt), gt(documents.expiresAt, now)),
+        )!,
+      );
+    } else if (status === 'processing') {
+      conditions.push(
+        inArray(documents.status, ['uploading', 'queued', 'processing']),
+      );
+    } else if (status === 'failed') {
+      conditions.push(eq(documents.status, 'failed'));
+    } else if (status === 'expired') {
+      conditions.push(
+        and(isNotNull(documents.expiresAt), lte(documents.expiresAt, now))!,
+      );
+    }
+
+    return and(...conditions)!;
+  }
+
+  private principalDocumentAccessCondition(principal: AdminPrincipal): SQL {
+    const superAdminCondition = this.currentSuperAdminCondition(principal);
+    return sql`(
+      ${superAdminCondition}
+      OR EXISTS (
+        SELECT 1
+        FROM "organization_memberships" AS "accessible_membership"
+        WHERE "accessible_membership"."member_idp_uuid" = ${principal.uuid}
+          AND "accessible_membership"."status" = 'ACCEPTED'
+          AND (
+            "accessible_membership"."organization_id" = ${documents.ownerOrganizationId}
+            OR EXISTS (
+              SELECT 1
+              FROM "document_organization_shares" AS "accessible_share"
+              WHERE "accessible_share"."document_id" = ${documents.id}
+                AND "accessible_share"."organization_id" = "accessible_membership"."organization_id"
+            )
+          )
+      )
+    )`;
+  }
+
+  private accessibleDocumentsOrderBy(sort: AccessibleDocumentSort) {
+    if (sort === 'name') {
+      return [asc(documents.title), asc(documents.id)] as const;
+    }
+    if (sort === 'expiry') {
+      return [
+        sql`${documents.expiresAt} ASC NULLS LAST`,
+        asc(documents.id),
+      ] as const;
+    }
+    return [desc(documents.createdAt), desc(documents.id)] as const;
   }
 
   private organizationAccessCondition(

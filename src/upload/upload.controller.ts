@@ -34,6 +34,10 @@ import { Readable } from 'stream';
 import { DocumentListItemDto } from './dto/document-list-item.dto';
 import { UpdateExpiresAtDto } from './dto/update-expires-at.dto';
 import { TransferDocumentDto } from './dto/transfer-document.dto';
+import {
+  AccessibleDocumentsResponseDto,
+  ListAccessibleDocumentsQueryDto,
+} from './dto/list-accessible-documents.dto';
 
 async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -98,52 +102,22 @@ export class UploadController {
     });
   }
 
-  @Get('manageable')
+  @Get('accessible')
   @ApiOperation({
-    summary: '현재 사용자가 관리 가능한 문서 목록',
+    summary: '접근 가능한 문서 목록 (페이지네이션·집계)',
     description:
-      'SUPER_ADMIN의 전체 문서와, 소유 조직에 ACCEPTED 멤버십(MANAGER/MEMBER)이 있는 문서를 중복 없이 반환합니다.',
+      '조회 권한이 있는 문서(소유 조직 + 공유 문서)를 페이지 단위로 반환합니다. filteredTotal과 summary 집계를 포함합니다.',
   })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    type: Number,
-    description: '최대 개수 (기본 50, 최대 100)',
-  })
-  @ApiQuery({
-    name: 'offset',
-    required: false,
-    type: Number,
-    description: '건너뛸 개수 (페이지네이션)',
-  })
-  @ApiResponse({
-    status: 200,
-    description: '성공',
-    type: DocumentListItemDto,
-    isArray: true,
-  })
-  @ApiResponse({ status: 400, description: '잘못된 limit 또는 offset' })
+  @ApiResponse({ status: 200, type: AccessibleDocumentsResponseDto })
+  @ApiResponse({ status: 400, description: '잘못된 쿼리 파라미터' })
   @ApiResponse({ status: 401, description: '인증 실패' })
-  async listManageableDocuments(
+  @ApiResponse({ status: 403, description: '지정 조직 접근 권한 없음' })
+  @ApiResponse({ status: 404, description: '지정 조직 없음' })
+  listAccessibleDocuments(
     @CurrentAdmin() admin: AdminContext,
-    @Query('limit') limit?: string,
-    @Query('offset') offset?: string,
+    @Query() query: ListAccessibleDocumentsQueryDto,
   ) {
-    const limitNum = limit != null ? parseInt(limit, 10) : undefined;
-    const offsetNum = offset != null ? parseInt(offset, 10) : undefined;
-    if (limit != null && (Number.isNaN(limitNum) || (limitNum as number) < 1)) {
-      throw new BadRequestException('limit must be a positive number');
-    }
-    if (
-      offset != null &&
-      (Number.isNaN(offsetNum as number) || (offsetNum as number) < 0)
-    ) {
-      throw new BadRequestException('offset must be a non-negative number');
-    }
-    return this.uploadService.listManageableDocuments(admin, {
-      limit: limitNum,
-      offset: offsetNum,
-    });
+    return this.uploadService.listAccessibleDocuments(admin, query);
   }
 
   @Get(':id')
@@ -385,16 +359,18 @@ export class UploadController {
   }
 
   @Delete(':id/shares/:organizationId')
-  @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: '조직 문서 공유 해제' })
-  @ApiResponse({ status: 204, description: '공유 해제 성공' })
+  @ApiOperation({
+    summary: '조직 문서 공유 해제',
+    description: '공유 해제 후 최신 문서 권한 정보를 반환합니다.',
+  })
+  @ApiResponse({ status: 200, type: DocumentListItemDto })
   @ApiResponse({ status: 403, description: '공유 권한 없음' })
-  async unshare(
+  unshare(
     @CurrentAdmin() admin: AdminContext,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('organizationId', new ParseUUIDPipe()) organizationId: string,
-  ): Promise<void> {
-    await this.uploadService.unshareDocument(id, organizationId, admin);
+  ) {
+    return this.uploadService.unshareDocument(id, organizationId, admin);
   }
 
   @Post(':id/transfer')

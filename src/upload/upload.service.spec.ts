@@ -101,9 +101,15 @@ function createService() {
     isCurrentSuperAdmin: jest.fn(async (actor: AdminPrincipal) =>
       Promise.resolve(actor.role === 'SUPER_ADMIN'),
     ),
-    listManageableDocuments: jest.fn<
-      OrganizationsRepository['listManageableDocuments']
-    >(async () => [document()]),
+    listAccessibleDocuments: jest.fn<
+      OrganizationsRepository['listAccessibleDocuments']
+    >(async () => ({ rows: [document()], filteredTotal: 1 })),
+    summarizeAccessibleDocuments: jest.fn<
+      OrganizationsRepository['summarizeAccessibleDocuments']
+    >(async () => ({
+      totalDocuments: 1,
+      organizationCounts: { [ORGANIZATION_ID]: 1 },
+    })),
     listOrganizationDocuments: jest.fn(async () => [document()]),
     createUploadingDocument: jest.fn<
       OrganizationsRepository['createUploadingDocument']
@@ -590,22 +596,92 @@ describe('UploadService organization-aware transitions', () => {
       limit: 50,
       offset: 0,
     });
-    expect(organizationsRepo.listManageableDocuments).not.toHaveBeenCalled();
+    expect(organizationsRepo.listAccessibleDocuments).not.toHaveBeenCalled();
     expect(result).toHaveLength(1);
   });
 
-  it('delegates manageable listing to the organization repository', async () => {
-    const { service, repo, organizationsRepo } = createService();
-    organizationsRepo.listManageableDocuments.mockResolvedValue([document()]);
-    const result = await service.listManageableDocuments(principal());
-    expect(repo.listByUploader).not.toHaveBeenCalled();
-    expect(organizationsRepo.listManageableDocuments).toHaveBeenCalledWith(
+  it('returns paginated accessible documents with summary', async () => {
+    const { service, organizationsRepo, access } = createService();
+    organizationsRepo.listAccessibleDocuments.mockResolvedValue({
+      rows: [document()],
+      filteredTotal: 21,
+    });
+    organizationsRepo.summarizeAccessibleDocuments.mockResolvedValue({
+      totalDocuments: 30,
+      organizationCounts: {
+        [ORGANIZATION_ID]: 20,
+        '00000000-0000-0000-0000-000000000020': 15,
+      },
+    });
+
+    const result = await service.listAccessibleDocuments(principal(), {
+      organizationId: 'all',
+      page: 2,
+      size: 20,
+      status: 'all',
+      sort: 'recent',
+    });
+
+    expect(access.requireOrganizationMember).not.toHaveBeenCalled();
+    expect(organizationsRepo.listAccessibleDocuments).toHaveBeenCalledWith(
       principal(),
-      { limit: 50, offset: 0 },
+      expect.objectContaining({
+        organizationId: undefined,
+        page: 2,
+        size: 20,
+      }),
     );
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      canManage: true,
+    expect(result).toMatchObject({
+      items: [expect.objectContaining({ id: document().id })],
+      page: {
+        number: 2,
+        size: 20,
+        filteredTotal: 21,
+        totalPages: 2,
+        hasNext: false,
+        hasPrevious: true,
+      },
+      summary: {
+        totalDocuments: 30,
+        organizationCounts: {
+          [ORGANIZATION_ID]: 20,
+          '00000000-0000-0000-0000-000000000020': 15,
+        },
+      },
+    });
+  });
+
+  it('rejects inaccessible organization filters for accessible listing', async () => {
+    const { service, access, organizationsRepo } = createService();
+    access.requireOrganizationMember.mockRejectedValue(
+      new ForbiddenException('Accepted organization membership required'),
+    );
+    await expect(
+      service.listAccessibleDocuments(principal(), {
+        organizationId: '00000000-0000-0000-0000-000000000099',
+        page: 1,
+        size: 20,
+        status: 'all',
+        sort: 'recent',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(organizationsRepo.listAccessibleDocuments).not.toHaveBeenCalled();
+  });
+
+  it('returns the updated document after unshare', async () => {
+    const { service, organizationsRepo } = createService();
+    organizationsRepo.removeShare.mockResolvedValue({
+      kind: 'ok',
+      document: document(),
+    });
+    const result = await service.unshareDocument(
+      document().id,
+      '00000000-0000-0000-0000-000000000020',
+      principal(),
+    );
+    expect(result).toMatchObject({
+      id: document().id,
+      canShare: true,
       accessRelation: 'OWNER',
     });
   });

@@ -25,6 +25,11 @@ import type {
   DocumentAccessDecision,
 } from '../organizations/organization.types';
 import type { DocumentListItemDto } from './dto/document-list-item.dto';
+import type {
+  AccessibleDocumentsResponseDto,
+  ListAccessibleDocumentsQueryDto,
+} from './dto/list-accessible-documents.dto';
+import { isUUID } from 'class-validator';
 
 const PDF_MIME = 'application/pdf';
 const DEFAULT_LIMIT = 50;
@@ -68,16 +73,55 @@ export class UploadService {
     return this.toListItems(rows, principal, undefined, [], true);
   }
 
-  async listManageableDocuments(
+  async listAccessibleDocuments(
     principal: AdminPrincipal,
-    options: { limit?: number; offset?: number } = {},
-  ): Promise<DocumentListItemDto[]> {
-    const paging = this.normalizePaging(options);
-    const rows = await this.organizationsRepo.listManageableDocuments(
+    query: ListAccessibleDocumentsQueryDto,
+  ): Promise<AccessibleDocumentsResponseDto> {
+    const organizationId =
+      query.organizationId === 'all' ? undefined : query.organizationId;
+    if (organizationId != null) {
+      if (!isUUID(organizationId)) {
+        throw new BadRequestException(
+          'organizationId must be a UUID or "all"',
+        );
+      }
+      await this.access.requireOrganizationMember(organizationId, principal);
+    }
+
+    const [{ rows, filteredTotal }, summary] = await Promise.all([
+      this.organizationsRepo.listAccessibleDocuments(principal, {
+        organizationId,
+        page: query.page,
+        size: query.size,
+        query: query.query,
+        status: query.status,
+        sort: query.sort,
+      }),
+      this.organizationsRepo.summarizeAccessibleDocuments(principal),
+    ]);
+
+    const items = await this.toListItems(
+      rows,
       principal,
-      paging,
+      organizationId,
+      [],
+      true,
     );
-    return this.toListItems(rows, principal, undefined, [], true);
+    const totalPages =
+      filteredTotal === 0 ? 0 : Math.ceil(filteredTotal / query.size);
+
+    return {
+      items,
+      page: {
+        number: query.page,
+        size: query.size,
+        filteredTotal,
+        totalPages,
+        hasNext: query.page < totalPages,
+        hasPrevious: query.page > 1 && filteredTotal > 0,
+      },
+      summary,
+    };
   }
 
   async listOrganizationDocuments(
@@ -295,9 +339,14 @@ export class UploadService {
       throw new ConflictException('Document sharing state changed');
     }
     return (
-      await this.toListItems([result.document], principal, undefined, [
-        { ...decision, document: result.document },
-      ])
+      await this.toListItems(
+        [result.document],
+        principal,
+        undefined,
+        [{ ...decision, document: result.document }],
+        false,
+        true,
+      )
     )[0];
   }
 
@@ -305,7 +354,7 @@ export class UploadService {
     id: string,
     targetOrganizationId: string,
     principal: AdminPrincipal,
-  ): Promise<void> {
+  ): Promise<DocumentListItemDto> {
     const decision = await this.access.requireDocumentShare(id, principal);
     const result = await this.organizationsRepo.removeShare({
       documentId: id,
@@ -314,6 +363,19 @@ export class UploadService {
       actor: principal,
     });
     this.assertDocumentMutation(result);
+    if (result.kind !== 'ok') {
+      throw new ConflictException('Document sharing state changed');
+    }
+    return (
+      await this.toListItems(
+        [result.document],
+        principal,
+        undefined,
+        [{ ...decision, document: result.document }],
+        false,
+        true,
+      )
+    )[0];
   }
 
   async transferDocument(
@@ -347,17 +409,14 @@ export class UploadService {
       throw new ConflictException('Document transfer state changed');
     }
     return (
-      await this.toListItems([result.document], principal, undefined, [
-        {
-          document: result.document,
-          relation: 'OWNER',
-          ownerRole: this.access.isSuperAdmin(principal) ? null : 'MANAGER',
-          canView: true,
-          canManage: true,
-          canShare: true,
-          canTransfer: true,
-        },
-      ])
+      await this.toListItems(
+        [result.document],
+        principal,
+        undefined,
+        [],
+        false,
+        false,
+      )
     )[0];
   }
 

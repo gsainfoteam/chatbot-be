@@ -865,7 +865,7 @@ describeDatabase('Organization database invariants (e2e)', () => {
     );
   });
 
-  it('requires target MANAGER permission and returns manageable documents once', async () => {
+  it('requires target organization membership and returns manageable documents once', async () => {
     await db.insert(admins).values({
       idpUuid: sourceOnlyManagerUuid,
       email: `${testPrefix}-source-only@example.com`,

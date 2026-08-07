@@ -567,10 +567,10 @@ describe('UploadService organization-aware transitions', () => {
     );
   });
 
-  it('requires target-organization MANAGER permission for transfer', async () => {
+  it('requires target-organization membership for transfer', async () => {
     const { service, organizationsRepo, access } = createService();
-    access.requireOrganizationManager.mockRejectedValue(
-      new ForbiddenException('Organization manager role required'),
+    access.requireOrganizationMember.mockRejectedValue(
+      new ForbiddenException('Accepted organization membership required'),
     );
     await expect(
       service.transferDocument(

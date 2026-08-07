@@ -332,7 +332,7 @@ export class UploadService {
     ) {
       throw new NotFoundException('Target organization not found');
     }
-    await this.access.requireOrganizationManager(
+    await this.access.requireOrganizationMember(
       targetOrganizationId,
       principal,
     );

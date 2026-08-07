@@ -102,7 +102,7 @@ export class UploadController {
   @ApiOperation({
     summary: '현재 사용자가 관리 가능한 문서 목록',
     description:
-      'SUPER_ADMIN의 전체 문서, MANAGER의 소유 조직 문서, MEMBER가 직접 업로드한 소유 조직 문서를 중복 없이 반환합니다.',
+      'SUPER_ADMIN의 전체 문서와, 소유 조직에 ACCEPTED 멤버십(MANAGER/MEMBER)이 있는 문서를 중복 없이 반환합니다.',
   })
   @ApiQuery({
     name: 'limit',
@@ -371,7 +371,7 @@ export class UploadController {
   @ApiOperation({
     summary: '문서를 다른 조직에 공유',
     description:
-      '소유 조직 MANAGER 또는 SUPER_ADMIN만 가능하며 PDF/청크를 복제하지 않습니다.',
+      '소유 조직 멤버(MANAGER/MEMBER) 또는 SUPER_ADMIN만 가능하며 PDF/청크를 복제하지 않습니다.',
   })
   @ApiResponse({ status: 200, type: DocumentListItemDto })
   @ApiResponse({ status: 400, description: '소유 조직으로 공유 시도' })
@@ -401,12 +401,12 @@ export class UploadController {
   @ApiOperation({
     summary: '문서 소유권 이전',
     description:
-      'SUPER_ADMIN 또는 출발/대상 양쪽 조직의 MANAGER만 가능하며 공유 정리와 감사 로그를 원자적으로 기록합니다.',
+      'SUPER_ADMIN 또는 출발/대상 양쪽 조직의 멤버(MANAGER/MEMBER)만 가능하며 공유 정리와 감사 로그를 원자적으로 기록합니다.',
   })
   @ApiResponse({ status: 201, type: DocumentListItemDto })
   @ApiResponse({
     status: 403,
-    description: '출발 또는 대상 조직 MANAGER 권한 없음',
+    description: '출발 또는 대상 조직 멤버십 없음',
   })
   @ApiResponse({ status: 409, description: '동시 소유권 변경' })
   transfer(

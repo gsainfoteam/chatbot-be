@@ -681,13 +681,7 @@ export class OrganizationsRepository {
           eq(documents.isActive, true),
           or(
             this.currentSuperAdminCondition(principal),
-            and(
-              isNotNull(organizationMemberships.id),
-              or(
-                eq(organizationMemberships.role, 'MANAGER'),
-                eq(documents.uploadedByIdpUuid, principal.uuid),
-              ),
-            ),
+            isNotNull(organizationMemberships.id),
           ),
         ),
       )
@@ -893,7 +887,7 @@ export class OrganizationsRepository {
   }): Promise<DocumentMutationResult> {
     return this.db.transaction(async (tx) => {
       await this.lockOrganizations(tx, [input.expectedOwnerOrganizationId]);
-      const state = await this.lockAndAuthorizeOwnerManager(
+      const state = await this.lockAndAuthorizeOwnerMember(
         tx,
         input.documentId,
         input.expectedOwnerOrganizationId,
@@ -925,7 +919,7 @@ export class OrganizationsRepository {
   }): Promise<DocumentMutationResult> {
     return this.db.transaction(async (tx) => {
       await this.lockOrganizations(tx, [input.expectedOwnerOrganizationId]);
-      const state = await this.lockAndAuthorizeOwnerManager(
+      const state = await this.lockAndAuthorizeOwnerMember(
         tx,
         input.documentId,
         input.expectedOwnerOrganizationId,
@@ -958,7 +952,7 @@ export class OrganizationsRepository {
         input.expectedOwnerOrganizationId,
         input.targetOrganizationId,
       ]);
-      const state = await this.lockAndAuthorizeOwnerManager(
+      const state = await this.lockAndAuthorizeOwnerMember(
         tx,
         input.documentId,
         input.expectedOwnerOrganizationId,
@@ -982,7 +976,6 @@ export class OrganizationsRepository {
               ),
               eq(organizationMemberships.memberIdpUuid, input.actor.uuid),
               eq(organizationMemberships.status, 'ACCEPTED'),
-              eq(organizationMemberships.role, 'MANAGER'),
             ),
           )
           .limit(1);
@@ -1201,7 +1194,7 @@ export class OrganizationsRepository {
     return decision.canManage ? state : { kind: 'forbidden' };
   }
 
-  private async lockAndAuthorizeOwnerManager(
+  private async lockAndAuthorizeOwnerMember(
     tx: Parameters<Parameters<Database['transaction']>[0]>[0],
     documentId: string,
     expectedOwnerOrganizationId: string,
@@ -1213,7 +1206,7 @@ export class OrganizationsRepository {
       expectedOwnerOrganizationId,
     );
     if (state.kind !== 'ok') return state;
-    return (await this.isCurrentManager(tx, expectedOwnerOrganizationId, actor))
+    return (await this.isCurrentMember(tx, expectedOwnerOrganizationId, actor))
       ? state
       : { kind: 'forbidden' };
   }

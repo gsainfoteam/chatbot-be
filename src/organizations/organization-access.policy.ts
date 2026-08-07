@@ -12,16 +12,16 @@ export function evaluateDocumentAccess(input: {
   shared: boolean;
 }): DocumentAccessDecision {
   if (input.ownerRole) {
-    const isManager = input.ownerRole === 'MANAGER';
-    const isOwnUpload = input.document.uploadedByIdpUuid === input.actorIdpUuid;
+    // Accepted owner-org membership (MANAGER or MEMBER) grants full document
+    // rights. Organization admin actions (invite/role changes) stay MANAGER-only.
     return {
       document: input.document,
       relation: 'OWNER',
       ownerRole: input.ownerRole,
       canView: true,
-      canManage: isManager || isOwnUpload,
-      canShare: isManager,
-      canTransfer: isManager,
+      canManage: true,
+      canShare: true,
+      canTransfer: true,
     };
   }
 

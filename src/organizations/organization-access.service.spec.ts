@@ -46,16 +46,7 @@ function principal(overrides: Partial<AdminPrincipal> = {}): AdminPrincipal {
 }
 
 describe('evaluateDocumentAccess', () => {
-  it('allows a MEMBER to manage only their own upload', () => {
-    expect(
-      evaluateDocumentAccess({
-        document: document(),
-        actorIdpUuid: 'uploader',
-        ownerRole: 'MEMBER',
-        shared: false,
-      }),
-    ).toMatchObject({ canView: true, canManage: true, canShare: false });
-
+  it('allows an owner MEMBER to manage/share/transfer every owned document', () => {
     expect(
       evaluateDocumentAccess({
         document: document(),
@@ -63,7 +54,13 @@ describe('evaluateDocumentAccess', () => {
         ownerRole: 'MEMBER',
         shared: false,
       }),
-    ).toMatchObject({ canView: true, canManage: false, canTransfer: false });
+    ).toMatchObject({
+      relation: 'OWNER',
+      canView: true,
+      canManage: true,
+      canShare: true,
+      canTransfer: true,
+    });
   });
 
   it('allows an owner MANAGER to manage/share/transfer every owned document', () => {

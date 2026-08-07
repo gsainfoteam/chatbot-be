@@ -2,14 +2,17 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it, jest } from '@jest/globals';
 import { ChatOrchestrationService } from './chat-orchestration.service';
 import { MessageRole } from '../../common/dto/chat-message-input.dto';
-import type { ListResourcesResult } from '../../mcp/mcp-client.service';
-import type { OpenRouterResponse } from '../types/open-router.types';
+import type { ListResourcesResult } from '../../retrieval/retrieval.types';
+import type { LlmResponse } from '../types/llm.types';
+import { ResourceContentService } from './resource-content.service';
+import { ResourceSelectionService } from './resource-selection.service';
+import { ChatStreamTransport } from './chat-stream.transport';
 
 describe('ChatOrchestrationService', () => {
-  function createOpenRouterResponse(
+  function createLlmResponse(
     content: string,
     totalTokens: number,
-  ): OpenRouterResponse {
+  ): LlmResponse {
     return {
       id: `response-${totalTokens}`,
       model: 'test-model',
@@ -35,55 +38,46 @@ describe('ChatOrchestrationService', () => {
       texts: ['available school documents'],
       resourceLinks: [],
       embeddedResources: [],
-      filteredResources: [
-        { path: '학사편람/졸업요건.md', formats: ['md'] },
-        { path: '학사편람/수강신청.md', formats: ['md'] },
-        { path: '학사편람.pdf', formats: ['pdf'] },
+      filteredResources: [],
+      resources: [
+        {
+          path: '학사편람.pdf',
+          description: '학사 안내',
+          chunks: [
+            { path: '학사편람/졸업요건', description: '졸업요건' },
+            { path: '학사편람/수강신청', description: '수강신청' },
+          ],
+        },
       ],
+      chunks: [
+        { path: '학사편람/졸업요건', description: '졸업요건' },
+        { path: '학사편람/수강신청', description: '수강신청' },
+      ],
+      total: 1,
     };
 
-    const mcpClientService = {
-      withSession: jest.fn(async (fn: () => Promise<unknown>) => fn()),
-      callTool: jest.fn(async (name: string, args: { path?: string }) => {
-        if (name === 'list_resources') {
-          return listResult;
-        }
-
-        if (name === 'get_resource' && args.path === '학사편람/졸업요건') {
-          return {
-            raw: {},
-            texts: ['졸업요건 문서 본문입니다.'],
-            resourceLinks: [],
-            embeddedResources: [],
-            filteredResources: [],
-          };
-        }
-
-        if (name === 'get_resource' && args.path === '학사편람/수강신청') {
-          return {
-            raw: {},
-            texts: ['수강신청 문서 본문입니다.'],
-            resourceLinks: [],
-            embeddedResources: [],
-            filteredResources: [],
-          };
-        }
-
-        throw new Error(`Unexpected tool call: ${name}`);
-      }),
+    const retrievalService = {
+      listCatalog: jest.fn(async () => listResult),
+      getContentsByPaths: jest.fn(async (paths: string[]) =>
+        paths.map((path) => ({
+          path,
+          content: path.includes('졸업')
+            ? '졸업요건 문서 본문입니다.'
+            : '수강신청 문서 본문입니다.',
+        })),
+      ),
     };
-    type CallLLM = (...args: unknown[]) => Promise<OpenRouterResponse>;
+    type CallLLM = (...args: unknown[]) => Promise<LlmResponse>;
     type RecordUsage = (
       sessionId: string,
       input: { totalTokens: number },
     ) => Promise<void>;
 
-    const openRouterService = {
+    const llmClient = {
       getModel: jest.fn((type: string) => `${type}-model`),
       callLLM: jest
         .fn<CallLLM>()
-        .mockResolvedValueOnce(createOpenRouterResponse('1, 2', 100))
-        .mockResolvedValueOnce(createOpenRouterResponse('1', 200)),
+        .mockResolvedValueOnce(createLlmResponse(JSON.stringify([1, 2]), 100)),
       generateFinalResponseStream: jest.fn(async () => finalStream),
     };
     const chatService = {
@@ -97,42 +91,51 @@ describe('ChatOrchestrationService', () => {
     const usageService = {
       recordUsage: jest.fn<RecordUsage>(async () => undefined),
     };
-    const configService = {
+
+    const resourceSelectionService = new ResourceSelectionService(
+      llmClient as never,
+    );
+    const resourceContentService = new ResourceContentService(
+      retrievalService as never,
+      resourceSelectionService,
+    );
+    const chatStreamTransport = new ChatStreamTransport({
       get: jest.fn((key: string) =>
         key === 'DOMAIN_NAME' ? 'example.com' : undefined,
       ),
-    };
+    } as never);
 
     const service = new ChatOrchestrationService(
-      mcpClientService as never,
-      openRouterService as never,
+      retrievalService as never,
+      llmClient as never,
       chatService as never,
       usageService as never,
-      configService as never,
+      resourceContentService,
+      chatStreamTransport,
     );
 
-    let resolveEnd: () => void;
-    const responseEnded = new Promise<void>((resolve) => {
-      resolveEnd = resolve;
-    });
     const reply = {
       hijack: jest.fn(),
       raw: {
         writeHead: jest.fn(),
         write: jest.fn(),
-        end: jest.fn(() => resolveEnd()),
+        end: jest.fn(),
       },
     };
     const req = {
       headers: { origin: 'http://localhost:5173' },
     };
 
-    await service.handleStreamingResponse(
+    const handlePromise = service.handleStreamingResponse(
       'session-id',
       '졸업 요건 알려줘',
       reply as never,
       req as never,
     );
+
+    // processUserQuestionStream이 generateFinalResponseStream을 호출한 뒤
+    // consumeAndForward가 stream을 구독할 시간을 준다.
+    await new Promise((r) => setImmediate(r));
 
     finalStream.write(
       `data: ${JSON.stringify({
@@ -151,11 +154,11 @@ describe('ChatOrchestrationService', () => {
     );
     finalStream.end('data: [DONE]\n\n');
 
-    await responseEnded;
+    await handlePromise;
 
-    expect(openRouterService.callLLM).toHaveBeenCalledTimes(2);
+    expect(llmClient.callLLM).toHaveBeenCalledTimes(1);
     expect(usageService.recordUsage).toHaveBeenCalledWith('session-id', {
-      totalTokens: 600,
+      totalTokens: 400,
     });
     expect(chatService.createMessage).toHaveBeenCalledWith(
       'session-id',
@@ -165,9 +168,9 @@ describe('ChatOrchestrationService', () => {
         metadata: expect.objectContaining({
           model: 'heavy-model',
           usage: {
-            prompt_tokens: 420,
-            completion_tokens: 180,
-            total_tokens: 600,
+            prompt_tokens: 280,
+            completion_tokens: 120,
+            total_tokens: 400,
           },
         }),
       }),

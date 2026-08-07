@@ -6,9 +6,11 @@ import {
   IsEnum,
   IsNotEmpty,
   IsOptional,
+  IsBase64,
   Min,
   Max,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -16,6 +18,11 @@ enum Environment {
   Development = 'development',
   Production = 'production',
   Test = 'test',
+}
+
+enum LlmProvider {
+  Letsur = 'letsur',
+  OpenRouter = 'openrouter',
 }
 
 /**
@@ -98,14 +105,39 @@ export class EnvironmentVariables {
   @IsNotEmpty()
   IDP_CLIENT_SECRET: string;
 
-  // Letsur AI Gateway Configuration
+  // LLM Provider: letsur (default) | openrouter
+  @IsOptional()
+  @IsEnum(LlmProvider)
+  LLM_PROVIDER?: LlmProvider;
+
+  // Letsur AI Gateway Configuration (required when LLM_PROVIDER=letsur)
+  @ValidateIf(
+    (o: EnvironmentVariables) =>
+      (o.LLM_PROVIDER ?? LlmProvider.Letsur) === LlmProvider.Letsur,
+  )
   @IsString()
   @IsNotEmpty()
   LETSUR_AI_GATEWAY_BASE_URL: string;
 
+  @ValidateIf(
+    (o: EnvironmentVariables) =>
+      (o.LLM_PROVIDER ?? LlmProvider.Letsur) === LlmProvider.Letsur,
+  )
   @IsString()
   @IsNotEmpty()
   LETSUR_AI_GATEWAY_API_KEY: string;
+
+  // OpenRouter Configuration (required when LLM_PROVIDER=openrouter)
+  @ValidateIf(
+    (o: EnvironmentVariables) => o.LLM_PROVIDER === LlmProvider.OpenRouter,
+  )
+  @IsString()
+  @IsNotEmpty()
+  OPEN_ROUTER_API_KEY: string;
+
+  @IsOptional()
+  @IsString()
+  OPEN_ROUTER_BASE_URL?: string;
 
   // Client Domain Configuration
   @IsString()
@@ -121,6 +153,54 @@ export class EnvironmentVariables {
   @IsString()
   @IsNotEmpty()
   MCP_RESOURCE_API_URL: string;
+
+  // GCS (PDF processor)
+  @IsString()
+  @IsNotEmpty()
+  GCS_BUCKET: string;
+
+  @IsString()
+  @IsNotEmpty()
+  GCP_PROJECT_ID: string;
+
+  // Base64-encoded GCP service account JSON. When omitted, Google ADC is used.
+  @IsOptional()
+  @IsString()
+  @IsBase64()
+  GCS_SERVICE_ACCOUNT_KEY_BASE64?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(1)
+  PDF_PROCESSOR_CONCURRENCY?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  PDF_PROCESSOR_CONTEXT_LENGTH?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  PDF_PROCESSOR_LLM_TIMEOUT?: number;
+
+  /** Pass 1 page LLM fallback ratio above which the job fails (0–1). Default 0.1. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(1)
+  PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(500)
+  PDF_PROCESSOR_POLL_INTERVAL_MS?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(60000)
+  PDF_PROCESSOR_STALE_PROCESSING_MS?: number;
 
   // Swagger API 문서 잠금 (둘 다 설정 시 Basic Auth 적용)
   @IsOptional()

@@ -37,6 +37,24 @@ export const collaboratorStatusEnum = pgEnum('collaborator_status', [
   'ACCEPTED',
 ]);
 
+export const organizationRoleEnum = pgEnum('organization_role', [
+  'MANAGER',
+  'MEMBER',
+]);
+
+export const organizationMembershipStatusEnum = pgEnum(
+  'organization_membership_status',
+  ['PENDING', 'ACCEPTED'],
+);
+
+export const documentStatusEnum = pgEnum('document_status', [
+  'uploading',
+  'queued',
+  'processing',
+  'ready',
+  'failed',
+]);
+
 // Tables
 
 /**
@@ -58,6 +76,80 @@ export const admins = pgTable(
   (table) => ({
     idpUuidIdx: index('admins_idp_uuid_idx').on(table.idpUuid),
     emailIdx: index('admins_email_idx').on(table.email),
+    normalizedEmailUnique: uniqueIndex('admins_normalized_email_unique').using(
+      'btree',
+      sql`lower(trim(${table.email}))`,
+    ),
+  }),
+);
+
+/**
+ * 문서 관리 조직. 문서는 정확히 한 조직이 소유하며 다른 조직에 공유될 수 있다.
+ */
+export const organizations = pgTable(
+  'organizations',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 255 }).notNull(),
+    slug: varchar('slug', { length: 255 }).notNull().unique(),
+    isDefault: boolean('is_default').notNull().default(false),
+    createdByIdpUuid: varchar('created_by_idp_uuid', { length: 255 }),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    defaultOrganizationUnique: uniqueIndex(
+      'organizations_single_default_unique',
+    )
+      .on(table.isDefault)
+      .where(sql`${table.isDefault} = true`),
+    createdByIdx: index('organizations_created_by_idp_uuid_idx').on(
+      table.createdByIdpUuid,
+    ),
+  }),
+);
+
+/** 조직 초대와 수락된 멤버십을 함께 저장한다. */
+export const organizationMemberships = pgTable(
+  'organization_memberships',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    inviteeEmail: varchar('invitee_email', { length: 255 }).notNull(),
+    memberIdpUuid: varchar('member_idp_uuid', { length: 255 }),
+    role: organizationRoleEnum('role').notNull().default('MEMBER'),
+    status: organizationMembershipStatusEnum('status')
+      .notNull()
+      .default('PENDING'),
+    invitedByIdpUuid: varchar('invited_by_idp_uuid', {
+      length: 255,
+    }).notNull(),
+    acceptedAt: timestamp('accepted_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    organizationIdx: index('organization_memberships_organization_id_idx').on(
+      table.organizationId,
+    ),
+    memberLookupIdx: index(
+      'organization_memberships_member_idp_uuid_status_idx',
+    ).on(table.memberIdpUuid, table.status),
+    pendingInviteIdx: index(
+      'organization_memberships_invitee_email_status_idx',
+    ).on(table.inviteeEmail, table.status),
+    uniqueOrganizationEmail: uniqueIndex(
+      'organization_memberships_organization_id_invitee_email_unique',
+    )
+      .on(table.organizationId, table.inviteeEmail)
+      .where(sql`${table.status} = 'PENDING'`),
+    uniqueOrganizationMember: uniqueIndex(
+      'organization_memberships_organization_id_member_idp_uuid_unique',
+    )
+      .on(table.organizationId, table.memberIdpUuid)
+      .where(sql`${table.memberIdpUuid} IS NOT NULL`),
   }),
 );
 /**
@@ -187,6 +279,142 @@ export const uploadedResources = pgTable(
 );
 
 /**
+ * PDF 문서 테이블 (ingestion)
+ * - Admin 업로드 후 비동기 Pass1/2 처리 상태와 메타를 저장
+ */
+export const documents = pgTable(
+  'documents',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    title: varchar('title', { length: 512 }).notNull(),
+    resourceName: varchar('resource_name', { length: 512 }).notNull(),
+    summary: text('summary'),
+    gcsPdfPath: varchar('gcs_pdf_path', { length: 1024 }).notNull(),
+    status: documentStatusEnum('status').notNull().default('queued'),
+    errorMessage: text('error_message'),
+    processingToken: uuid('processing_token'),
+    uploadedByIdpUuid: varchar('uploaded_by_idp_uuid', {
+      length: 255,
+    }).notNull(),
+    ownerOrganizationId: uuid('owner_organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+    processedAt: timestamp('processed_at'),
+    lastReprocessedAt: timestamp('last_reprocessed_at'),
+    expiresAt: timestamp('expires_at'),
+  },
+  (table) => ({
+    resourceNameActiveUnique: uniqueIndex(
+      'documents_resource_name_active_unique',
+    )
+      .on(table.resourceName)
+      .where(sql`${table.isActive} = true`),
+    statusIdx: index('documents_status_idx').on(table.status),
+    uploadedByIdpUuidIdx: index('documents_uploaded_by_idp_uuid_idx').on(
+      table.uploadedByIdpUuid,
+    ),
+    ownerOrganizationIdIdx: index('documents_owner_organization_id_idx').on(
+      table.ownerOrganizationId,
+    ),
+    isActiveIdx: index('documents_is_active_idx').on(table.isActive),
+    createdAtIdx: index('documents_created_at_idx').on(table.createdAt),
+    expiresAtIdx: index('documents_expires_at_idx').on(table.expiresAt),
+  }),
+);
+
+/**
+ * 문서 청크 테이블
+ * - Pass2 의미 청킹 결과 (path / description / content)
+ */
+export const documentChunks = pgTable(
+  'document_chunks',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    path: varchar('path', { length: 1024 }).notNull(),
+    description: text('description').notNull().default(''),
+    content: text('content').notNull(),
+    sortOrder: integer('sort_order').notNull().default(0),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    documentIdIdx: index('document_chunks_document_id_idx').on(
+      table.documentId,
+    ),
+    documentSortIdx: index('document_chunks_document_sort_idx').on(
+      table.documentId,
+      table.sortOrder,
+    ),
+    pathIdx: index('document_chunks_path_idx').on(table.path),
+    documentPathUnique: uniqueIndex(
+      'document_chunks_document_id_path_unique',
+    ).on(table.documentId, table.path),
+  }),
+);
+
+/** 조직에 문서를 공유한다. 소유 조직에 대한 공유 행은 서비스에서 금지한다. */
+export const documentOrganizationShares = pgTable(
+  'document_organization_shares',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    organizationId: uuid('organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    sharedByIdpUuid: varchar('shared_by_idp_uuid', { length: 255 }).notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    documentIdx: index('document_organization_shares_document_id_idx').on(
+      table.documentId,
+    ),
+    organizationIdx: index(
+      'document_organization_shares_organization_id_idx',
+    ).on(table.organizationId),
+    uniqueDocumentOrganization: uniqueIndex(
+      'document_organization_shares_document_id_organization_id_unique',
+    ).on(table.documentId, table.organizationId),
+  }),
+);
+
+/** 문서 소유권 이전 감사 로그. 정상 애플리케이션 흐름에서는 append-only이다. */
+export const documentOwnershipTransfers = pgTable(
+  'document_ownership_transfers',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'restrict' }),
+    sourceOrganizationId: uuid('source_organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    targetOrganizationId: uuid('target_organization_id')
+      .notNull()
+      .references(() => organizations.id, { onDelete: 'restrict' }),
+    actorIdpUuid: varchar('actor_idp_uuid', { length: 255 }).notNull(),
+    transferredAt: timestamp('transferred_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    documentIdx: index('document_ownership_transfers_document_id_idx').on(
+      table.documentId,
+    ),
+    sourceOrganizationIdx: index(
+      'document_ownership_transfers_source_organization_id_idx',
+    ).on(table.sourceOrganizationId),
+    targetOrganizationIdx: index(
+      'document_ownership_transfers_target_organization_id_idx',
+    ).on(table.targetOrganizationId),
+  }),
+);
+
+/**
  * 메시지 테이블
  * - 채팅 메시지를 저장
  */
@@ -283,6 +511,79 @@ export const usageDaily = pgTable(
 );
 
 // Relations
+export const organizationsRelations = relations(organizations, ({ many }) => ({
+  memberships: many(organizationMemberships),
+  ownedDocuments: many(documents),
+  documentShares: many(documentOrganizationShares),
+  outgoingTransfers: many(documentOwnershipTransfers, {
+    relationName: 'transferSourceOrganization',
+  }),
+  incomingTransfers: many(documentOwnershipTransfers, {
+    relationName: 'transferTargetOrganization',
+  }),
+}));
+
+export const organizationMembershipsRelations = relations(
+  organizationMemberships,
+  ({ one }) => ({
+    organization: one(organizations, {
+      fields: [organizationMemberships.organizationId],
+      references: [organizations.id],
+    }),
+  }),
+);
+
+export const documentsRelations = relations(documents, ({ one, many }) => ({
+  ownerOrganization: one(organizations, {
+    fields: [documents.ownerOrganizationId],
+    references: [organizations.id],
+  }),
+  chunks: many(documentChunks),
+  organizationShares: many(documentOrganizationShares),
+  ownershipTransfers: many(documentOwnershipTransfers),
+}));
+
+export const documentChunksRelations = relations(documentChunks, ({ one }) => ({
+  document: one(documents, {
+    fields: [documentChunks.documentId],
+    references: [documents.id],
+  }),
+}));
+
+export const documentOrganizationSharesRelations = relations(
+  documentOrganizationShares,
+  ({ one }) => ({
+    document: one(documents, {
+      fields: [documentOrganizationShares.documentId],
+      references: [documents.id],
+    }),
+    organization: one(organizations, {
+      fields: [documentOrganizationShares.organizationId],
+      references: [organizations.id],
+    }),
+  }),
+);
+
+export const documentOwnershipTransfersRelations = relations(
+  documentOwnershipTransfers,
+  ({ one }) => ({
+    document: one(documents, {
+      fields: [documentOwnershipTransfers.documentId],
+      references: [documents.id],
+    }),
+    sourceOrganization: one(organizations, {
+      fields: [documentOwnershipTransfers.sourceOrganizationId],
+      references: [organizations.id],
+      relationName: 'transferSourceOrganization',
+    }),
+    targetOrganization: one(organizations, {
+      fields: [documentOwnershipTransfers.targetOrganizationId],
+      references: [organizations.id],
+      relationName: 'transferTargetOrganization',
+    }),
+  }),
+);
+
 export const widgetKeysRelations = relations(widgetKeys, ({ many }) => ({
   sessions: many(sessions),
   usageDaily: many(usageDaily),
@@ -339,8 +640,36 @@ export const usageDailyRelations = relations(usageDaily, ({ one }) => ({
 export type Admin = typeof admins.$inferSelect;
 export type NewAdmin = typeof admins.$inferInsert;
 
+export type Organization = typeof organizations.$inferSelect;
+export type NewOrganization = typeof organizations.$inferInsert;
+
+export type OrganizationMembership =
+  typeof organizationMemberships.$inferSelect;
+export type NewOrganizationMembership =
+  typeof organizationMemberships.$inferInsert;
+export type OrganizationRole = (typeof organizationRoleEnum.enumValues)[number];
+export type OrganizationMembershipStatus =
+  (typeof organizationMembershipStatusEnum.enumValues)[number];
+
 export type UploadedResource = typeof uploadedResources.$inferSelect;
 export type NewUploadedResource = typeof uploadedResources.$inferInsert;
+
+export type Document = typeof documents.$inferSelect;
+export type NewDocument = typeof documents.$inferInsert;
+export type DocumentStatus = (typeof documentStatusEnum.enumValues)[number];
+
+export type DocumentChunk = typeof documentChunks.$inferSelect;
+export type NewDocumentChunk = typeof documentChunks.$inferInsert;
+
+export type DocumentOrganizationShare =
+  typeof documentOrganizationShares.$inferSelect;
+export type NewDocumentOrganizationShare =
+  typeof documentOrganizationShares.$inferInsert;
+
+export type DocumentOwnershipTransfer =
+  typeof documentOwnershipTransfers.$inferSelect;
+export type NewDocumentOwnershipTransfer =
+  typeof documentOwnershipTransfers.$inferInsert;
 
 export type WidgetKey = typeof widgetKeys.$inferSelect;
 export type NewWidgetKey = typeof widgetKeys.$inferInsert;

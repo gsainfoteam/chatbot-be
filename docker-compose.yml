@@ -29,8 +29,8 @@ services:
       - '3000:3000'
     environment:
       # Database (Docker에서만 다른 값)
-      DB_HOST: postgres  # Docker 네트워크 내 서비스 이름
-      NODE_ENV: production  # Docker는 프로덕션 모드
+      DB_HOST: postgres # Docker 네트워크 내 서비스 이름
+      NODE_ENV: production # Docker는 프로덕션 모드
       # 나머지는 .env 파일에서 가져옴
       DB_PORT: ${DB_PORT:-5432}
       DB_USER: ${DB_USER:-postgres}
@@ -50,6 +50,15 @@ services:
       # MCP Configuration (optional)
       MCP_BASE_URL: ${MCP_BASE_URL:-}
       MCP_RESOURCE_API_URL: ${MCP_RESOURCE_API_URL:-}
+      # GCS / PDF Processor
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
+      GCS_SERVICE_ACCOUNT_KEY_BASE64: ${GCS_SERVICE_ACCOUNT_KEY_BASE64:-}
+      PDF_PROCESSOR_CONCURRENCY: ${PDF_PROCESSOR_CONCURRENCY:-1}
+      PDF_PROCESSOR_CONTEXT_LENGTH: ${PDF_PROCESSOR_CONTEXT_LENGTH:-500}
+      PDF_PROCESSOR_LLM_TIMEOUT: ${PDF_PROCESSOR_LLM_TIMEOUT:-120}
+      PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO: ${PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO:-0.1}
+      PDF_PROCESSOR_POLL_INTERVAL_MS: ${PDF_PROCESSOR_POLL_INTERVAL_MS:-2000}
       # Letsur AI Gateway Configuration
       LETSUR_AI_GATEWAY_BASE_URL: ${LETSUR_AI_GATEWAY_BASE_URL:-}
       LETSUR_AI_GATEWAY_API_KEY: ${LETSUR_AI_GATEWAY_API_KEY:-}
@@ -58,6 +67,17 @@ services:
       LETSUR_AI_GATEWAY_MODEL_NORMAL: ${LETSUR_AI_GATEWAY_MODEL_NORMAL:-}
       LETSUR_AI_GATEWAY_MODEL_HEAVY: ${LETSUR_AI_GATEWAY_MODEL_HEAVY:-}
       LETSUR_AI_GATEWAY_X_TITLE: ${LETSUR_AI_GATEWAY_X_TITLE:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-letsur}
+      # OpenRouter Configuration (LLM_PROVIDER=openrouter)
+      OPEN_ROUTER_API_KEY: ${OPEN_ROUTER_API_KEY:-}
+      OPEN_ROUTER_BASE_URL: ${OPEN_ROUTER_BASE_URL:-}
+      OPEN_ROUTER_MODEL_LIGHT: ${OPEN_ROUTER_MODEL_LIGHT:-}
+      OPEN_ROUTER_MODEL_NORMAL: ${OPEN_ROUTER_MODEL_NORMAL:-}
+      OPEN_ROUTER_MODEL_HEAVY: ${OPEN_ROUTER_MODEL_HEAVY:-}
+      OPEN_ROUTER_X_TITLE: ${OPEN_ROUTER_X_TITLE:-}
+      # Swagger API 문서 잠금
+      SWAGGER_USER: ${SWAGGER_USER:-}
+      SWAGGER_PASSWORD: ${SWAGGER_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -72,7 +72,8 @@ async function bootstrap() {
     .addTag('Widget Messages', '(Public) 대화 내역 저장 및 조회')
     .addTag('Admin Management', '(Private) 위젯 키 관리')
     .addTag('Authentication', '(Private) Admin 인증 및 토큰 관리')
-    .addTag('Upload', '(Private) Super Admin 전용 PDF 업로드/삭제')
+    .addTag('Upload', '(Private) 조직 권한 기반 PDF 문서 관리')
+    .addTag('Organizations', '(Private) 조직 멤버십 및 문서 권한 관리')
     .addTag('Health', '(Public) 서버 상태 확인')
     .build();
 

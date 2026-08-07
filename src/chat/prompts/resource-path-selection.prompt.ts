@@ -1,10 +1,10 @@
 /**
  * 문서 경로(목록) 선별을 위한 프롬프트
  * - 구 형식: 경로만 있는 플랫 리스트 → 번호로 선택
- * - 신 형식: description + chunks → description 보고 chunk 경로 선택, JSON 배열 반환
+ * - 신 형식: description + chunks → 번호가 매겨진 세부 chunk를 선택
  */
 
-import type { ListResourceItem } from '../../mcp/mcp-client.service';
+import type { ListResourceItem } from '../../retrieval/retrieval.types';
 
 export interface ResourcePathSelectionPromptParams {
   pathList: string;
@@ -55,15 +55,26 @@ export interface ChunkSelectionPromptParams {
   maxSelect: number;
 }
 
+export type ChunkSelectionCandidate = {
+  number: number;
+  path: string;
+  description: string;
+  resourcePath: string;
+  resourceDescription: string;
+  isRoot: boolean;
+  rootPath?: string;
+};
+
 /**
  * chunk 선별 시스템 프롬프트 (신 형식: description 보고 관련 chunk 선택)
  */
 export const CHUNK_SELECTION_SYSTEM_PROMPT = `
 당신은 사용자 질문과 리소스 설명(description)의 관련성을 판단하는 전문가입니다.
 
-각 리소스의 description과 하위 chunk의 description을 보고, 질문에 답할 수 있을 **가능성이 있는** chunk를 넉넉히 선택하세요.
+각 리소스와 하위 chunk의 description을 보고, 질문에 답할 수 있을 **가능성이 있는 세부 chunk**를 선택하세요.
 - 조금이라도 연관될 수 있다고 보이면 포함하세요. 의심스러우면 선택하는 편이 좋습니다.
-- 선택한 chunk의 path만 JSON 배열로 반환합니다. 설명이나 다른 텍스트는 포함하지 마세요.
+- 루트 개요는 서버가 별도로 추가하므로, 세부 chunk를 우선 선택하세요.
+- 선택한 chunk의 번호만 JSON 배열로 반환합니다. 경로나 설명, 다른 텍스트는 포함하지 마세요.
 `;
 
 /**
@@ -78,34 +89,61 @@ export function getChunkSelectionUserPrompt(
 사용자 질문: "${question}"
 
 아래 리소스 목록에서 질문에 답할 수 있을 **가능성이 있는** chunk를 선택하세요.
-각 리소스의 description과 chunks의 description을 참고하여, **가능하면 5개 이상, 최대 ${maxSelect}개** 넉넉히 선택하세요.
+각 리소스와 chunk의 description을 참고하여, 관련 세부 내용을 놓치지 않도록 **가능하면 3개 이상, 최대 ${maxSelect}개** 선택하세요.
 
 리소스 목록:
 ${resourceListText}
 
-선택한 chunk 경로만 JSON 배열로 반환하세요. 예: ["경로1", "경로2", "경로3"]
+선택한 chunk 번호만 JSON 배열로 반환하세요. 예: [1, 3, 5]
 정말로 단 하나도 관련이 없을 때만 빈 배열 []을 반환하세요.
 `;
 }
 
 /**
- * 신 형식 list_resources 결과를 LLM에 넘길 텍스트로 포맷
+ * 루트 개요가 있는 문서는 세부 chunk만 선택 후보로 노출합니다.
+ * 세부 chunk가 없는 문서는 검색 가능성을 유지하기 위해 루트 자체를 후보로 둡니다.
  */
-export function formatResourceListForChunkSelection(
+export function buildChunkSelectionCandidates(
   resources: ListResourceItem[],
+): ChunkSelectionCandidate[] {
+  const candidates: ChunkSelectionCandidate[] = [];
+
+  for (const resource of resources) {
+    const resourceRootPath = resource.path.replace(/\.pdf$/i, '');
+    const root = resource.chunks.find(
+      (chunk) => chunk.path === resourceRootPath,
+    );
+    const details = resource.chunks.filter(
+      (chunk) => chunk.path !== resourceRootPath,
+    );
+    const selectable = details.length > 0 ? details : root ? [root] : [];
+
+    for (const chunk of selectable) {
+      candidates.push({
+        number: candidates.length + 1,
+        path: chunk.path,
+        description: chunk.description,
+        resourcePath: resource.path,
+        resourceDescription: resource.description,
+        isRoot: chunk.path === resourceRootPath,
+        rootPath: root?.path,
+      });
+    }
+  }
+
+  return candidates;
+}
+
+/** 신 형식 후보를 LLM이 복사할 필요 없는 번호 목록으로 포맷합니다. */
+export function formatChunkCandidatesForSelection(
+  candidates: ChunkSelectionCandidate[],
 ): string {
-  return resources
-    .map((r, i) => {
-      const chunkLines = (r.chunks || [])
-        .map(
-          (c) => `  - path: "${c.path}", description: "${c.description || ''}"`,
-        )
-        .join('\n');
-      return `[리소스 ${i + 1}]
-path: "${r.path}"
-description: "${r.description || ''}"
-chunks:
-${chunkLines}`;
-    })
-    .join('\n\n');
+  return candidates
+    .map(
+      (candidate) =>
+        `${candidate.number}. [${candidate.isRoot ? '루트 문서' : '세부 chunk'}] ` +
+        `문서="${candidate.resourcePath}", 문서 설명="${candidate.resourceDescription}", ` +
+        `chunk 설명="${candidate.description}"`,
+    )
+    .join('\n');
 }

@@ -337,7 +337,11 @@ describeDatabase('Organization database invariants (e2e)', () => {
     return JSON.parse(payload).map((row: { id: string }) => row.id);
   }
 
-  it('preserves the legacy upload list and exposes the separate manageable HTTP contract', async () => {
+  function accessibleIds(payload: string): string[] {
+    return JSON.parse(payload).items.map((row: { id: string }) => row.id);
+  }
+
+  it('preserves the legacy upload list and exposes the accessible HTTP contract', async () => {
     const memberOwn = await getUploadList('/api/v1/admin/upload', memberUuid);
     expect(memberOwn.statusCode).toBe(200);
     expect(responseIds(memberOwn.payload)).toEqual([memberDocumentId]);
@@ -350,56 +354,58 @@ describeDatabase('Organization database invariants (e2e)', () => {
     expect(superOwn.statusCode).toBe(200);
     expect(responseIds(superOwn.payload)).toEqual([rootDocumentId]);
 
-    const superManageable = await getUploadList(
-      '/api/v1/admin/upload/manageable?limit=100',
+    const superAccessible = await getUploadList(
+      '/api/v1/admin/upload/accessible?organizationId=all&page=1&size=100',
       managerUuid,
       'SUPER_ADMIN',
     );
-    expect(superManageable.statusCode).toBe(200);
-    const superManageableIds = responseIds(superManageable.payload);
-    expect(superManageableIds).toEqual(
+    expect(superAccessible.statusCode).toBe(200);
+    const superAccessibleIds = accessibleIds(superAccessible.payload);
+    expect(superAccessibleIds).toEqual(
       expect.arrayContaining([
         rootDocumentId,
         memberDocumentId,
         targetDocumentId,
       ]),
     );
-    expect(new Set(superManageableIds).size).toBe(superManageableIds.length);
+    expect(new Set(superAccessibleIds).size).toBe(superAccessibleIds.length);
 
-    const sourceManagerManageable = await getUploadList(
-      '/api/v1/admin/upload/manageable',
+    const sourceManagerAccessible = await getUploadList(
+      '/api/v1/admin/upload/accessible?organizationId=all&page=1&size=100',
       listingSourceManagerUuid,
     );
-    expect(sourceManagerManageable.statusCode).toBe(200);
-    expect(new Set(responseIds(sourceManagerManageable.payload))).toEqual(
+    expect(sourceManagerAccessible.statusCode).toBe(200);
+    expect(new Set(accessibleIds(sourceManagerAccessible.payload))).toEqual(
       new Set([rootDocumentId, memberDocumentId]),
     );
 
-    const memberManageable = await getUploadList(
-      '/api/v1/admin/upload/manageable',
+    const memberAccessible = await getUploadList(
+      '/api/v1/admin/upload/accessible?organizationId=all&page=1&size=100',
       memberUuid,
     );
-    expect(memberManageable.statusCode).toBe(200);
-    expect(responseIds(memberManageable.payload)).toEqual([memberDocumentId]);
+    expect(memberAccessible.statusCode).toBe(200);
+    expect(new Set(accessibleIds(memberAccessible.payload))).toEqual(
+      new Set([rootDocumentId, memberDocumentId]),
+    );
 
-    const multiManagerManageable = await getUploadList(
-      '/api/v1/admin/upload/manageable',
+    const multiManagerAccessible = await getUploadList(
+      '/api/v1/admin/upload/accessible?organizationId=all&page=1&size=100',
       listingMultiManagerUuid,
     );
-    expect(multiManagerManageable.statusCode).toBe(200);
-    const multiManagerIds = responseIds(multiManagerManageable.payload);
+    expect(multiManagerAccessible.statusCode).toBe(200);
+    const multiManagerIds = accessibleIds(multiManagerAccessible.payload);
     expect(new Set(multiManagerIds)).toEqual(
       new Set([rootDocumentId, memberDocumentId, targetDocumentId]),
     );
     expect(new Set(multiManagerIds).size).toBe(multiManagerIds.length);
 
-    const staleSuperManageable = await getUploadList(
-      '/api/v1/admin/upload/manageable',
+    const staleSuperAccessible = await getUploadList(
+      '/api/v1/admin/upload/accessible?organizationId=all&page=1&size=100',
       inviteeUuid,
       'SUPER_ADMIN',
     );
-    expect(staleSuperManageable.statusCode).toBe(200);
-    expect(responseIds(staleSuperManageable.payload)).toEqual([]);
+    expect(staleSuperAccessible.statusCode).toBe(200);
+    expect(accessibleIds(staleSuperAccessible.payload)).toEqual([]);
   });
 
   it('supports one user as accepted MANAGER in multiple organizations', async () => {
@@ -735,16 +741,16 @@ describeDatabase('Organization database invariants (e2e)', () => {
       '/api/v1/admin/upload?limit=1',
       memberUuid,
     );
-    const manageableAfterRemoval = await getUploadList(
-      '/api/v1/admin/upload/manageable?limit=100',
+    const accessibleAfterRemoval = await getUploadList(
+      '/api/v1/admin/upload/accessible?organizationId=all&page=1&size=100',
       memberUuid,
     );
     expect(ownAfterRemoval.statusCode).toBe(200);
-    expect(manageableAfterRemoval.statusCode).toBe(200);
+    expect(accessibleAfterRemoval.statusCode).toBe(200);
     expect(responseIds(ownAfterRemoval.payload)).toEqual([
       stillAuthorizedDocument.id,
     ]);
-    expect(responseIds(manageableAfterRemoval.payload)).toEqual([
+    expect(accessibleIds(accessibleAfterRemoval.payload)).toEqual([
       stillAuthorizedDocument.id,
     ]);
     await expect(
@@ -865,7 +871,7 @@ describeDatabase('Organization database invariants (e2e)', () => {
     );
   });
 
-  it('requires target organization membership and returns manageable documents once', async () => {
+  it('requires target organization membership and returns accessible documents once', async () => {
     await db.insert(admins).values({
       idpUuid: sourceOnlyManagerUuid,
       email: `${testPrefix}-source-only@example.com`,
@@ -905,16 +911,16 @@ describeDatabase('Organization database invariants (e2e)', () => {
       }),
     ).resolves.toEqual({ kind: 'forbidden' });
 
-    const manageable = await repo.listManageableDocuments(
+    const accessible = await repo.listAccessibleDocuments(
       {
         uuid: managerUuid,
         email: `${testPrefix}-manager@example.com`,
         role: 'ADMIN',
       },
-      { limit: 100, offset: 0 },
+      { page: 1, size: 100, status: 'all', sort: 'recent' },
     );
-    expect(new Set(manageable.map((row) => row.id)).size).toBe(
-      manageable.length,
+    expect(new Set(accessible.rows.map((row) => row.id)).size).toBe(
+      accessible.rows.length,
     );
   });
 

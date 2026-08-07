@@ -76,6 +76,10 @@ export const admins = pgTable(
   (table) => ({
     idpUuidIdx: index('admins_idp_uuid_idx').on(table.idpUuid),
     emailIdx: index('admins_email_idx').on(table.email),
+    normalizedEmailUnique: uniqueIndex('admins_normalized_email_unique').using(
+      'btree',
+      sql`lower(trim(${table.email}))`,
+    ),
   }),
 );
 

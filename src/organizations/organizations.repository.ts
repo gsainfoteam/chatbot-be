@@ -1051,14 +1051,14 @@ export class OrganizationsRepository {
     normalizedEmail: string,
     actorIdpUuid: string,
   ): Promise<boolean> {
-    // Prevent a case/space-variant admin identity from being inserted between
-    // the ambiguity check and binding an invitation to the caller.
-    await tx.execute(sql`LOCK TABLE "admins" IN SHARE MODE`);
+    // Unique index on lower(trim(email)) already prevents case/space-variant
+    // duplicates; only lock matching rows instead of the whole admins table.
     const matches = await tx
       .select({ idpUuid: admins.idpUuid })
       .from(admins)
       .where(sql`lower(trim(${admins.email})) = ${normalizedEmail}`)
-      .limit(2);
+      .limit(2)
+      .for('share');
     return matches.length === 1 && matches[0]?.idpUuid === actorIdpUuid;
   }
 

@@ -555,7 +555,7 @@ describeDatabase('Organization database invariants (e2e)', () => {
     expect(remainingManagers).toHaveLength(1);
   });
 
-  it('allows identified accepted users with colliding normalized emails but deduplicates pending invites', async () => {
+  it('enforces sole normalized admin identity and still deduplicates pending invites', async () => {
     const normalizedEmail = `${testPrefix}-collision@example.com`;
     const [unboundInvitation] = await db
       .insert(organizationMemberships)
@@ -568,20 +568,42 @@ describeDatabase('Organization database invariants (e2e)', () => {
         invitedByIdpUuid: managerUuid,
       })
       .returning();
-    await db.insert(admins).values([
-      {
-        idpUuid: collisionAdminAUuid,
-        email: `${testPrefix}-Collision@Example.com`,
-        name: 'Collision A',
-        role: 'SUPER_ADMIN',
-      },
-      {
+    await db.insert(admins).values({
+      idpUuid: collisionAdminAUuid,
+      email: `${testPrefix}-Collision@Example.com`,
+      name: 'Collision A',
+      role: 'SUPER_ADMIN',
+    });
+    await expect(
+      db.insert(admins).values({
         idpUuid: collisionAdminBUuid,
         email: `${testPrefix}-collision@example.com`,
         name: 'Collision B',
         role: 'SUPER_ADMIN',
-      },
-    ]);
+      }),
+    ).rejects.toBeDefined();
+    await db.insert(admins).values({
+      idpUuid: collisionAdminBUuid,
+      email: `${testPrefix}-collision-b@example.com`,
+      name: 'Collision B',
+      role: 'SUPER_ADMIN',
+    });
+
+    await expect(
+      repo.listPendingInvitations(normalizedEmail, collisionAdminAUuid),
+    ).resolves.toHaveLength(1);
+    await expect(
+      repo.acceptInvitation(
+        unboundInvitation.id,
+        normalizedEmail,
+        collisionAdminAUuid,
+      ),
+    ).resolves.toMatchObject({
+      id: unboundInvitation.id,
+      status: 'ACCEPTED',
+      memberIdpUuid: collisionAdminAUuid,
+    });
+
     const [collisionOrganization] = await db
       .insert(organizations)
       .values({
@@ -590,23 +612,6 @@ describeDatabase('Organization database invariants (e2e)', () => {
         createdByIdpUuid: managerUuid,
       })
       .returning();
-    await expect(
-      repo.listPendingInvitations(normalizedEmail, collisionAdminAUuid),
-    ).resolves.toHaveLength(0);
-    await expect(
-      repo.acceptInvitation(
-        unboundInvitation.id,
-        normalizedEmail,
-        collisionAdminAUuid,
-      ),
-    ).rejects.toBeInstanceOf(RepositoryAuthorizationError);
-    await expect(
-      repo.rejectInvitation(
-        unboundInvitation.id,
-        normalizedEmail,
-        collisionAdminAUuid,
-      ),
-    ).rejects.toBeInstanceOf(RepositoryAuthorizationError);
     await expect(
       db.insert(organizationMemberships).values([
         {

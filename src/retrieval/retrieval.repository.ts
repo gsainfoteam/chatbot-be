@@ -1,7 +1,20 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq, gt, inArray, isNull, or, SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  cosineDistance,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  ne,
+  or,
+  SQL,
+} from 'drizzle-orm';
 import { DB_CONNECTION, documents, documentChunks } from '../db';
 import type { Database } from '../db';
+import type { VectorChunkCandidate, VectorRootChunk } from './retrieval.types';
 
 export type ReadyDocumentWithChunks = {
   id: string;
@@ -105,5 +118,92 @@ export class RetrievalRepository {
       );
 
     return rows;
+  }
+
+  async hasIncompleteReadyEmbeddings(model: string): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: documentChunks.id })
+      .from(documentChunks)
+      .innerJoin(documents, eq(documentChunks.documentId, documents.id))
+      .where(
+        and(
+          eq(documents.status, 'ready'),
+          eq(documents.isActive, true),
+          notExpiredCondition(),
+          or(
+            isNull(documentChunks.embedding),
+            isNull(documentChunks.embeddingModel),
+            ne(documentChunks.embeddingModel, model),
+            isNull(documentChunks.embeddingContentHash),
+            isNull(documentChunks.embeddedAt),
+          ),
+        ),
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async findSimilarChunks(
+    queryEmbedding: number[],
+    limit: number,
+    model: string,
+  ): Promise<VectorChunkCandidate[]> {
+    if (limit < 1) return [];
+    const distance = cosineDistance(documentChunks.embedding, queryEmbedding);
+    const rows = await this.db
+      .select({
+        chunkId: documentChunks.id,
+        documentId: documents.id,
+        title: documents.title,
+        resourceName: documents.resourceName,
+        summary: documents.summary,
+        path: documentChunks.path,
+        description: documentChunks.description,
+        sortOrder: documentChunks.sortOrder,
+        distance,
+      })
+      .from(documentChunks)
+      .innerJoin(documents, eq(documentChunks.documentId, documents.id))
+      .where(
+        and(
+          eq(documents.status, 'ready'),
+          eq(documents.isActive, true),
+          notExpiredCondition(),
+          isNotNull(documentChunks.embedding),
+          eq(documentChunks.embeddingModel, model),
+        ),
+      )
+      .orderBy(distance)
+      .limit(limit);
+
+    return rows.map((row) => ({ ...row, distance: Number(row.distance) }));
+  }
+
+  async findRootChunksForDocuments(
+    documentIds: string[],
+  ): Promise<VectorRootChunk[]> {
+    if (documentIds.length === 0) return [];
+    return this.db
+      .select({
+        chunkId: documentChunks.id,
+        documentId: documents.id,
+        title: documents.title,
+        resourceName: documents.resourceName,
+        summary: documents.summary,
+        path: documentChunks.path,
+        description: documentChunks.description,
+        sortOrder: documentChunks.sortOrder,
+      })
+      .from(documentChunks)
+      .innerJoin(documents, eq(documentChunks.documentId, documents.id))
+      .where(
+        and(
+          inArray(documents.id, [...new Set(documentIds)]),
+          eq(documentChunks.path, documents.resourceName),
+          eq(documents.status, 'ready'),
+          eq(documents.isActive, true),
+          notExpiredCondition(),
+        ),
+      );
   }
 }

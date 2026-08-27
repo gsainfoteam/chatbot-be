@@ -29,6 +29,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:safe": "bash scripts/migrate.sh",
     "db:backfill:answers": "bun src/scripts/backfill-usage-answers.ts",
+    "db:backfill:embeddings": "bun src/scripts/backfill-document-embeddings.ts",
+    "test:e2e:rag": "jest --config ./test/jest-e2e.json --runInBand test/rag-vector-database.e2e-spec.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
   },

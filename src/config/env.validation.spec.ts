@@ -23,6 +23,13 @@ function baseEnv(overrides: Record<string, unknown> = {}) {
     MCP_RESOURCE_API_URL: 'https://mcp-resource.example.com',
     GCS_BUCKET: 'test-bucket',
     GCP_PROJECT_ID: 'test-project',
+    EMBEDDING_BASE_URL: 'https://embeddings.example.com/v1',
+    EMBEDDING_API_KEY: 'embedding-test-key',
+    EMBEDDING_MODEL: 'test-embedding-model',
+    EMBEDDING_DIMENSIONS: 1536,
+    EMBEDDING_BATCH_SIZE: 32,
+    RAG_VECTOR_SEARCH_ENABLED: false,
+    RAG_VECTOR_CANDIDATE_LIMIT: 20,
     ...overrides,
   };
 }
@@ -94,5 +101,31 @@ describe('env validation for GCS credentials', () => {
         }),
       ),
     ).toThrow(/base64/);
+  });
+});
+
+describe('env validation for RAG embeddings', () => {
+  const letsurEnv = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.letsur.ai/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'letsur-key',
+  };
+
+  it('accepts the pgvector schema dimension and vector defaults', () => {
+    const values: Record<string, unknown> = baseEnv(letsurEnv);
+    delete values.EMBEDDING_DIMENSIONS;
+    delete values.EMBEDDING_BATCH_SIZE;
+    delete values.RAG_VECTOR_SEARCH_ENABLED;
+    delete values.RAG_VECTOR_CANDIDATE_LIMIT;
+    const validated = validate(values);
+    expect(validated.EMBEDDING_DIMENSIONS).toBe(1536);
+    expect(validated.EMBEDDING_BATCH_SIZE).toBe(32);
+    expect(validated.RAG_VECTOR_SEARCH_ENABLED).toBe(false);
+    expect(validated.RAG_VECTOR_CANDIDATE_LIMIT).toBe(20);
+  });
+
+  it('rejects a dimension that does not match vector(1536)', () => {
+    expect(() =>
+      validate(baseEnv({ ...letsurEnv, EMBEDDING_DIMENSIONS: 1024 })),
+    ).toThrow(/EMBEDDING_DIMENSIONS must be 1536/);
   });
 });

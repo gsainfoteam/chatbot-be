@@ -329,15 +329,34 @@ export class ResourceContentService {
     content: string;
     usedResources: Array<{ path: string; formats: string[] }>;
   }> {
+    const vectorResult = await this.retrievalService.getVectorCatalog(question);
+    let selectionResources = resources;
+    let selectionCatalogChunks = catalogChunks;
+    if (vectorResult.available) {
+      selectionResources = vectorResult.catalog.resources ?? [];
+      selectionCatalogChunks = vectorResult.catalog.chunks;
+      this.logger.log(
+        `[DEBUG] vector Top-N 후보: 상위 리소스 ${selectionResources.length}개, chunk ${selectionCatalogChunks?.length ?? 0}개 → 기존 LLM 선별`,
+      );
+    } else {
+      this.logger.warn(
+        `Vector retrieval fallback to full catalog: ${vectorResult.reason}`,
+      );
+    }
+
+    if (selectionResources.length === 0) {
+      return { content: '', usedResources: [] };
+    }
+
     this.logger.log(
-      `[DEBUG] 1차 선별(description 기준) 입력: 상위 리소스 ${resources.length}개, chunk 총 ${resources.reduce((s, r) => s + (r.chunks?.length ?? 0), 0)}개 → LLM에 전달`,
+      `[DEBUG] 1차 선별(description 기준) 입력: 상위 리소스 ${selectionResources.length}개, chunk 총 ${selectionResources.reduce((s, r) => s + (r.chunks?.length ?? 0), 0)}개 → LLM에 전달`,
     );
 
     let t0 = Date.now();
     const chunkSelection =
       await this.resourceSelectionService.selectRelevantChunkPaths(
         question,
-        resources,
+        selectionResources,
         5,
         tokenUsage,
       );
@@ -397,7 +416,7 @@ export class ResourceContentService {
       );
     }
     const fromCatalog = this.collectPdfPngPathsFromChunkCatalog(
-      catalogChunks,
+      selectionCatalogChunks,
       selectedPaths,
       8,
     );

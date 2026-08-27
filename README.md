@@ -29,7 +29,7 @@
 
 - **Runtime**: Bun
 - **Framework**: NestJS + Fastify
-- **Database**: PostgreSQL
+- **Database**: PostgreSQL 16 + pgvector
 - **ORM**: Drizzle ORM
 
 ## Project setup
@@ -77,6 +77,17 @@ JWT_EXPIRES_IN=3600
 IDP_URL=https://api.account.gistory.me
 IDP_CLIENT_ID=your_client_id
 IDP_CLIENT_SECRET=your_client_secret
+
+# OpenAI-compatible embedding endpoint (base URL includes /v1 when required)
+EMBEDDING_BASE_URL=https://api.openai.com/v1
+EMBEDDING_API_KEY=your-embedding-api-key
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
+EMBEDDING_BATCH_SIZE=32
+
+# Exact cosine Top-N 후보를 기존 LLM chunk 선별 앞에 적용
+RAG_VECTOR_SEARCH_ENABLED=false
+RAG_VECTOR_CANDIDATE_LIMIT=20
 
 # Admin Authentication (Legacy - Optional, 더 이상 사용되지 않음)
 # ADMIN_BEARER_TOKEN=your-admin-token-here-change-in-production-min-16-chars
@@ -176,6 +187,30 @@ $ bun run db:migrate
 - ENUM 타입, 테이블, 인덱스, 제약조건은 이미 존재하면 자동으로 건너뜁니다.
 - 서버의 데이터베이스가 로컬 개발 환경과 동일한 구조로 동기화됩니다.
 
+### RAG embedding 배포 및 backfill
+
+현재 production schema는 `document_chunks.embedding vector(1536)`을
+사용합니다. `EMBEDDING_DIMENSIONS`도 반드시 `1536`이어야 하며 실제
+`/embeddings` 응답 차원이 다르면 ingestion/backfill이 실패합니다.
+
+배포 순서:
+
+1. PostgreSQL 16에 pgvector를 설치할 수 있는 DB 권한과 embedding 환경 변수를 준비합니다.
+2. `0016_vengeful_newton_destine.sql` migration을 실행해 `vector` extension과 nullable embedding 컬럼을 추가합니다.
+3. 새 애플리케이션을 배포합니다. 신규 PDF는 모든 chunk embedding이 성공해야 ready가 됩니다.
+4. `bun run db:backfill:embeddings`로 기존 ready chunk를 채웁니다. model/hash가 같은 row는 재실행 시 건너뜁니다.
+5. backfill 완료를 확인한 뒤 `RAG_VECTOR_SEARCH_ENABLED=true`로 전환합니다.
+
+Vector 검색은 인덱스나 임의 threshold 없이 exact cosine distance Top-N을
+사용한 뒤 기존 LLM `최대 5개` 선별을 적용합니다. 검색 비활성화,
+embedding API 장애, 또는 ready chunk backfill 미완료 시 전체 catalog +
+LLM 방식으로 자동 fallback하며 이유를 애플리케이션 로그에 기록합니다.
+
+provider마다 지원 endpoint, model, `dimensions` request field와 입력 token
+한도가 다를 수 있으므로 운영 전 선택한 OpenAI-compatible provider 조합을
+실제 요청으로 확인해야 합니다. API key는 환경 변수/secret manager로만
+주입하고 저장소에 저장하지 않습니다.
+
 ## Compile and run the project
 
 ### 로컬 환경
@@ -257,6 +292,10 @@ $ bun run test:e2e
 
 # 모든 테스트 실행 (unit + e2e)
 $ bun run test:all
+
+# pgvector PostgreSQL 16 컨테이너/테스트 DB에서만 실행
+# 안전장치: RAG_TEST_DB=true이고 DB_NAME이 반드시 _test로 끝나야 함
+$ RAG_TEST_DB=true DB_NAME=ziggle_chatbot_test bun run test:e2e:rag
 ```
 
 ### 테스트 커버리지

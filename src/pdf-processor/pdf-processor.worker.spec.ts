@@ -5,6 +5,7 @@ import type { DocumentsRepository } from './documents.repository';
 import type { GcsStorageService } from './gcs-storage.service';
 import type { PdfPipelineService } from './pdf-pipeline.service';
 import { PdfProcessorWorker } from './pdf-processor.worker';
+import type { DocumentEmbeddingService } from '../embedding/document-embedding.service';
 
 function processingDocument(): Document {
   return {
@@ -37,6 +38,7 @@ function createWorker(options: {
   }>;
   processPdfError?: Error;
   uploadDocumentsError?: Error;
+  embeddingError?: Error;
   heartbeatOwned?: boolean;
   markFailed?: boolean;
 }) {
@@ -110,17 +112,32 @@ function createWorker(options: {
   const config = {
     get: jest.fn((_key: string) => undefined),
   };
+  const documentEmbeddingService = {
+    embedChunks: options.embeddingError
+      ? jest.fn(() => Promise.reject(options.embeddingError!))
+      : jest.fn(async (_document: unknown, inputChunks: typeof chunks) =>
+          inputChunks.map((chunk, index) => ({
+            ...chunk,
+            embedding: [index + 1],
+            embeddingModel: 'embedding-test-model',
+            embeddingContentHash: `hash-${index}`,
+            embeddedAt: new Date('2026-08-24T00:00:00.000Z'),
+          })),
+        ),
+  };
 
   return {
     worker: new PdfProcessorWorker(
       repo as unknown as DocumentsRepository,
       gcs as unknown as GcsStorageService,
       pipeline as unknown as PdfPipelineService,
+      documentEmbeddingService as unknown as DocumentEmbeddingService,
       config as unknown as ConfigService,
     ),
     repo,
     gcs,
     pipeline,
+    documentEmbeddingService,
   };
 }
 
@@ -138,7 +155,9 @@ describe('PdfProcessorWorker attempt ownership', () => {
   });
 
   it('keeps generated artifacts when the attempt completes successfully', async () => {
-    const { worker, gcs, repo } = createWorker({ completeProcessing: true });
+    const { worker, gcs, repo, documentEmbeddingService } = createWorker({
+      completeProcessing: true,
+    });
     const callable = worker as unknown as {
       processDocument(doc: Document): Promise<void>;
     };
@@ -146,7 +165,42 @@ describe('PdfProcessorWorker attempt ownership', () => {
     await callable.processDocument(processingDocument());
 
     expect(repo.completeProcessing).toHaveBeenCalled();
+    expect(documentEmbeddingService.embedChunks).toHaveBeenCalledWith(
+      { title: '테스트', summary: 'summary' },
+      expect.any(Array),
+    );
+    expect(repo.completeProcessing).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      'summary',
+      expect.arrayContaining([
+        expect.objectContaining({
+          embeddingModel: 'embedding-test-model',
+          embeddingContentHash: 'hash-0',
+        }),
+      ]),
+    );
     expect(gcs.deleteProcessedArtifacts).not.toHaveBeenCalled();
+  });
+
+  it('does not upload, complete, or leave ready state when embedding fails', async () => {
+    const { worker, repo, gcs } = createWorker({
+      completeProcessing: true,
+      embeddingError: new Error('embedding endpoint unavailable'),
+    });
+    const callable = worker as unknown as {
+      processDocument(document: Document): Promise<void>;
+    };
+
+    await callable.processDocument(processingDocument());
+
+    expect(gcs.uploadDocuments).not.toHaveBeenCalled();
+    expect(repo.completeProcessing).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.stringContaining('embedding endpoint unavailable'),
+    );
   });
 
   it('heartbeats the processing token while an attempt is active', async () => {

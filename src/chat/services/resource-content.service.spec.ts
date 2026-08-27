@@ -36,6 +36,10 @@ describe('ResourceContentService', () => {
 
   it('uses new-format chunk pipeline when resources+chunks exist', async () => {
     const retrievalService = {
+      getVectorCatalog: jest.fn(async (_question: string) => ({
+        available: false as const,
+        reason: 'embedding endpoint unavailable',
+      })),
       getContentsByPaths: jest.fn(async (_paths: string[]) => [
         { path: '학사편람', content: 'root overview' },
         { path: '학사편람/졸업', content: 'chunk body' },
@@ -103,7 +107,8 @@ describe('ResourceContentService', () => {
 
     expect(
       resourceSelectionService.selectRelevantChunkPaths,
-    ).toHaveBeenCalled();
+    ).toHaveBeenCalledWith('졸업 요건', listResult.resources, 5, usage);
+    expect(retrievalService.getVectorCatalog).toHaveBeenCalledWith('졸업 요건');
     expect(
       resourceSelectionService.selectRelevantResourcePaths,
     ).not.toHaveBeenCalled();
@@ -120,6 +125,70 @@ describe('ResourceContentService', () => {
     expect(result.content).not.toContain('## 리소스:');
     expect(result.usedResources.some((r) => r.path.includes('학사편람'))).toBe(
       true,
+    );
+  });
+
+  it('uses vector candidate catalog before the existing LLM selector', async () => {
+    const vectorResources = [
+      {
+        path: '학사편람.pdf',
+        description: '학사',
+        chunks: [
+          { path: '학사편람', description: '개요' },
+          { path: '학사편람/졸업', description: '졸업' },
+        ],
+      },
+    ];
+    const retrievalService = {
+      getVectorCatalog: jest.fn(async (_question: string) => ({
+        available: true as const,
+        catalog: {
+          resources: vectorResources,
+          chunks: vectorResources[0].chunks,
+        },
+      })),
+      getContentsByPaths: jest.fn(async () => [
+        { path: '학사편람', content: '개요' },
+        { path: '학사편람/졸업', content: '졸업 본문' },
+      ]),
+    };
+    const selector = {
+      selectRelevantChunkPaths: jest.fn(async (..._args: unknown[]) => ({
+        rootPaths: ['학사편람'],
+        detailPaths: ['학사편람/졸업'],
+      })),
+    };
+    const service = new ResourceContentService(
+      retrievalService as never,
+      selector as never,
+    );
+    const fullCatalog = {
+      raw: {},
+      texts: [],
+      resourceLinks: [],
+      embeddedResources: [],
+      filteredResources: [],
+      resources: [
+        ...vectorResources,
+        {
+          path: '무관.pdf',
+          description: '무관',
+          chunks: [{ path: '무관', description: '무관' }],
+        },
+      ],
+      chunks: [
+        ...vectorResources[0].chunks,
+        { path: '무관', description: '무관' },
+      ],
+    } as ListResourcesResult;
+
+    await service.fetchRelevantResourceContents('졸업', fullCatalog);
+
+    expect(selector.selectRelevantChunkPaths).toHaveBeenCalledWith(
+      '졸업',
+      vectorResources,
+      5,
+      undefined,
     );
   });
 

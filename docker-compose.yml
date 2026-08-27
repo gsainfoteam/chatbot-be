@@ -1,7 +1,7 @@
 services:
   # PostgreSQL 데이터베이스
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: ziggle-chatbot-db
     restart: unless-stopped
     environment:
@@ -59,6 +59,14 @@ services:
       PDF_PROCESSOR_LLM_TIMEOUT: ${PDF_PROCESSOR_LLM_TIMEOUT:-120}
       PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO: ${PDF_PROCESSOR_PASS1_MAX_FAILURE_RATIO:-0.1}
       PDF_PROCESSOR_POLL_INTERVAL_MS: ${PDF_PROCESSOR_POLL_INTERVAL_MS:-2000}
+      # OpenAI-compatible Embeddings / hybrid RAG
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1536}
+      EMBEDDING_BATCH_SIZE: ${EMBEDDING_BATCH_SIZE:-32}
+      RAG_VECTOR_SEARCH_ENABLED: ${RAG_VECTOR_SEARCH_ENABLED:-false}
+      RAG_VECTOR_CANDIDATE_LIMIT: ${RAG_VECTOR_CANDIDATE_LIMIT:-20}
       # Letsur AI Gateway Configuration
       LETSUR_AI_GATEWAY_BASE_URL: ${LETSUR_AI_GATEWAY_BASE_URL:-}
       LETSUR_AI_GATEWAY_API_KEY: ${LETSUR_AI_GATEWAY_API_KEY:-}

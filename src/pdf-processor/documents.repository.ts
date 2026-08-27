@@ -25,6 +25,10 @@ export type ReplaceChunksInput = {
   description: string;
   content: string;
   sortOrder: number;
+  embedding: number[];
+  embeddingModel: string;
+  embeddingContentHash: string;
+  embeddedAt: Date;
 };
 
 @Injectable()
@@ -221,6 +225,10 @@ export class DocumentsRepository {
             description: c.description,
             content: c.content,
             sortOrder: c.sortOrder,
+            embedding: c.embedding,
+            embeddingModel: c.embeddingModel,
+            embeddingContentHash: c.embeddingContentHash,
+            embeddedAt: c.embeddedAt,
           })),
         );
       }

@@ -6,9 +6,10 @@ import { GcsStorageService } from './gcs-storage.service';
 import { PdfTextService } from './pdf-text.service';
 import { PdfPipelineService } from './pdf-pipeline.service';
 import { PdfProcessorWorker } from './pdf-processor.worker';
+import { EmbeddingModule } from '../embedding/embedding.module';
 
 @Module({
-  imports: [DbModule, ChatModule],
+  imports: [DbModule, ChatModule, EmbeddingModule],
   providers: [
     GcsStorageService,
     DocumentsRepository,

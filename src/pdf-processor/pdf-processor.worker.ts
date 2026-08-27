@@ -10,6 +10,7 @@ import { GcsStorageService } from './gcs-storage.service';
 import { parseFiniteNumber } from './parse-finite-number';
 import { PdfPipelineService } from './pdf-pipeline.service';
 import type { Document } from '../db';
+import { DocumentEmbeddingService } from '../embedding/document-embedding.service';
 
 @Injectable()
 export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
@@ -30,6 +31,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     private readonly documentsRepo: DocumentsRepository,
     private readonly gcs: GcsStorageService,
     private readonly pipeline: PdfPipelineService,
+    private readonly documentEmbeddingService: DocumentEmbeddingService,
     private readonly configService: ConfigService,
   ) {
     this.concurrency = parseFiniteNumber(
@@ -151,6 +153,11 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      const embeddedChunks = await this.documentEmbeddingService.embedChunks(
+        { title: doc.title, summary: result.summary },
+        result.chunks,
+      );
+
       if (heartbeat.hasLostOwnership()) {
         this.logger.warn(
           `Discarding processing result after ownership loss: id=${doc.id} token=${processingToken}`,
@@ -164,7 +171,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
         doc.id,
         processingToken,
         result.summary,
-        result.chunks,
+        embeddedChunks,
       );
       if (!completed) {
         this.logger.warn(

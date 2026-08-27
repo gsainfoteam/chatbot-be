@@ -12,6 +12,7 @@ import {
   date,
   uniqueIndex,
   check,
+  vector,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -340,6 +341,10 @@ export const documentChunks = pgTable(
     description: text('description').notNull().default(''),
     content: text('content').notNull(),
     sortOrder: integer('sort_order').notNull().default(0),
+    embedding: vector('embedding', { dimensions: 1536 }),
+    embeddingModel: varchar('embedding_model', { length: 255 }),
+    embeddingContentHash: varchar('embedding_content_hash', { length: 64 }),
+    embeddedAt: timestamp('embedded_at'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
   (table) => ({

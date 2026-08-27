@@ -24,3 +24,21 @@ export type ChunkContentHit = {
   path: string;
   content: string;
 };
+
+export type VectorChunkCandidate = {
+  chunkId: string;
+  documentId: string;
+  title: string;
+  resourceName: string;
+  summary: string | null;
+  path: string;
+  description: string;
+  sortOrder: number;
+  distance: number;
+};
+
+export type VectorRootChunk = Omit<VectorChunkCandidate, 'distance'>;
+
+export type VectorCatalogResult =
+  | { available: true; catalog: ListResourcesResult }
+  | { available: false; reason: string };

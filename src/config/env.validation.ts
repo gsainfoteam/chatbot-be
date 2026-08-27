@@ -7,6 +7,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsBase64,
+  Equals,
   Min,
   Max,
   MinLength,
@@ -169,6 +170,43 @@ export class EnvironmentVariables {
   @IsBase64()
   GCS_SERVICE_ACCOUNT_KEY_BASE64?: string;
 
+  // OpenAI-compatible embeddings (separate from LLM provider configuration)
+  @IsString()
+  @IsNotEmpty()
+  EMBEDDING_BASE_URL: string;
+
+  @IsString()
+  @IsNotEmpty()
+  EMBEDDING_API_KEY: string;
+
+  @IsString()
+  @IsNotEmpty()
+  EMBEDDING_MODEL: string;
+
+  @IsNumber()
+  @Equals(1536, {
+    message:
+      'EMBEDDING_DIMENSIONS must be 1536 for the current document_chunks schema',
+  })
+  EMBEDDING_DIMENSIONS: number = 1536;
+
+  @IsNumber()
+  @Min(1)
+  @Max(2048)
+  EMBEDDING_BATCH_SIZE: number = 32;
+
+  @IsBoolean()
+  @Transform(({ value }) => {
+    if (typeof value === 'boolean') return value;
+    return typeof value === 'string' && value.toLowerCase() === 'true';
+  })
+  RAG_VECTOR_SEARCH_ENABLED: boolean = false;
+
+  @IsNumber()
+  @Min(1)
+  @Max(100)
+  RAG_VECTOR_CANDIDATE_LIMIT: number = 20;
+
   @IsOptional()
   @IsNumber()
   @Min(1)
@@ -222,6 +260,7 @@ export function validate(config: Record<string, unknown>) {
   // 문자열 'true'/'false'를 boolean으로, 문자열 숫자를 number로 변환
   const validatedConfig = plainToInstance(EnvironmentVariables, config, {
     enableImplicitConversion: true,
+    exposeDefaultValues: true,
   });
 
   const errors = validateSync(validatedConfig, {

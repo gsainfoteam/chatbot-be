@@ -58,6 +58,10 @@ describe('ChatOrchestrationService', () => {
 
     const retrievalService = {
       listCatalog: jest.fn(async () => listResult),
+      getVectorCatalog: jest.fn(async () => ({
+        available: false as const,
+        reason: 'vector search is disabled',
+      })),
       getContentsByPaths: jest.fn(async (paths: string[]) =>
         paths.map((path) => ({
           path,

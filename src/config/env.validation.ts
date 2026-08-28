@@ -139,6 +139,39 @@ export class EnvironmentVariables {
   @IsString()
   OPEN_ROUTER_BASE_URL?: string;
 
+  // Embedding API (벡터 검색용). 미설정 시 Letsur 게이트웨이 설정을 재사용.
+  @IsOptional()
+  @IsString()
+  EMBEDDING_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  EMBEDDING_API_KEY?: string;
+
+  // 기본값: text-embedding-3-large. 변경 시 차원 마이그레이션 + 전체 재임베딩 필요.
+  @IsOptional()
+  @IsString()
+  EMBEDDING_MODEL?: string;
+
+  /** 코사인 거리 임계값 (0~2). 이보다 먼 chunk는 관련 없음으로 제외. 기본 0.8. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(2)
+  EMBEDDING_MAX_DISTANCE?: number;
+
+  /** 벡터 검색 kill-switch. false면 항상 LLM 선별 사용. 기본 true. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') {
+      return value.toLowerCase() !== 'false';
+    }
+    return true;
+  })
+  EMBEDDING_RETRIEVAL_ENABLED?: boolean;
+
   // Client Domain Configuration
   @IsString()
   @IsNotEmpty()

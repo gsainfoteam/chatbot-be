@@ -12,6 +12,7 @@ import {
   date,
   uniqueIndex,
   check,
+  vector,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -325,9 +326,13 @@ export const documents = pgTable(
   }),
 );
 
+/** text-embedding-3-large 네이티브 차원. 모델 변경 시 마이그레이션 + 전체 재임베딩 필요. */
+export const CHUNK_EMBEDDING_DIMENSIONS = 3072;
+
 /**
  * 문서 청크 테이블
  * - Pass2 의미 청킹 결과 (path / description / content)
+ * - embedding: 벡터 검색용 코사인 유사도 임베딩 (null이면 미임베딩 → 백필 대상)
  */
 export const documentChunks = pgTable(
   'document_chunks',
@@ -340,6 +345,9 @@ export const documentChunks = pgTable(
     description: text('description').notNull().default(''),
     content: text('content').notNull(),
     sortOrder: integer('sort_order').notNull().default(0),
+    embedding: vector('embedding', {
+      dimensions: CHUNK_EMBEDDING_DIMENSIONS,
+    }),
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
   (table) => ({

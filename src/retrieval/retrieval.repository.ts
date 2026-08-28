@@ -1,5 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, eq, gt, inArray, isNull, or, SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  cosineDistance,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+  SQL,
+} from 'drizzle-orm';
 import { DB_CONNECTION, documents, documentChunks } from '../db';
 import type { Database } from '../db';
 
@@ -80,6 +91,43 @@ export class RetrievalRepository {
     }
 
     return [...byId.values()];
+  }
+
+  /**
+   * 질의 임베딩과의 코사인 거리 기준 상위 chunk 검색.
+   * embedding이 없는 chunk(미백필)는 후보에서 제외됩니다.
+   */
+  async searchChunksByEmbedding(
+    embedding: number[],
+    limit: number,
+  ): Promise<Array<{ path: string; resourceName: string; distance: number }>> {
+    if (embedding.length === 0 || limit < 1) return [];
+
+    const distance = cosineDistance(documentChunks.embedding, embedding);
+    const rows = await this.db
+      .select({
+        path: documentChunks.path,
+        resourceName: documents.resourceName,
+        distance,
+      })
+      .from(documentChunks)
+      .innerJoin(documents, eq(documentChunks.documentId, documents.id))
+      .where(
+        and(
+          isNotNull(documentChunks.embedding),
+          eq(documents.status, 'ready'),
+          eq(documents.isActive, true),
+          notExpiredCondition(),
+        ),
+      )
+      .orderBy(distance)
+      .limit(limit);
+
+    return rows.map((row) => ({
+      path: row.path,
+      resourceName: row.resourceName,
+      distance: Number(row.distance),
+    }));
   }
 
   async findChunkContentsByPaths(

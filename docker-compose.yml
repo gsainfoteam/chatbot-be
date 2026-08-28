@@ -1,7 +1,7 @@
 services:
-  # PostgreSQL 데이터베이스
+  # PostgreSQL 데이터베이스 (pgvector 포함: document_chunks.embedding 벡터 검색용)
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: ziggle-chatbot-db
     restart: unless-stopped
     environment:
@@ -68,6 +68,12 @@ services:
       LETSUR_AI_GATEWAY_MODEL_HEAVY: ${LETSUR_AI_GATEWAY_MODEL_HEAVY:-}
       LETSUR_AI_GATEWAY_X_TITLE: ${LETSUR_AI_GATEWAY_X_TITLE:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-letsur}
+      # Embedding (벡터 검색; 미설정 시 Letsur 게이트웨이 설정 재사용)
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_MAX_DISTANCE: ${EMBEDDING_MAX_DISTANCE:-0.75}
+      EMBEDDING_RETRIEVAL_ENABLED: ${EMBEDDING_RETRIEVAL_ENABLED:-true}
       # OpenRouter Configuration (LLM_PROVIDER=openrouter)
       OPEN_ROUTER_API_KEY: ${OPEN_ROUTER_API_KEY:-}
       OPEN_ROUTER_BASE_URL: ${OPEN_ROUTER_BASE_URL:-}

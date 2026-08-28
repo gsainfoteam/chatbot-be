@@ -5,11 +5,18 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { DocumentsRepository } from './documents.repository';
+import {
+  DocumentsRepository,
+  type ReplaceChunksInput,
+} from './documents.repository';
 import { GcsStorageService } from './gcs-storage.service';
 import { parseFiniteNumber } from './parse-finite-number';
-import { PdfPipelineService } from './pdf-pipeline.service';
+import { PdfPipelineService, type PipelineChunk } from './pdf-pipeline.service';
+import { EmbeddingService } from '../embedding/embedding.service';
+import { buildChunkEmbeddingInput } from '../embedding/chunk-embedding-input';
 import type { Document } from '../db';
+
+const EMBEDDING_BATCH_SIZE = 64;
 
 @Injectable()
 export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
@@ -30,6 +37,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     private readonly documentsRepo: DocumentsRepository,
     private readonly gcs: GcsStorageService,
     private readonly pipeline: PdfPipelineService,
+    private readonly embeddingService: EmbeddingService,
     private readonly configService: ConfigService,
   ) {
     this.concurrency = parseFiniteNumber(
@@ -160,11 +168,15 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
 
       generatedArtifactsMayExist = true;
       await this.gcs.uploadDocuments(result.documents);
+      const chunksWithEmbeddings = await this.embedChunks(
+        doc.title,
+        result.chunks,
+      );
       const completed = await this.documentsRepo.completeProcessing(
         doc.id,
         processingToken,
         result.summary,
-        result.chunks,
+        chunksWithEmbeddings,
       );
       if (!completed) {
         this.logger.warn(
@@ -206,6 +218,50 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
       }
     } finally {
       heartbeat.stop();
+    }
+  }
+
+  /**
+   * chunk 임베딩 계산 (벡터 검색용). 실패해도 문서 처리는 계속되며,
+   * embedding 없이 저장된 chunk는 백필 스크립트(db:backfill:embeddings)로 복구합니다.
+   */
+  private async embedChunks(
+    documentTitle: string,
+    chunks: PipelineChunk[],
+  ): Promise<ReplaceChunksInput[]> {
+    if (!this.embeddingService.isEnabled()) {
+      return chunks;
+    }
+
+    try {
+      const t0 = Date.now();
+      const embeddings: number[][] = [];
+      for (let i = 0; i < chunks.length; i += EMBEDDING_BATCH_SIZE) {
+        const batch = chunks.slice(i, i + EMBEDDING_BATCH_SIZE);
+        const inputs = batch.map((chunk) =>
+          buildChunkEmbeddingInput({
+            documentTitle,
+            path: chunk.path,
+            description: chunk.description,
+            content: chunk.content,
+          }),
+        );
+        embeddings.push(...(await this.embeddingService.embedTexts(inputs)));
+      }
+      this.logger.log(
+        `Embedded ${chunks.length} chunk(s) in ${Date.now() - t0}ms`,
+      );
+      return chunks.map((chunk, index) => ({
+        ...chunk,
+        embedding: embeddings[index],
+      }));
+    } catch (error) {
+      this.logger.warn(
+        `Chunk embedding failed; saving chunks without embeddings (run db:backfill:embeddings later): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return chunks;
     }
   }
 

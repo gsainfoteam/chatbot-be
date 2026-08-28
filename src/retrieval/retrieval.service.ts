@@ -61,6 +61,16 @@ export class RetrievalService {
   }
 
   /**
+   * 질의 임베딩 기준 코사인 거리 상위 chunk 검색 (ready/활성/미만료 문서만).
+   */
+  async searchChunksByEmbedding(
+    embedding: number[],
+    limit: number,
+  ): Promise<Array<{ path: string; resourceName: string; distance: number }>> {
+    return this.retrievalRepo.searchChunksByEmbedding(embedding, limit);
+  }
+
+  /**
    * Load chunk markdown bodies for selected paths (1 query).
    */
   async getContentsByPaths(paths: string[]): Promise<ChunkContentHit[]> {

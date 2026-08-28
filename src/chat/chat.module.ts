@@ -4,22 +4,32 @@ import { ChatController } from './chat.controller';
 import { ChatService } from './services/chat.service';
 import { ChatOrchestrationService } from './services/chat-orchestration.service';
 import { ResourceSelectionService } from './services/resource-selection.service';
+import { VectorChunkSelectionService } from './services/vector-chunk-selection.service';
 import { ResourceContentService } from './services/resource-content.service';
 import { ChatStreamTransport } from './services/chat-stream.transport';
 import { AuthModule } from '../auth/auth.module';
 import { McpModule } from '../mcp/mcp.module';
 import { RetrievalModule } from '../retrieval/retrieval.module';
+import { EmbeddingModule } from '../embedding/embedding.module';
 import { UsageModule } from '../usage/usage.module';
 import { LLM_CLIENT } from './llm/llm-client.interface';
 import { llmClientProvider } from './llm/llm-client.provider';
 
 @Module({
-  imports: [HttpModule, AuthModule, McpModule, RetrievalModule, UsageModule],
+  imports: [
+    HttpModule,
+    AuthModule,
+    McpModule,
+    RetrievalModule,
+    EmbeddingModule,
+    UsageModule,
+  ],
   controllers: [ChatController],
   providers: [
     ChatService,
     llmClientProvider,
     ResourceSelectionService,
+    VectorChunkSelectionService,
     ResourceContentService,
     ChatStreamTransport,
     ChatOrchestrationService,

@@ -25,6 +25,8 @@ export type ReplaceChunksInput = {
   description: string;
   content: string;
   sortOrder: number;
+  /** 벡터 검색용 임베딩. 없으면 null로 저장되어 백필 대상이 된다. */
+  embedding?: number[] | null;
 };
 
 @Injectable()
@@ -221,6 +223,7 @@ export class DocumentsRepository {
             description: c.description,
             content: c.content,
             sortOrder: c.sortOrder,
+            embedding: c.embedding ?? null,
           })),
         );
       }

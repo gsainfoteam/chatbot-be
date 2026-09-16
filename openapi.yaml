@@ -13,6 +13,8 @@ servers:
   - url: http://localhost:3000
 
 tags:
+  - name: Health
+    description: (Public) 서버 프로세스 생존 확인
   - name: Authentication
     description: Admin 인증 (IDP 연동)
   - name: Widget Auth
@@ -23,6 +25,31 @@ tags:
     description: (Private) 위젯 키 관리
 
 paths:
+  # ----------------------------
+  # Liveness
+  # ----------------------------
+  /health:
+    get:
+      tags:
+        - Health
+      summary: 서버 프로세스 생존 확인
+      description: >
+        프로세스가 살아 있는지 확인하는 라이브니스 엔드포인트입니다.
+        인증이 필요하지 않으며, DB 등 의존성은 검사하지 않습니다.
+      responses:
+        '200':
+          description: 서버 정상 동작
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
   # ----------------------------
   # 0. Admin Authentication
   # ----------------------------

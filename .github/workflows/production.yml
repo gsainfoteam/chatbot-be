@@ -88,5 +88,5 @@ jobs:
             echo "No changes to commit"
           else
             git commit -m "Update image ${{ env.REPOSITORY }}:${{ env.IMAGE_TAG }}"
-            git push -u origin master
+            git push -u origin main
           fi

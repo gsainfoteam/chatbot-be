@@ -1,13 +1,23 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { ResourceContentService } from './resource-content.service';
 import type { ListResourcesResult } from '../../retrieval/retrieval.types';
+import type { RelevantChunkSelection } from './resource-selection.service';
 import type { LlmUsage } from '../types/llm.types';
+
+function createDisabledVectorSelection() {
+  return {
+    selectRelevantChunkPaths: jest.fn<
+      (...args: unknown[]) => Promise<RelevantChunkSelection | null>
+    >(async () => null),
+  };
+}
 
 describe('ResourceContentService', () => {
   it('appends unique top-level PDF entries for FE resources', () => {
     const service = new ResourceContentService(
       { getContentsByPaths: jest.fn() } as never,
       {} as never,
+      createDisabledVectorSelection() as never,
     );
     const out: Array<{ path: string; formats: string[]; url: string }> = [];
     const seen = new Set<string>();
@@ -71,6 +81,7 @@ describe('ResourceContentService', () => {
     const service = new ResourceContentService(
       retrievalService as never,
       resourceSelectionService as never,
+      createDisabledVectorSelection() as never,
     );
 
     const listResult = {
@@ -123,12 +134,75 @@ describe('ResourceContentService', () => {
     );
   });
 
+  it('uses vector selection when available and skips LLM selection', async () => {
+    const retrievalService = {
+      getContentsByPaths: jest.fn(async (_paths: string[]) => [
+        { path: '학사편람', content: 'root overview' },
+        { path: '학사편람/졸업', content: 'chunk body' },
+      ]),
+    };
+    const resourceSelectionService = {
+      selectRelevantChunkPaths: jest.fn(),
+      selectMostRelevantDocuments: jest.fn(),
+      selectRelevantResourcePaths: jest.fn(),
+    };
+    const vectorChunkSelectionService = {
+      selectRelevantChunkPaths: jest
+        .fn<(...args: unknown[]) => Promise<RelevantChunkSelection | null>>()
+        .mockResolvedValue({
+          rootPaths: ['학사편람'],
+          detailPaths: ['학사편람/졸업'],
+        }),
+    };
+
+    const service = new ResourceContentService(
+      retrievalService as never,
+      resourceSelectionService as never,
+      vectorChunkSelectionService as never,
+    );
+
+    const listResult = {
+      raw: {},
+      texts: [],
+      resourceLinks: [],
+      embeddedResources: [],
+      filteredResources: [],
+      resources: [
+        {
+          path: '학사편람',
+          description: '학사',
+          chunks: [{ path: '학사편람/졸업.md', description: '졸업' }],
+        },
+      ],
+      chunks: [{ path: '학사편람/졸업.md', description: '졸업' }],
+    } as ListResourcesResult;
+
+    const result = await service.fetchRelevantResourceContents(
+      '졸업 요건',
+      listResult,
+    );
+
+    expect(
+      vectorChunkSelectionService.selectRelevantChunkPaths,
+    ).toHaveBeenCalledWith('졸업 요건', 5);
+    expect(
+      resourceSelectionService.selectRelevantChunkPaths,
+    ).not.toHaveBeenCalled();
+    expect(retrievalService.getContentsByPaths).toHaveBeenCalledWith([
+      '학사편람',
+      '학사편람/졸업',
+    ]);
+    expect(result.content).toContain('root overview');
+    expect(result.content).toContain('chunk body');
+  });
+
   it('returns empty when legacy filteredResources has no markdown', async () => {
     const service = new ResourceContentService(
       { getContentsByPaths: jest.fn() } as never,
       {
         selectRelevantResourcePaths: jest.fn(),
       } as never,
+      createDisabledVectorSelection() as never,
     );
 
     const listResult = {

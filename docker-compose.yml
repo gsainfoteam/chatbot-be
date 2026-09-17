@@ -1,7 +1,7 @@
 services:
-  # PostgreSQL 데이터베이스
+  # PostgreSQL 데이터베이스 (pgvector 포함: document_chunks.embedding 벡터 검색용)
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: ziggle-chatbot-db
     restart: unless-stopped
     environment:
@@ -37,6 +37,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:-postgres}
       DB_NAME: ${DB_NAME:-ziggle_chatbot}
       DB_SSL: ${DB_SSL:-false}
+      DB_SSL_CA: ${DB_SSL_CA:-}
+      DB_SSL_REJECT_UNAUTHORIZED: ${DB_SSL_REJECT_UNAUTHORIZED:-}
       PORT: ${PORT:-3000}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-3600}
@@ -68,6 +70,14 @@ services:
       LETSUR_AI_GATEWAY_MODEL_HEAVY: ${LETSUR_AI_GATEWAY_MODEL_HEAVY:-}
       LETSUR_AI_GATEWAY_X_TITLE: ${LETSUR_AI_GATEWAY_X_TITLE:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-letsur}
+      # Embedding (벡터 검색; 미설정 시 Letsur 게이트웨이 설정 재사용)
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_MAX_DISTANCE: ${EMBEDDING_MAX_DISTANCE:-0.70}
+      EMBEDDING_RETRIEVAL_ENABLED: ${EMBEDDING_RETRIEVAL_ENABLED:-true}
+      # 벡터 검색(dense + exact 가점) 튜닝
+      RETRIEVAL_DENSE_CANDIDATE_LIMIT: ${RETRIEVAL_DENSE_CANDIDATE_LIMIT:-20}
+      RETRIEVAL_STRONG_DISTANCE: ${RETRIEVAL_STRONG_DISTANCE:-0.55}
+      RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT: ${RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT:-2}
       # OpenRouter Configuration (LLM_PROVIDER=openrouter)
       OPEN_ROUTER_API_KEY: ${OPEN_ROUTER_API_KEY:-}
       OPEN_ROUTER_BASE_URL: ${OPEN_ROUTER_BASE_URL:-}

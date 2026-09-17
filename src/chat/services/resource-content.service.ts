@@ -5,6 +5,7 @@ import type {
 } from '../../retrieval/retrieval.types';
 import { RetrievalService } from '../../retrieval/retrieval.service';
 import { ResourceSelectionService } from './resource-selection.service';
+import { VectorChunkSelectionService } from './vector-chunk-selection.service';
 import type { LlmUsage } from '../types/llm.types';
 
 /**
@@ -26,6 +27,7 @@ export class ResourceContentService {
   constructor(
     private readonly retrievalService: RetrievalService,
     private readonly resourceSelectionService: ResourceSelectionService,
+    private readonly vectorChunkSelectionService: VectorChunkSelectionService,
   ) {}
 
   private normalizeResourcePath(path: string): string {
@@ -334,16 +336,28 @@ export class ResourceContentService {
     );
 
     let t0 = Date.now();
-    const chunkSelection =
-      await this.resourceSelectionService.selectRelevantChunkPaths(
+    // 1차 선별: 벡터 검색 우선, 불가 시(비활성화·임베딩 실패·미백필) LLM 선별로 폴백
+    let chunkSelection =
+      await this.vectorChunkSelectionService.selectRelevantChunkPaths(
         question,
-        resources,
         5,
-        tokenUsage,
       );
-    this.logger.log(
-      `[PERF] selectRelevantChunkPaths(LLM): ${Date.now() - t0}ms`,
-    );
+    if (chunkSelection) {
+      this.logger.log(
+        `[PERF] selectRelevantChunkPaths(vector): ${Date.now() - t0}ms`,
+      );
+    } else {
+      chunkSelection =
+        await this.resourceSelectionService.selectRelevantChunkPaths(
+          question,
+          resources,
+          5,
+          tokenUsage,
+        );
+      this.logger.log(
+        `[PERF] selectRelevantChunkPaths(LLM fallback): ${Date.now() - t0}ms`,
+      );
+    }
 
     const chunkPaths = [
       ...chunkSelection.rootPaths,

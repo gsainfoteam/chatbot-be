@@ -95,9 +95,15 @@ describe('ChatOrchestrationService', () => {
     const resourceSelectionService = new ResourceSelectionService(
       llmClient as never,
     );
+    const vectorChunkSelectionService = {
+      selectRelevantChunkPaths: jest.fn<(...args: unknown[]) => Promise<null>>(
+        async () => null,
+      ),
+    };
     const resourceContentService = new ResourceContentService(
       retrievalService as never,
       resourceSelectionService,
+      vectorChunkSelectionService as never,
     );
     const chatStreamTransport = new ChatStreamTransport({
       get: jest.fn((key: string) =>

@@ -157,7 +157,9 @@ describe('PdfPipelineService metadata pass', () => {
   it('falls back to the section title when metadata path traverses upward', async () => {
     const callLLM = jest
       .fn<(...args: unknown[]) => Promise<LlmResponse>>()
-      .mockResolvedValueOnce(llmResponse(`## 안전한 제목\n\n${'본문 '.repeat(700)}`))
+      .mockResolvedValueOnce(
+        llmResponse(`## 안전한 제목\n\n${'본문 '.repeat(700)}`),
+      )
       .mockResolvedValueOnce(
         llmResponse(
           JSON.stringify({
@@ -177,9 +179,9 @@ describe('PdfPipelineService metadata pass', () => {
     const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
 
     expect(result.documents['doc/안전한-제목.md']).toBeDefined();
-    expect(Object.keys(result.documents).some((path) => path.includes('..'))).toBe(
-      false,
-    );
+    expect(
+      Object.keys(result.documents).some((path) => path.includes('..')),
+    ).toBe(false);
   });
 
   it('throws when Pass 1 page LLM failures exceed the ratio threshold', async () => {

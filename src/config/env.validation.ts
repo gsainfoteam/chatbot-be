@@ -26,6 +26,27 @@ enum LlmProvider {
 }
 
 /**
+ * "true"/"false"만 불리언으로 변환하고, 그 외 값은 문자열 그대로 남깁니다.
+ * 남은 문자열은 `@IsBoolean()`이 거부하므로 `fasle`·`0`·`off` 같은 오타가
+ * 조용히 기본값으로 흡수되지 않습니다(kill-switch가 의도와 반대로 동작하는 것을 막습니다).
+ * 미설정(undefined/빈 문자열)은 기존 동작을 유지하기 위해 기본값을 사용합니다.
+ */
+function parseBooleanEnv(defaultValue: boolean) {
+  return ({ value }: { value: unknown }): unknown => {
+    if (typeof value === 'boolean') return value;
+    if (value === undefined || value === null || value === '') {
+      return defaultValue;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') return true;
+      if (normalized === 'false') return false;
+    }
+    return value;
+  };
+}
+
+/**
  * 환경 변수 검증 클래스
  * 애플리케이션 시작 시 필수 환경 변수와 형식을 검증합니다.
  */
@@ -53,14 +74,21 @@ export class EnvironmentVariables {
   DB_NAME: string;
 
   @IsBoolean()
-  @Transform(({ value }) => {
-    if (typeof value === 'boolean') return value;
-    if (typeof value === 'string') {
-      return value.toLowerCase() === 'true';
-    }
-    return false;
-  })
+  @Transform(parseBooleanEnv(false))
   DB_SSL: boolean;
+
+  /** DB_SSL=true일 때 신뢰할 CA 인증서(PEM). 지정하면 인증서 검증이 켜집니다. */
+  @IsOptional()
+  @IsString()
+  DB_SSL_CA?: string;
+
+  /**
+   * DB 서버 인증서 검증 여부('true'/'false'). 미설정 시 검증하지 않고 경고만 남깁니다.
+   * 불리언으로 변환하지 않는 것은 "미설정"과 "명시적 선택"을 구분해야 하기 때문입니다.
+   */
+  @IsOptional()
+  @IsString()
+  DB_SSL_REJECT_UNAUTHORIZED?: string;
 
   // Application Configuration
   @IsNumber()
@@ -138,6 +166,50 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   OPEN_ROUTER_BASE_URL?: string;
+
+  // Embedding API (벡터 검색용). 미설정 시 Letsur 게이트웨이 설정을 재사용.
+
+  // 기본값: text-embedding-3-large. 변경 시 차원 마이그레이션 + 전체 재임베딩 필요.
+  @IsOptional()
+  @IsString()
+  EMBEDDING_MODEL?: string;
+
+  /** 코사인 거리 임계값 (0~2). 이보다 먼 chunk는 관련 없음으로 제외. 기본 0.8. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(2)
+  EMBEDDING_MAX_DISTANCE?: number;
+
+  /** 벡터 검색 kill-switch. false면 항상 LLM 선별 사용. 기본 true. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(true))
+  EMBEDDING_RETRIEVAL_ENABLED?: boolean;
+
+  // 벡터 검색(dense + exact 가점) 튜닝
+  // 기본값은 src/retrieval/retrieval.constants.ts 참고.
+
+  /** dense 후보 풀 크기. 최종 선택 개수보다 크게 잡아 재랭킹 여지를 만듭니다. 기본 20. */
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(200)
+  RETRIEVAL_DENSE_CANDIDATE_LIMIT?: number;
+
+  /** 추가 근거 없이도 통과시키는 코사인 거리. 기본 0.55. */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(2)
+  RETRIEVAL_STRONG_DISTANCE?: number;
+
+  /** 최종 세부 chunk의 문서당 상한. 기본 2. */
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(10)
+  RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT?: number;
 
   // Client Domain Configuration
   @IsString()

@@ -29,6 +29,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:safe": "bash scripts/migrate.sh",
     "db:backfill:answers": "bun src/scripts/backfill-usage-answers.ts",
+    "db:backfill:embeddings": "bun src/scripts/backfill-chunk-embeddings.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
   },

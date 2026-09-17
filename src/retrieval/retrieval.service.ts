@@ -5,6 +5,7 @@ import type {
   ListResourceItem,
   ListResourcesResult,
 } from './retrieval.types';
+import type { DenseHit } from './rank-fusion';
 
 @Injectable()
 export class RetrievalService {
@@ -57,6 +58,16 @@ export class RetrievalService {
       chunks,
       total: resources.length,
     };
+  }
+
+  /**
+   * 질의 임베딩 기준 코사인 거리 상위 chunk 검색 (ready/활성/미만료 문서만).
+   */
+  async searchChunksByEmbedding(
+    embedding: number[],
+    limit: number,
+  ): Promise<DenseHit[]> {
+    return this.retrievalRepo.searchChunksByEmbedding(embedding, limit);
   }
 
   /**

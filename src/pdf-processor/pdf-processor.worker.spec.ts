@@ -4,6 +4,7 @@ import type { Document } from '../db';
 import type { DocumentsRepository } from './documents.repository';
 import type { GcsStorageService } from './gcs-storage.service';
 import type { PdfPipelineService } from './pdf-pipeline.service';
+import type { EmbeddingService } from '../embedding/embedding.service';
 import { PdfProcessorWorker } from './pdf-processor.worker';
 
 function processingDocument(): Document {
@@ -110,17 +111,23 @@ function createWorker(options: {
   const config = {
     get: jest.fn((_key: string) => undefined),
   };
+  const embeddingService = {
+    isEnabled: jest.fn(() => false),
+    embedTexts: jest.fn(),
+  };
 
   return {
     worker: new PdfProcessorWorker(
       repo as unknown as DocumentsRepository,
       gcs as unknown as GcsStorageService,
       pipeline as unknown as PdfPipelineService,
+      embeddingService as unknown as EmbeddingService,
       config as unknown as ConfigService,
     ),
     repo,
     gcs,
     pipeline,
+    embeddingService,
   };
 }
 

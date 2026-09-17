@@ -38,7 +38,6 @@ describe('ChatOrchestrationService', () => {
       texts: ['available school documents'],
       resourceLinks: [],
       embeddedResources: [],
-      filteredResources: [],
       resources: [
         {
           path: '학사편람.pdf',

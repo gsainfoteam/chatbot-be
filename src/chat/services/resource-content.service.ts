@@ -44,31 +44,6 @@ export class ResourceContentService {
   }
 
   /**
-   * 경로에서 마지막 문서 제목만 추출 (확장자 포함)
-   * 예: "2025 캠프 발표자료_ 1일차 오전/학생지원.md" -> "학생지원.md"
-   * 원본 경로에 확장자가 없으면 formats 배열에서 찾아서 추가
-   */
-  private extractDocumentTitle(
-    path: string,
-    originalPath?: string,
-    formats?: string[],
-  ): string {
-    // 원본 경로가 있으면 원본 경로 사용 (확장자 포함)
-    const pathToUse = originalPath || path;
-
-    // 슬래시로 분리하여 마지막 부분만 반환
-    const parts = pathToUse.split('/');
-    let title = parts[parts.length - 1] || pathToUse;
-
-    // 확장자가 없고 formats 배열에 md가 있으면 .md 추가
-    if (!title.includes('.') && formats && formats.includes('md')) {
-      title = `${title}.md`;
-    }
-
-    return title;
-  }
-
-  /**
    * FE·리소스 API용 PDF 경로: 하위 chunk/이미지 경로가 아니라 상위 묶음 PDF 한 개
    * 예: `에어컨+…/세부/파일.png` → `에어컨+….pdf` (첫 `/` 앞 세그먼트 + `.pdf`)
    */
@@ -142,16 +117,6 @@ export class ResourceContentService {
       }
     }
     return paths;
-  }
-
-  /**
-   * 문서 경로 기준으로 상대 이미지 경로를 전체 리소스 경로로 변환
-   * 예: docPath="폴더/문서.md", imageRef="이미지.png" → "폴더/이미지.png"
-   */
-  private resolveImagePath(imageRef: string, docPath: string): string {
-    const lastSlash = docPath.lastIndexOf('/');
-    const dir = lastSlash === -1 ? '' : docPath.slice(0, lastSlash + 1);
-    return dir + imageRef;
   }
 
   /**
@@ -256,67 +221,6 @@ export class ResourceContentService {
       if (out.length >= max) break;
     }
     return out;
-  }
-
-  /**
-   * 질문과 관련된 하위 문서 찾기
-   */
-  private findRelevantSubDocuments(
-    question: string,
-    documents: Array<{ path: string; description: string }>,
-    maxResults: number = 3,
-  ): Array<{ path: string; description: string }> {
-    const keywords =
-      question
-        .toLowerCase()
-        .match(/[\uac00-\ud7a3]+|[a-z]+/gi)
-        ?.filter((word) => word.length > 1) || [];
-
-    if (keywords.length === 0) {
-      return documents.slice(0, maxResults);
-    }
-
-    const scoredDocuments = documents.map((doc) => {
-      const pathLower = doc.path.toLowerCase();
-      const descLower = doc.description.toLowerCase();
-      let score = 0;
-
-      for (const keyword of keywords) {
-        if (pathLower.includes(keyword)) {
-          score += keyword.length * 2; // 경로 매칭은 가중치 높게
-        }
-        if (descLower.includes(keyword)) {
-          score += keyword.length; // 설명 매칭
-        }
-      }
-
-      return { document: doc, score };
-    });
-
-    return scoredDocuments
-      .sort((a, b) => b.score - a.score)
-      .slice(0, maxResults)
-      .map((item) => item.document);
-  }
-
-  /**
-   * 하위 문서 내용 가져오기 (DB chunks)
-   */
-  private async fetchSubDocumentContents(
-    subDocuments: Array<{ path: string; description: string }>,
-  ): Promise<string> {
-    const hits = await this.retrievalService.getContentsByPaths(
-      subDocuments.map((d) => d.path),
-    );
-    const byNormalized = new Map(hits.map((h) => [h.path, h.content]));
-
-    const parts: string[] = [];
-    for (const doc of subDocuments) {
-      const content = byNormalized.get(this.normalizeResourcePath(doc.path));
-      if (!content) continue;
-      parts.push(`\n\n## 관련 정보\n\n주제: ${doc.description}\n\n${content}`);
-    }
-    return parts.join('\n');
   }
 
   /**
@@ -438,7 +342,6 @@ export class ResourceContentService {
   /**
    * 문서 catalog에서 관련 리소스 내용 가져오기
    * - 신 형식(resources + chunks): description 보고 chunk 경로 선별 → DB content
-   * - 구 형식(filteredResources): 경로만 선별 후 DB content (dead path 가능)
    * @returns 문서 내용과 usedResources(선별 경로·formats; chunk는 md 포함). FE 참조 목록은 PDF/PNG만 노출.
    */
   async fetchRelevantResourceContents(
@@ -463,225 +366,7 @@ export class ResourceContentService {
         tokenUsage,
       );
     }
-
-    const filteredResources = listResult.filteredResources;
-    if (!filteredResources || filteredResources.length === 0) {
-      return { content: '', usedResources: [] };
-    }
-
-    const mdResources = filteredResources.filter(
-      (resource) => resource.formats && resource.formats.includes('md'),
-    );
-
-    if (mdResources.length === 0) {
-      this.logger.debug('No markdown resources found in filtered resources');
-      return { content: '', usedResources: [] };
-    }
-
-    this.logger.log(
-      `[DEBUG] 1차 선별(경로 기준) 입력: MD 문서 ${mdResources.length}개 → LLM에 전달`,
-    );
-
-    let t0 = Date.now();
-    const relevantResources =
-      await this.resourceSelectionService.selectRelevantResourcePaths(
-        question,
-        mdResources,
-        10,
-        tokenUsage,
-      );
-    this.logger.log(
-      `[PERF] selectRelevantResourcePaths(LLM, 구 형식): ${Date.now() - t0}ms`,
-    );
-
-    if (relevantResources.length === 0) {
-      return { content: '', usedResources: [] };
-    }
-
-    this.logger.log(
-      `[DEBUG] 1차 선별 결과(상위 관련 문서 경로): ${relevantResources.length}개`,
-    );
-
-    t0 = Date.now();
-    const hits = await this.retrievalService.getContentsByPaths(
-      relevantResources.map((r) => r.path),
-    );
-    const contentByPath = new Map(hits.map((h) => [h.path, h.content]));
-    const resourceResults = relevantResources.map((resource) => {
-      const content = contentByPath.get(
-        this.normalizeResourcePath(resource.path),
-      );
-      if (!content) return null;
-      const resourcePath = this.normalizeResourcePath(resource.path);
-      const documentTitle = this.extractDocumentTitle(
-        resourcePath,
-        resource.path,
-        resource.formats,
-      );
-      const subDocuments = this.parseDocumentLinks(content);
-      return {
-        title: documentTitle,
-        content,
-        path: resource.path,
-        formats: resource.formats || [],
-        subDocuments,
-      };
-    });
-    const documentCandidates = resourceResults.filter(
-      (
-        r,
-      ): r is {
-        title: string;
-        content: string;
-        path: string;
-        formats: string[];
-        subDocuments: Array<{ path: string; description: string }>;
-      } => r !== null,
-    );
-    this.logger.log(
-      `[PERF] getContentsByPaths(구 형식, ${relevantResources.length}개): ${Date.now() - t0}ms`,
-    );
-
-    if (documentCandidates.length === 0) {
-      return { content: '', usedResources: [] };
-    }
-
-    this.logger.log(
-      `[DEBUG] 2차 선별(본문 기준) 입력: 후보 문서 ${documentCandidates.length}개 → LLM에 전달`,
-    );
-
-    t0 = Date.now();
-    const selectedDocuments =
-      await this.resourceSelectionService.selectMostRelevantDocuments(
-        question,
-        documentCandidates.map((doc) => ({
-          title: doc.title,
-          content: doc.content,
-          path: doc.path,
-        })),
-        tokenUsage,
-      );
-    this.logger.log(
-      `[PERF] selectMostRelevantDocuments(LLM, 구 형식): ${Date.now() - t0}ms`,
-    );
-
-    this.logger.log(
-      `[DEBUG] 2차 선별 결과(최종 사용 문서): ${selectedDocuments.length}개`,
-    );
-    if (selectedDocuments.length === 0) {
-      this.logger.log('No documents selected by LLM as relevant');
-      return { content: '', usedResources: [] };
-    }
-
-    const contents: string[] = [];
-    const allSubDocuments: Array<{ path: string; description: string }> = [];
-    const usedResources: Array<{ path: string; formats: string[] }> = [];
-    const addedPaths = new Set<string>();
-
-    for (const selected of selectedDocuments) {
-      const docCandidate = documentCandidates.find(
-        (d) => d.title === selected.title,
-      );
-      if (docCandidate) {
-        contents.push(`\n\n## 관련 정보\n\n${docCandidate.content}`);
-
-        const hasPdf = docCandidate.formats.includes('pdf');
-        const hasPng = docCandidate.formats.includes('png');
-        if (hasPdf || hasPng) {
-          const pdfPngFormats = docCandidate.formats.filter(
-            (f) => f === 'pdf' || f === 'png',
-          );
-          usedResources.push({
-            path: docCandidate.path,
-            formats: pdfPngFormats,
-          });
-          addedPaths.add(docCandidate.path);
-        }
-
-        if (docCandidate.subDocuments.length > 0) {
-          allSubDocuments.push(...docCandidate.subDocuments);
-        }
-      }
-    }
-
-    for (const selected of selectedDocuments) {
-      const path = selected.path;
-      const firstSegment = path.split('/')[0];
-      for (const r of filteredResources) {
-        if (!r.formats) continue;
-        if (addedPaths.has(r.path)) continue;
-        if (r.formats.includes('pdf')) {
-          const pathLower = r.path.toLowerCase();
-          if (pathLower.endsWith('.png')) continue;
-          const match =
-            r.path === firstSegment ||
-            r.path === `${firstSegment}.pdf` ||
-            r.path.startsWith(`${firstSegment}.`);
-          if (match) {
-            usedResources.push({ path: r.path, formats: ['pdf'] });
-            addedPaths.add(r.path);
-          }
-        }
-      }
-    }
-
-    for (const selected of selectedDocuments) {
-      const docCandidate = documentCandidates.find(
-        (d) => d.title === selected.title,
-      );
-      if (!docCandidate?.content) continue;
-      const imageRefs = this.parseImageReferencesFromMarkdown(
-        docCandidate.content,
-      );
-      for (const imageRef of imageRefs) {
-        const fullPath = this.resolveImagePath(imageRef, docCandidate.path);
-        const pathWithoutExt = fullPath.replace(/\.(png|jpe?g|gif|webp)$/i, '');
-        const r = filteredResources.find(
-          (x) =>
-            x.formats?.includes('png') &&
-            !addedPaths.has(x.path) &&
-            (x.path === fullPath ||
-              x.path === pathWithoutExt ||
-              x.path.toLowerCase() === fullPath.toLowerCase() ||
-              x.path.toLowerCase() === pathWithoutExt.toLowerCase()),
-        );
-        if (r) {
-          usedResources.push({ path: r.path, formats: ['png'] });
-          addedPaths.add(r.path);
-        }
-      }
-    }
-
-    const finalUsedResources = usedResources.slice(0, 5);
-
-    // 하위 문서 중 질문과 관련된 문서 찾아서 추가로 가져오기
-    if (allSubDocuments.length > 0) {
-      const relevantSubDocuments = this.findRelevantSubDocuments(
-        question,
-        allSubDocuments,
-        3, // 최대 3개의 하위 문서만 추가로 가져오기
-      );
-
-      if (relevantSubDocuments.length > 0) {
-        this.logger.log(
-          `Fetching ${relevantSubDocuments.length} relevant sub-document(s)`,
-        );
-        t0 = Date.now();
-        const subDocumentContents =
-          await this.fetchSubDocumentContents(relevantSubDocuments);
-        this.logger.log(
-          `[PERF] fetchSubDocumentContents(${relevantSubDocuments.length}개): ${Date.now() - t0}ms`,
-        );
-        if (subDocumentContents) {
-          contents.push('\n\n---\n\n## 추가 관련 정보\n' + subDocumentContents);
-        }
-      }
-    }
-
-    return {
-      content: contents.join('\n'),
-      usedResources: finalUsedResources,
-    };
+    return { content: '', usedResources: [] };
   }
 
   private generateResourceUrl(resourcePath: string): string {

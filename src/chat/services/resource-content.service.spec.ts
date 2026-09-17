@@ -62,20 +62,6 @@ describe('ResourceContentService', () => {
           rootPaths: ['학사편람'],
           detailPaths: ['학사편람/졸업'],
         }),
-      selectMostRelevantDocuments: jest
-        .fn<
-          (
-            ...args: unknown[]
-          ) => Promise<Array<{ title: string; content: string; path: string }>>
-        >()
-        .mockResolvedValue([
-          {
-            title: '졸업.md',
-            content: 'chunk body',
-            path: '학사편람/졸업.md',
-          },
-        ]),
-      selectRelevantResourcePaths: jest.fn(),
     };
 
     const service = new ResourceContentService(
@@ -89,7 +75,6 @@ describe('ResourceContentService', () => {
       texts: [],
       resourceLinks: [],
       embeddedResources: [],
-      filteredResources: [],
       resources: [
         {
           path: '학사편람',
@@ -115,16 +100,10 @@ describe('ResourceContentService', () => {
     expect(
       resourceSelectionService.selectRelevantChunkPaths,
     ).toHaveBeenCalled();
-    expect(
-      resourceSelectionService.selectRelevantResourcePaths,
-    ).not.toHaveBeenCalled();
     expect(retrievalService.getContentsByPaths).toHaveBeenCalledWith([
       '학사편람',
       '학사편람/졸업',
     ]);
-    expect(
-      resourceSelectionService.selectMostRelevantDocuments,
-    ).not.toHaveBeenCalled();
     expect(result.content).toContain('root overview');
     expect(result.content).toContain('chunk body');
     expect(result.content).toContain('## 관련 정보');
@@ -143,8 +122,6 @@ describe('ResourceContentService', () => {
     };
     const resourceSelectionService = {
       selectRelevantChunkPaths: jest.fn(),
-      selectMostRelevantDocuments: jest.fn(),
-      selectRelevantResourcePaths: jest.fn(),
     };
     const vectorChunkSelectionService = {
       selectRelevantChunkPaths: jest
@@ -166,7 +143,6 @@ describe('ResourceContentService', () => {
       texts: [],
       resourceLinks: [],
       embeddedResources: [],
-      filteredResources: [],
       resources: [
         {
           path: '학사편람',
@@ -194,27 +170,5 @@ describe('ResourceContentService', () => {
     ]);
     expect(result.content).toContain('root overview');
     expect(result.content).toContain('chunk body');
-  });
-
-  it('returns empty when legacy filteredResources has no markdown', async () => {
-    const service = new ResourceContentService(
-      { getContentsByPaths: jest.fn() } as never,
-      {
-        selectRelevantResourcePaths: jest.fn(),
-      } as never,
-      createDisabledVectorSelection() as never,
-    );
-
-    const listResult = {
-      raw: {},
-      texts: [],
-      resourceLinks: [],
-      embeddedResources: [],
-      filteredResources: [{ path: '학사편람.pdf', formats: ['pdf'] }],
-    } as ListResourcesResult;
-
-    await expect(
-      service.fetchRelevantResourceContents('질문', listResult),
-    ).resolves.toEqual({ content: '', usedResources: [] });
   });
 });

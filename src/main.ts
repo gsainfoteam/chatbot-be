@@ -3,10 +3,14 @@ import {
   FastifyAdapter,
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
-import { ValidationPipe, BadRequestException } from '@nestjs/common';
+import { ValidationPipe, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import {
+  initializeMetrics,
+  MetricsInterceptor,
+} from '@gsainfoteam/nest-observability';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -142,8 +146,23 @@ async function bootstrap() {
     ],
   });
 
+  app.use(new MetricsInterceptor());
+
   await app.listen(port, '0.0.0.0');
   console.log(`Application is running on: http://localhost:${port}`);
   console.log(`Swagger documentation: http://localhost:${port}/api/docs`);
 }
-void bootstrap();
+
+const bootstrapWithOTEL = async () => {
+  const logger = new Logger('Bootstrap');
+  try {
+    const serviceName = process.env.OTEL_SERVICE_NAME ?? 'chatbot-be';
+    initializeMetrics(serviceName);
+    await bootstrap();
+  } catch (error) {
+    logger.error('Failed to bootstrap application', error);
+    process.exit(1);
+  }
+};
+
+void bootstrapWithOTEL();

@@ -146,7 +146,7 @@ async function bootstrap() {
     ],
   });
 
-  app.use(new MetricsInterceptor());
+  app.useGlobalInterceptors(new MetricsInterceptor());
 
   await app.listen(port, '0.0.0.0');
   console.log(`Application is running on: http://localhost:${port}`);

@@ -39,7 +39,6 @@ describe('RetrievalService', () => {
       { path: '학사편람/졸업요건', description: '졸업' },
     ]);
     expect(catalog.total).toBe(1);
-    expect(catalog.filteredResources).toEqual([]);
   });
 
   it('loads contents by path and strips .md for lookup', async () => {

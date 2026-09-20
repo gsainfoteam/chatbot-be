@@ -121,23 +121,12 @@ export class ChatOrchestrationService {
       const listResult = await this.retrievalService.listCatalog();
       this.logger.log(`[PERF] listCatalog: ${Date.now() - t0}ms`);
 
-      const isNewFormat =
-        listResult.resources &&
-        listResult.resources.length > 0 &&
-        listResult.chunks &&
-        listResult.chunks.length > 0;
-      const totalFromList = isNewFormat
-        ? (listResult.total ?? listResult.resources?.length ?? 0)
-        : (listResult.filteredResources?.length ?? 0);
       const chunkCount = listResult.chunks?.length ?? 0;
       this.logger.log(
-        `[DEBUG] catalog 결과: ${isNewFormat ? `신 형식 상위 ${listResult.resources?.length ?? 0}개, chunk ${chunkCount}개` : `구 형식 ${totalFromList}개 리소스`}`,
+        `[DEBUG] catalog 결과: 상위 ${listResult.resources?.length ?? 0}개, chunk ${chunkCount}개`,
       );
 
-      const hasResources =
-        (listResult.chunks && listResult.chunks.length > 0) ||
-        (listResult.filteredResources &&
-          listResult.filteredResources.length > 0);
+      const hasResources = chunkCount > 0;
       if (!hasResources) {
         this.logger.warn('No resources from document catalog');
         const stream = await this.llmClient.generateFinalResponseStream(

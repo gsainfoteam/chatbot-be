@@ -107,4 +107,46 @@ describe('ResourceSelectionService', () => {
       detailPaths: ['학사편람/수강신청'],
     });
   });
+
+  it('returns empty when path selection says 없음', async () => {
+    const callLLM = jest
+      .fn<CallLLM>()
+      .mockResolvedValue(createLlmResponse('없음'));
+    const { service } = createService(callLLM);
+
+    const selected = await service.selectRelevantResourcePaths(
+      '질문',
+      [{ path: '학사편람/졸업.md', formats: ['md'] }],
+      5,
+    );
+
+    expect(selected).toEqual([]);
+  });
+
+  it('selects documents by index numbers', async () => {
+    const callLLM = jest
+      .fn<CallLLM>()
+      .mockResolvedValue(createLlmResponse('2, 1'));
+    const { service } = createService(callLLM);
+    const docs = [
+      { title: 'a.md', content: 'aaa', path: 'a.md' },
+      { title: 'b.md', content: 'bbb', path: 'b.md' },
+      { title: 'c.md', content: 'ccc', path: 'c.md' },
+    ];
+
+    const selected = await service.selectMostRelevantDocuments('질문', docs);
+
+    expect(selected.map((d) => d.path)).toEqual(['b.md', 'a.md']);
+  });
+
+  it('returns single document without calling LLM', async () => {
+    const callLLM = jest.fn<CallLLM>();
+    const { service } = createService(callLLM);
+    const docs = [{ title: 'only.md', content: 'x', path: 'only.md' }];
+
+    await expect(
+      service.selectMostRelevantDocuments('질문', docs),
+    ).resolves.toEqual(docs);
+    expect(callLLM).not.toHaveBeenCalled();
+  });
 });

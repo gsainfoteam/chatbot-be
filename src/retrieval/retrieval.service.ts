@@ -54,6 +54,7 @@ export class RetrievalService {
       texts: [JSON.stringify(payload)],
       resourceLinks: [],
       embeddedResources: [],
+      filteredResources: [],
       resources,
       chunks,
       total: resources.length,

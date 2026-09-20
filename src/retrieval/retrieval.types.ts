@@ -13,6 +13,8 @@ export type ListResourcesResult = {
   texts: string[];
   resourceLinks: unknown[];
   embeddedResources: unknown[];
+  /** Legacy flat list (unused when catalog comes from DB) */
+  filteredResources: Array<{ path: string; formats: string[] }>;
   resources?: ListResourceItem[];
   chunks?: Array<{ path: string; description: string }>;
   total?: number;

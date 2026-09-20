@@ -1,8 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { normalizeExtractedText, isLikelyMojibake } from './mojibake';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 
+@Trace()
 @Injectable()
 export class PdfTextService {
   private readonly logger = new Logger(PdfTextService.name);

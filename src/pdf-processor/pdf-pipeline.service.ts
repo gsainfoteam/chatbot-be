@@ -15,6 +15,7 @@ import {
   toResourceName,
 } from './pdf-chunk-parser';
 import type { ResourceIndexEntry } from './gcs-storage.service';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 export type PipelineChunk = {
   path: string;
@@ -47,6 +48,7 @@ const OVERVIEW_CHARS = 2_500;
 /** Fail the whole job when Pass 1 LLM fallbacks exceed this fraction of pages. */
 const DEFAULT_PASS1_MAX_FAILURE_RATIO = 0.1;
 
+@Trace()
 @Injectable()
 export class PdfPipelineService {
   private readonly logger = new Logger(PdfPipelineService.name);

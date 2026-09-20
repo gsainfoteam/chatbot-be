@@ -7,6 +7,7 @@ import { RetrievalService } from '../../retrieval/retrieval.service';
 import { ResourceSelectionService } from './resource-selection.service';
 import { VectorChunkSelectionService } from './vector-chunk-selection.service';
 import type { LlmUsage } from '../types/llm.types';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 /**
  * FE·SSE용 참조 리소스 정보
@@ -20,6 +21,7 @@ export interface ResourceInfo {
 /**
  * DB Retrieval 기반 리소스 내용 fetch·파싱·FE 리소스 조립
  */
+@Trace()
 @Injectable()
 export class ResourceContentService {
   private readonly logger = new Logger(ResourceContentService.name);

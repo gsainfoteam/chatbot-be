@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Storage, Bucket, File } from '@google-cloud/storage';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 type GcsServiceAccountCredentials = {
   client_email: string;
@@ -47,6 +48,7 @@ export function decodeServiceAccountCredentials(
   };
 }
 
+@Trace()
 @Injectable()
 export class GcsStorageService {
   private readonly logger = new Logger(GcsStorageService.name);

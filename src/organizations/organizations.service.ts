@@ -23,7 +23,9 @@ import type {
   CreateOrganizationDto,
   OrganizationDto,
 } from './dto/organization.dto';
+import { Trace } from '@gsainfoteam/nest-observability';
 
+@Trace()
 @Injectable()
 export class OrganizationsService {
   constructor(

@@ -18,6 +18,7 @@ import {
   STRONG_VECTOR_DISTANCE,
 } from '../../retrieval/retrieval.constants';
 import type { RelevantChunkSelection } from './resource-selection.service';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 /**
  * LLM을 쓰지 않는 chunk 선별.
@@ -38,6 +39,7 @@ import type { RelevantChunkSelection } from './resource-selection.service';
  * - null        = 벡터 검색 불가(비활성화/임베딩 실패/미백필) → 호출부가 LLM 선별로 폴백
  * - 빈 선택     = 후보는 있었으나 전부 신뢰도 미달 → 관련 자료 없음
  */
+@Trace()
 @Injectable()
 export class VectorChunkSelectionService {
   private readonly logger = new Logger(VectorChunkSelectionService.name);

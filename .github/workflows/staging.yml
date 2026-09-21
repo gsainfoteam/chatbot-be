@@ -1,4 +1,4 @@
-name: Build Container And Update Kubernetes Cluster (Prod)
+name: Build Container And Update Kubernetes Cluster (Dev)
 
 on:
   push:

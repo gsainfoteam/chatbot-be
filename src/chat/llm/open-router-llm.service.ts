@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { BaseOpenAiCompatibleLlm } from './base-openai-compatible.llm';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 const DEFAULT_OPEN_ROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const DEFAULT_OPEN_ROUTER_MODEL = 'openai/gpt-4o-mini';
@@ -10,6 +11,7 @@ const DEFAULT_OPEN_ROUTER_MODEL = 'openai/gpt-4o-mini';
  * OpenRouter LLM 클라이언트
  * LLM_PROVIDER=openrouter 일 때 사용합니다.
  */
+@Trace()
 @Injectable()
 export class OpenRouterLlmService extends BaseOpenAiCompatibleLlm {
   protected readonly logger = new Logger(OpenRouterLlmService.name);

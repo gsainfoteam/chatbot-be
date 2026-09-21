@@ -6,7 +6,9 @@ import type {
   ListResourcesResult,
 } from './retrieval.types';
 import type { DenseHit } from './rank-fusion';
+import { Trace } from '@gsainfoteam/nest-observability';
 
+@Trace()
 @Injectable()
 export class RetrievalService {
   private static readonly KNOWN_EXTENSIONS = new Set([

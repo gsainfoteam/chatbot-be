@@ -2,10 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { BaseOpenAiCompatibleLlm } from './base-openai-compatible.llm';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 /**
  * Letsur AI Gateway LLM 클라이언트
  */
+@Trace()
 @Injectable()
 export class LetsurLlmService extends BaseOpenAiCompatibleLlm {
   protected readonly logger = new Logger(LetsurLlmService.name);

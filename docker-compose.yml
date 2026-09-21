@@ -23,6 +23,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      secrets:
+        - npmrc
     container_name: ziggle-chatbot-app
     restart: unless-stopped
     ports:
@@ -94,3 +96,7 @@ services:
 
 volumes:
   postgres_data:
+
+secrets:
+  npmrc:
+    file: ~/.npmrc

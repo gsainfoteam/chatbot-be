@@ -21,6 +21,7 @@ import {
 } from './resource-content.service';
 import { ChatStreamTransport } from './chat-stream.transport';
 import { RetrievalService } from '../../retrieval/retrieval.service';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 export type { ResourceInfo };
 
@@ -37,6 +38,7 @@ interface StreamingResponseOptions extends ProcessUserQuestionStreamOptions {
  * 채팅 오케스트레이션 서비스
  * 사용자 질문을 받아 DB Retrieval + LLM을 조합하여 답변을 생성합니다.
  */
+@Trace()
 @Injectable()
 export class ChatOrchestrationService {
   private readonly logger = new Logger(ChatOrchestrationService.name);

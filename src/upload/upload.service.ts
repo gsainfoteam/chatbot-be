@@ -30,6 +30,7 @@ import type {
   ListAccessibleDocumentsQueryDto,
 } from './dto/list-accessible-documents.dto';
 import { isUUID } from 'class-validator';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 const PDF_MIME = 'application/pdf';
 const DEFAULT_LIMIT = 50;
@@ -53,6 +54,7 @@ export function parseExpiresAt(raw?: string | null): Date | null {
   return parsed;
 }
 
+@Trace()
 @Injectable()
 export class UploadService {
   private readonly logger = new Logger(UploadService.name);
@@ -81,9 +83,7 @@ export class UploadService {
       query.organizationId === 'all' ? undefined : query.organizationId;
     if (organizationId != null) {
       if (!isUUID(organizationId)) {
-        throw new BadRequestException(
-          'organizationId must be a UUID or "all"',
-        );
+        throw new BadRequestException('organizationId must be a UUID or "all"');
       }
       await this.access.requireOrganizationMember(organizationId, principal);
     }

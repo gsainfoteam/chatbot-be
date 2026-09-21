@@ -8,6 +8,7 @@ import {
   buildChunkSelectionCandidates,
   formatChunkCandidatesForSelection,
 } from '../prompts';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 export type RelevantChunkSelection = {
   rootPaths: string[];
@@ -17,6 +18,7 @@ export type RelevantChunkSelection = {
 /**
  * LLM 기반 리소스/문서 선별 서비스
  */
+@Trace()
 @Injectable()
 export class ResourceSelectionService {
   private readonly logger = new Logger(ResourceSelectionService.name);

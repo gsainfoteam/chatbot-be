@@ -20,7 +20,9 @@ import { RegisterAppIdDto } from '../common/dto/register-app-id.dto';
 import { InviteCollaboratorDto } from '../common/dto/invite-collaborator.dto';
 import { WidgetKeyDto, WidgetKeyStatus } from '../common/dto/widget-key.dto';
 import { CollaboratorDto } from '../common/dto/collaborator.dto';
+import { Trace } from '@gsainfoteam/nest-observability';
 
+@Trace()
 @Injectable()
 export class AdminService {
   constructor(@Inject(DB_CONNECTION) private db: Database) {}
@@ -309,8 +311,9 @@ export class AdminService {
       const rows = await tx.execute(
         sql`SELECT * FROM widget_keys WHERE id = ${widgetKeyId} FOR UPDATE`,
       );
-      const raw =
-        Array.isArray(rows) ? rows[0] : (rows as { rows?: unknown[] }).rows?.[0];
+      const raw = Array.isArray(rows)
+        ? rows[0]
+        : (rows as { rows?: unknown[] }).rows?.[0];
       if (!raw || typeof raw !== 'object') {
         throw new NotFoundException('Widget key not found');
       }
@@ -416,8 +419,9 @@ export class AdminService {
       const rows = await tx.execute(
         sql`SELECT * FROM widget_keys WHERE id = ${widgetKeyId} FOR UPDATE`,
       );
-      const raw =
-        Array.isArray(rows) ? rows[0] : (rows as { rows?: unknown[] }).rows?.[0];
+      const raw = Array.isArray(rows)
+        ? rows[0]
+        : (rows as { rows?: unknown[] }).rows?.[0];
       if (!raw || typeof raw !== 'object') {
         throw new NotFoundException('Widget key not found');
       }

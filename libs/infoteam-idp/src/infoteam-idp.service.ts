@@ -19,10 +19,12 @@ import { AxiosError } from 'axios';
 import { UserInfo } from './types/userInfo.type';
 import * as crypto from 'crypto';
 import { JwtService } from '@nestjs/jwt';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 /**
  * This is the helper Class for infoteam idp service
  */
+@Trace()
 @Injectable()
 export class InfoteamIdpService implements OnModuleInit {
   /** The object for logging */

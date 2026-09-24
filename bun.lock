@@ -8,7 +8,7 @@
         "@fastify/multipart": "^9.0.1",
         "@fastify/static": "^9.0.0",
         "@google-cloud/storage": "^7.21.0",
-        "@gsainfoteam/nest-observability": "^0.0.6",
+        "@gsainfoteam/nest-observability": "^0.0.7",
         "@kubiks/otel-drizzle": "^2.1.0",
         "@modelcontextprotocol/sdk": "^1.25.2",
         "@nestjs/axios": "^4.0.1",
@@ -270,7 +270,7 @@
 
     "@grpc/proto-loader": ["@grpc/proto-loader@0.8.1", "", { "dependencies": { "lodash.camelcase": "^4.3.0", "long": "^5.0.0", "protobufjs": "^7.5.5", "yargs": "^17.7.2" }, "bin": { "proto-loader-gen-types": "build/bin/proto-loader-gen-types.js" } }, "sha512-wtF6h+DY6M3YaDBPAmvuuA6jV8Sif9MjtOI5euKFWRgCDl5PeDpPsHR9u2l6St5ceY8AZgoNDww5+HvEsXFsGg=="],
 
-    "@gsainfoteam/nest-observability": ["@gsainfoteam/nest-observability@0.0.6", "https://npm.pkg.github.com/download/@gsainfoteam/nest-observability/0.0.6/841bbf7e05ed62fcca098b009251fedacac4b03a", { "dependencies": { "@opentelemetry/api": "^1.9.1", "@opentelemetry/auto-instrumentations-node": "^0.80.0", "@opentelemetry/exporter-prometheus": "^0.222.0", "@opentelemetry/exporter-trace-otlp-http": "^0.222.0", "@opentelemetry/resources": "^2.11.0", "@opentelemetry/sdk-node": "^0.222.0", "@opentelemetry/semantic-conventions": "^1.43.0", "class-transformer": "^0.5.1", "class-validator": "^0.14.1", "rxjs": "^7.8.1" }, "peerDependencies": { "@nestjs/common": "^10 || ^11", "@nestjs/core": "^10 || ^11", "@prisma/client": "^5 || ^6 || ^7", "@prisma/instrumentation": "^5 || ^6 || ^7" } }, "sha512-vBvyv6l26qS8JIy0+e8WA2fiKplZu18WJbAktmhrykQPuGGXmPOEDZQQFzgQ6ksQnsuoNeQD/Yj8qnZ0dc6LnA=="],
+    "@gsainfoteam/nest-observability": ["@gsainfoteam/nest-observability@0.0.7", "https://npm.pkg.github.com/download/@gsainfoteam/nest-observability/0.0.7/5075f02c34202188fbd25d52a98400e430504f80", { "dependencies": { "@opentelemetry/api": "^1.9.1", "@opentelemetry/auto-instrumentations-node": "^0.80.0", "@opentelemetry/exporter-prometheus": "^0.222.0", "@opentelemetry/exporter-trace-otlp-http": "^0.222.0", "@opentelemetry/resources": "^2.11.0", "@opentelemetry/sdk-node": "^0.222.0", "@opentelemetry/semantic-conventions": "^1.43.0", "class-transformer": "^0.5.1", "class-validator": "^0.14.1", "rxjs": "^7.8.1" }, "peerDependencies": { "@nestjs/common": "^10 || ^11", "@nestjs/core": "^10 || ^11", "@prisma/client": "^5 || ^6 || ^7", "@prisma/instrumentation": "^5 || ^6 || ^7" } }, "sha512-DZVBYmruBQDi0Ql5hbmYp9lfDUnjDL+gEtGYcfvM6zjAw5S+s1D/z4iXTI9NeAx37J8YHQJ8XokoxBG6AkzdIg=="],
 
     "@hono/node-server": ["@hono/node-server@1.19.9", "", { "peerDependencies": { "hono": "^4" } }, "sha512-vHL6w3ecZsky+8P5MD+eFfaGTyCeOHUIFYMGpQGbrBTSmNNoxv0if69rEZ5giu36weC5saFuznL411gRX7bJDw=="],
 

@@ -37,7 +37,7 @@
     "@fastify/multipart": "^9.0.1",
     "@fastify/static": "^9.0.0",
     "@google-cloud/storage": "^7.21.0",
-    "@gsainfoteam/nest-observability": "^0.0.6",
+    "@gsainfoteam/nest-observability": "^0.0.7",
     "@kubiks/otel-drizzle": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.25.2",
     "@nestjs/axios": "^4.0.1",

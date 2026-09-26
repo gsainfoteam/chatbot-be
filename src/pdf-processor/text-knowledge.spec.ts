@@ -16,6 +16,14 @@ describe('toTextResourceName', () => {
       '입사-퇴사 절차-안내',
     );
   });
+
+  it('keeps a .pdf-looking title distinct from the PDF resource name', () => {
+    expect(toTextResourceName('규정.pdf')).toBe('규정-pdf');
+  });
+
+  it('replaces dots so extension stripping cannot truncate the name', () => {
+    expect(toTextResourceName('학칙 v2.1')).toBe('학칙 v2-1');
+  });
 });
 
 describe('buildTextKnowledgeMarkdown', () => {

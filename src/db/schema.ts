@@ -56,6 +56,16 @@ export const documentStatusEnum = pgEnum('document_status', [
   'failed',
 ]);
 
+export const documentSourceTypeEnum = pgEnum('document_source_type', [
+  'pdf',
+  'text',
+]);
+
+export const unansweredQuestionStatusEnum = pgEnum(
+  'unanswered_question_status',
+  ['OPEN', 'RESOLVED', 'DISMISSED'],
+);
+
 // Tables
 
 /**
@@ -280,8 +290,10 @@ export const uploadedResources = pgTable(
 );
 
 /**
- * PDF 문서 테이블 (ingestion)
+ * 지식 문서 테이블 (ingestion)
  * - Admin 업로드 후 비동기 Pass1/2 처리 상태와 메타를 저장
+ * - source_type=pdf: GCS 원본 PDF를 Pass1(페이지→마크다운)부터 처리
+ * - source_type=text: 관리자가 직접 입력한 source_text를 Pass2부터 처리
  */
 export const documents = pgTable(
   'documents',
@@ -290,7 +302,9 @@ export const documents = pgTable(
     title: varchar('title', { length: 512 }).notNull(),
     resourceName: varchar('resource_name', { length: 512 }).notNull(),
     summary: text('summary'),
-    gcsPdfPath: varchar('gcs_pdf_path', { length: 1024 }).notNull(),
+    sourceType: documentSourceTypeEnum('source_type').notNull().default('pdf'),
+    sourceText: text('source_text'),
+    gcsPdfPath: varchar('gcs_pdf_path', { length: 1024 }),
     status: documentStatusEnum('status').notNull().default('queued'),
     errorMessage: text('error_message'),
     processingToken: uuid('processing_token'),
@@ -323,6 +337,10 @@ export const documents = pgTable(
     isActiveIdx: index('documents_is_active_idx').on(table.isActive),
     createdAtIdx: index('documents_created_at_idx').on(table.createdAt),
     expiresAtIdx: index('documents_expires_at_idx').on(table.expiresAt),
+    sourcePresent: check(
+      'documents_source_present',
+      sql`(${table.sourceType} = 'pdf' AND ${table.gcsPdfPath} IS NOT NULL) OR (${table.sourceType} = 'text' AND ${table.sourceText} IS NOT NULL)`,
+    ),
   }),
 );
 
@@ -513,6 +531,62 @@ export const usageDaily = pgTable(
   }),
 );
 
+/**
+ * 미답변 질문 테이블
+ * - 참고 문서 0개로 답변된 질문을 위젯 키·정규화 질문 단위로 누적
+ * - 관리자가 질문별로 지식 문서를 등록하면 resolved_document_id로 연결
+ */
+export const unansweredQuestions = pgTable(
+  'unanswered_questions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    widgetKeyId: uuid('widget_key_id')
+      .notNull()
+      .references(() => widgetKeys.id, { onDelete: 'cascade' }),
+    question: text('question').notNull(),
+    normalizedQuestion: text('normalized_question').notNull(),
+    language: varchar('language', { length: 8 }).notNull(),
+    askCount: integer('ask_count').notNull().default(1),
+    status: unansweredQuestionStatusEnum('status').notNull().default('OPEN'),
+    lastSessionId: uuid('last_session_id').references(() => sessions.id, {
+      onDelete: 'set null',
+    }),
+    lastAnswerMessageId: uuid('last_answer_message_id').references(
+      () => messages.id,
+      { onDelete: 'set null' },
+    ),
+    resolvedDocumentId: uuid('resolved_document_id').references(
+      () => documents.id,
+      { onDelete: 'set null' },
+    ),
+    resolvedByIdpUuid: varchar('resolved_by_idp_uuid', { length: 255 }),
+    resolvedAt: timestamp('resolved_at'),
+    firstAskedAt: timestamp('first_asked_at').notNull().defaultNow(),
+    lastAskedAt: timestamp('last_asked_at').notNull().defaultNow(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    widgetKeyQuestionUnique: uniqueIndex(
+      'unanswered_questions_widget_key_id_normalized_question_unique',
+    ).on(table.widgetKeyId, table.normalizedQuestion),
+    statusLastAskedIdx: index('unanswered_questions_status_last_asked_idx').on(
+      table.status,
+      table.lastAskedAt,
+    ),
+    lastAskedIdx: index('unanswered_questions_last_asked_at_idx').on(
+      table.lastAskedAt,
+    ),
+    resolvedDocumentIdx: index(
+      'unanswered_questions_resolved_document_id_idx',
+    ).on(table.resolvedDocumentId),
+    askCountPositive: check(
+      'unanswered_questions_ask_count_positive',
+      sql`${table.askCount} >= 1`,
+    ),
+  }),
+);
+
 // Relations
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(organizationMemberships),
@@ -639,6 +713,20 @@ export const usageDailyRelations = relations(usageDaily, ({ one }) => ({
   }),
 }));
 
+export const unansweredQuestionsRelations = relations(
+  unansweredQuestions,
+  ({ one }) => ({
+    widgetKey: one(widgetKeys, {
+      fields: [unansweredQuestions.widgetKeyId],
+      references: [widgetKeys.id],
+    }),
+    resolvedDocument: one(documents, {
+      fields: [unansweredQuestions.resolvedDocumentId],
+      references: [documents.id],
+    }),
+  }),
+);
+
 // Types
 export type Admin = typeof admins.$inferSelect;
 export type NewAdmin = typeof admins.$inferInsert;
@@ -660,6 +748,8 @@ export type NewUploadedResource = typeof uploadedResources.$inferInsert;
 export type Document = typeof documents.$inferSelect;
 export type NewDocument = typeof documents.$inferInsert;
 export type DocumentStatus = (typeof documentStatusEnum.enumValues)[number];
+export type DocumentSourceType =
+  (typeof documentSourceTypeEnum.enumValues)[number];
 
 export type DocumentChunk = typeof documentChunks.$inferSelect;
 export type NewDocumentChunk = typeof documentChunks.$inferInsert;
@@ -692,3 +782,8 @@ export type NewMessageFeedback = typeof messageFeedbacks.$inferInsert;
 
 export type UsageDaily = typeof usageDaily.$inferSelect;
 export type NewUsageDaily = typeof usageDaily.$inferInsert;
+
+export type UnansweredQuestion = typeof unansweredQuestions.$inferSelect;
+export type NewUnansweredQuestion = typeof unansweredQuestions.$inferInsert;
+export type UnansweredQuestionStatus =
+  (typeof unansweredQuestionStatusEnum.enumValues)[number];

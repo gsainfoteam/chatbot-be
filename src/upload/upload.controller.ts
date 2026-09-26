@@ -26,11 +26,11 @@ import {
   ApiConsumes,
 } from '@nestjs/swagger';
 import type { FastifyRequest } from 'fastify';
-import { UploadService, PDF_MIME } from './upload.service';
+import { UploadService } from './upload.service';
+import { PDF_UPLOAD_FORM_SCHEMA, readPdfUploadForm } from './pdf-upload-form';
 import { AdminJwtGuard } from '../auth/guards/admin-jwt.guard';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import { AdminContext } from '../auth/context/admin-context.entity';
-import { Readable } from 'stream';
 import { DocumentListItemDto } from './dto/document-list-item.dto';
 import { UpdateExpiresAtDto } from './dto/update-expires-at.dto';
 import { TransferDocumentDto } from './dto/transfer-document.dto';
@@ -38,14 +38,6 @@ import {
   AccessibleDocumentsResponseDto,
   ListAccessibleDocumentsQueryDto,
 } from './dto/list-accessible-documents.dto';
-
-async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of Readable.from(stream)) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks);
-}
 
 @ApiTags('Upload')
 @Controller('api/v1/admin/upload')
@@ -147,29 +139,7 @@ export class UploadController {
       'PDF를 GCS에 저장하고 비동기 처리 큐에 등록합니다. 처리 완료를 기다리지 않으며 status=queued로 즉시 응답합니다.',
   })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({
-    schema: {
-      type: 'object',
-      required: ['file', 'title'],
-      properties: {
-        file: { type: 'string', format: 'binary', description: 'PDF 파일' },
-        title: { type: 'string', description: '파일 제목' },
-        expiresAt: {
-          type: 'string',
-          format: 'date-time',
-          description:
-            '문서 유효기간 (ISO-8601, optional). 미전송/빈 값이면 무기한. 과거 시각은 400.',
-          nullable: true,
-        },
-        organizationId: {
-          type: 'string',
-          format: 'uuid',
-          description:
-            '소유 조직 UUID. 생략한 경우에만 출시 호환성을 위해 기본 조직을 사용하며, 빈 값은 잘못된 입력입니다.',
-        },
-      },
-    },
-  })
+  @ApiBody({ schema: PDF_UPLOAD_FORM_SCHEMA })
   @ApiResponse({
     status: 201,
     description: '업로드 성공 (queued)',
@@ -194,61 +164,14 @@ export class UploadController {
     @CurrentAdmin() admin: AdminContext,
     @Req() req: FastifyRequest,
   ) {
-    const fastifyReq = req as FastifyRequest & {
-      isMultipart: () => boolean;
-      parts: () => AsyncIterable<MultipartPart>;
-    };
-    if (!fastifyReq.isMultipart?.()) {
-      throw new BadRequestException('Content-Type must be multipart/form-data');
-    }
-
-    const parts = fastifyReq.parts();
-    let title = '';
-    let expiresAt: string | undefined;
-    let organizationId: string | undefined;
-    let fileBuffer: Buffer | null = null;
-    let filename = 'document.pdf';
-    let mimetype = '';
-
-    for await (const part of parts) {
-      if (part.type === 'field') {
-        if (part.fieldname === 'title') {
-          const v = part.value;
-          title = typeof v === 'string' ? v : '';
-        } else if (part.fieldname === 'expiresAt') {
-          const v = part.value;
-          expiresAt = typeof v === 'string' ? v : undefined;
-        } else if (part.fieldname === 'organizationId') {
-          const v = part.value;
-          organizationId = typeof v === 'string' ? v : undefined;
-        }
-      } else if (part.type === 'file' && part.fieldname === 'file') {
-        const filePart = part;
-        mimetype = filePart.mimetype ?? '';
-        filename = filePart.filename ?? 'document.pdf';
-        fileBuffer = filePart.toBuffer
-          ? await filePart.toBuffer()
-          : await streamToBuffer(filePart.file);
-      }
-    }
-
-    if (!title || typeof title !== 'string' || !title.trim()) {
-      throw new BadRequestException('title is required');
-    }
-    if (!fileBuffer) {
-      throw new BadRequestException('file is required');
-    }
-    if (mimetype !== PDF_MIME) {
-      throw new BadRequestException('Only PDF files are allowed');
-    }
-
+    const form = await readPdfUploadForm(req);
     return this.uploadService.upload(
-      fileBuffer,
-      filename,
-      title.trim(),
+      form.file,
+      form.filename,
+      form.title,
       admin,
-      organizationId,
-      expiresAt,
+      form.organizationId,
+      form.expiresAt,
     );
   }
 
@@ -437,20 +360,3 @@ export class OrganizationDocumentsController {
     });
   }
 }
-
-interface FieldPart {
-  type: 'field';
-  fieldname: string;
-  value: string;
-}
-
-interface FilePart {
-  type: 'file';
-  fieldname: string;
-  filename: string;
-  mimetype: string;
-  file: NodeJS.ReadableStream;
-  toBuffer?: () => Promise<Buffer>;
-}
-
-type MultipartPart = FieldPart | FilePart;

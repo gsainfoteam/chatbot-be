@@ -33,6 +33,8 @@ function document(overrides: Partial<Document> = {}): Document {
     title: '테스트',
     resourceName: 'test',
     summary: null,
+    sourceType: 'pdf',
+    sourceText: null,
     gcsPdfPath: 'gs://bucket/test.pdf',
     status: 'uploading',
     errorMessage: null,
@@ -114,6 +116,17 @@ function createService() {
     createUploadingDocument: jest.fn<
       OrganizationsRepository['createUploadingDocument']
     >(async () => document()),
+    createTextDocument: jest.fn<OrganizationsRepository['createTextDocument']>(
+      async (input) =>
+        document({
+          title: input.title,
+          resourceName: input.resourceName,
+          sourceType: 'text',
+          sourceText: input.sourceText,
+          gcsPdfPath: null,
+          status: 'queued',
+        }),
+    ),
     finalizeUploadingDocument: jest.fn<
       OrganizationsRepository['finalizeUploadingDocument']
     >(async () => ({ kind: 'ok', document: document({ status: 'queued' }) })),
@@ -704,5 +717,68 @@ describe('parseExpiresAt', () => {
   it('accepts a future ISO-8601 value', () => {
     const future = new Date(Date.now() + 60_000).toISOString();
     expect(parseExpiresAt(future)?.toISOString()).toBe(future);
+  });
+});
+
+describe('UploadService text knowledge documents', () => {
+  it('creates a queued text document without touching GCS', async () => {
+    const { service, organizationsRepo, gcs } = createService();
+
+    const result = await service.createTextDocument(
+      ' 유학생/계좌 개설 ',
+      '  외국인등록증과 여권이 필요합니다.  ',
+      principal(),
+      ORGANIZATION_ID,
+    );
+
+    expect(organizationsRepo.createTextDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: '유학생/계좌 개설',
+        resourceName: '유학생-계좌 개설',
+        sourceText: '외국인등록증과 여권이 필요합니다.',
+        ownerOrganizationId: ORGANIZATION_ID,
+        expiresAt: null,
+      }),
+    );
+    expect(gcs.uploadPdf).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        sourceType: 'text',
+        gcsPdfPath: null,
+        status: 'queued',
+      }),
+    );
+  });
+
+  it('rejects empty content before checking organization access', async () => {
+    const { service, access, organizationsRepo } = createService();
+
+    await expect(
+      service.createTextDocument('제목', '   ', principal()),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(access.resolveUploadOrganization).not.toHaveBeenCalled();
+    expect(organizationsRepo.createTextDocument).not.toHaveBeenCalled();
+  });
+
+  it('maps duplicate resource names to 409', async () => {
+    const { service, organizationsRepo } = createService();
+    organizationsRepo.createTextDocument.mockRejectedValue(
+      Object.assign(new Error('duplicate'), { code: '23505' }),
+    );
+
+    await expect(
+      service.createTextDocument('제목', '본문', principal()),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('maps membership revoked during creation to 403', async () => {
+    const { service, organizationsRepo } = createService();
+    organizationsRepo.createTextDocument.mockRejectedValue(
+      new RepositoryAuthorizationError(),
+    );
+
+    await expect(
+      service.createTextDocument('제목', '본문', principal()),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

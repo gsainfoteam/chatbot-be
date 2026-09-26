@@ -31,6 +31,7 @@ export class RetrievalService {
     const resources: ListResourceItem[] = docs.map((doc) => ({
       path: `${doc.resourceName}.pdf`,
       description: doc.summary?.trim() || doc.title,
+      sourceType: doc.sourceType,
       chunks: doc.chunks.map((c) => ({
         path: c.path,
         description: c.description,

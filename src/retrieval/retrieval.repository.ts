@@ -17,7 +17,7 @@ import {
   documents,
   documentChunks,
 } from '../db';
-import type { Database } from '../db';
+import type { Database, DocumentSourceType } from '../db';
 import type { DenseHit } from './rank-fusion';
 
 export type ReadyDocumentWithChunks = {
@@ -25,6 +25,7 @@ export type ReadyDocumentWithChunks = {
   title: string;
   resourceName: string;
   summary: string | null;
+  sourceType: DocumentSourceType;
   chunks: Array<{
     path: string;
     description: string;
@@ -81,6 +82,7 @@ export class RetrievalRepository {
         title: documents.title,
         resourceName: documents.resourceName,
         summary: documents.summary,
+        sourceType: documents.sourceType,
         chunkId: documentChunks.id,
         chunkPath: documentChunks.path,
         chunkDescription: documentChunks.description,
@@ -106,6 +108,7 @@ export class RetrievalRepository {
           title: row.title,
           resourceName: row.resourceName,
           summary: row.summary,
+          sourceType: row.sourceType,
           chunks: [],
         };
         byId.set(row.documentId, doc);

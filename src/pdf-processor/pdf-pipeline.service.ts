@@ -122,6 +122,19 @@ export class PdfPipelineService {
     return this.chunkMarkdownWithMetadata(combinedMarkdown, filename);
   }
 
+  /**
+   * 관리자가 직접 입력한 텍스트 지식: 이미 마크다운이므로 Pass 2만 수행한다.
+   */
+  async processMarkdown(
+    markdown: string,
+    resourceName: string,
+  ): Promise<PipelineResult> {
+    this.logger.log(
+      `Pass 2 only: Labeling text knowledge ${resourceName} (${markdown.length} chars)`,
+    );
+    return this.chunkMarkdownWithMetadata(markdown, `${resourceName}.pdf`);
+  }
+
   private assertPass1FailureWithinLimit(
     totalPages: number,
     failedPages: number[],

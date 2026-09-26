@@ -13,6 +13,8 @@ function processingDocument(): Document {
     title: '테스트',
     resourceName: 'test',
     summary: null,
+    sourceType: 'pdf',
+    sourceText: null,
     gcsPdfPath: 'gs://bucket/test.pdf',
     status: 'processing',
     errorMessage: null,
@@ -87,26 +89,28 @@ function createWorker(options: {
       () => Promise.resolve(),
     ),
   };
+  const pipelineResult = {
+    documents: {
+      'test.md': '# test',
+      'test/section.md': '## section',
+    },
+    metadata: {
+      description: 'summary',
+      chunks: chunks.map((c) => ({
+        path: c.path,
+        description: c.description,
+      })),
+    },
+    summary: 'summary',
+    chunks,
+  };
   const pipeline = {
     processPdf: options.processPdfError
       ? jest.fn(() => Promise.reject(options.processPdfError!))
-      : jest.fn(() =>
-          Promise.resolve({
-            documents: {
-              'test.md': '# test',
-              'test/section.md': '## section',
-            },
-            metadata: {
-              description: 'summary',
-              chunks: chunks.map((c) => ({
-                path: c.path,
-                description: c.description,
-              })),
-            },
-            summary: 'summary',
-            chunks,
-          }),
-        ),
+      : jest.fn(() => Promise.resolve(pipelineResult)),
+    processMarkdown: jest.fn<
+      (markdown: string, resourceName: string) => Promise<unknown>
+    >(() => Promise.resolve(pipelineResult)),
   };
   const config = {
     get: jest.fn((_key: string) => undefined),
@@ -241,5 +245,53 @@ describe('PdfProcessorWorker attempt ownership', () => {
     );
     expect(repo.completeProcessing).not.toHaveBeenCalled();
     expect(gcs.uploadDocuments).not.toHaveBeenCalled();
+  });
+
+  it('processes text knowledge from source text without downloading a PDF', async () => {
+    const { worker, repo, gcs, pipeline } = createWorker({
+      completeProcessing: true,
+    });
+    const callable = worker as unknown as {
+      processDocument(doc: Document): Promise<void>;
+    };
+
+    await callable.processDocument({
+      ...processingDocument(),
+      title: '계좌 개설',
+      sourceType: 'text',
+      sourceText: '외국인도 여권으로 계좌를 만들 수 있습니다.',
+      gcsPdfPath: null,
+    });
+
+    expect(gcs.downloadPdf).not.toHaveBeenCalled();
+    expect(pipeline.processPdf).not.toHaveBeenCalled();
+    expect(pipeline.processMarkdown).toHaveBeenCalledWith(
+      '# 계좌 개설\n\n외국인도 여권으로 계좌를 만들 수 있습니다.',
+      'test',
+    );
+    expect(repo.completeProcessing).toHaveBeenCalled();
+  });
+
+  it('marks failed when a text document has no source text', async () => {
+    const { worker, repo, pipeline } = createWorker({
+      completeProcessing: true,
+    });
+    const callable = worker as unknown as {
+      processDocument(doc: Document): Promise<void>;
+    };
+
+    await callable.processDocument({
+      ...processingDocument(),
+      sourceType: 'text',
+      sourceText: '   ',
+      gcsPdfPath: null,
+    });
+
+    expect(pipeline.processMarkdown).not.toHaveBeenCalled();
+    expect(repo.markFailed).toHaveBeenCalledWith(
+      '00000000-0000-0000-0000-000000000001',
+      '00000000-0000-0000-0000-000000000002',
+      expect.stringContaining('no source text'),
+    );
   });
 });

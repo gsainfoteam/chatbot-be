@@ -227,6 +227,17 @@ $ docker run -p 3000:3000 --env-file .env ziggle-chatbot-be
 - `POST /api/v1/admin/widget-keys` - 위젯 키 생성
 - `PATCH /api/v1/admin/widget-keys/:widgetKeyId/revoke` - 위젯 키 폐기
 
+### 4. Unanswered Questions (Private, IDP 인증 필요)
+
+참고 문서 0개로 답변된 질문은 위젯 키·질문 단위로 누적됩니다. SUPER_ADMIN은 전체,
+그 외 관리자는 자신이 만들었거나 협업자로 초대받은 위젯 키의 질문만 다룹니다.
+
+- `GET /api/v1/admin/unanswered-questions` - 미답변 질문 목록 (기본: 미해결, 검색·상태·정렬)
+- `GET /api/v1/admin/unanswered-questions/:id` - 상세 (최근 답변 포함)
+- `PATCH /api/v1/admin/unanswered-questions/:id` - 상태 변경 (`open`/`resolved`)
+- `POST /api/v1/admin/unanswered-questions/:id/knowledge/text` - 텍스트 지식 주입
+- `POST /api/v1/admin/unanswered-questions/:id/knowledge/pdf` - PDF 지식 주입
+
 **인증 방식:** Infoteam IDP OAuth 2.0 (`@gistory.me` 이메일 필수)
 
 자세한 API 스펙은 Swagger 문서를 참고하세요.

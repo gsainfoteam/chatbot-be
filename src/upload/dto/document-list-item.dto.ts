@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import type { DocumentStatus } from '../../db';
+import type { DocumentSourceType, DocumentStatus } from '../../db';
 
 const DOCUMENT_STATUSES: DocumentStatus[] = [
   'uploading',
@@ -65,10 +65,19 @@ export class DocumentListItemDto {
   summary: string | null;
 
   @ApiProperty({
-    description: 'GCS에 저장된 원본 PDF 경로',
+    description:
+      '문서 원본 형식 (pdf: 업로드한 PDF, text: 관리자가 직접 입력한 텍스트)',
+    enum: ['pdf', 'text'],
+    example: 'pdf',
+  })
+  sourceType: DocumentSourceType;
+
+  @ApiProperty({
+    description: 'GCS에 저장된 원본 PDF 경로 (text 문서는 null)',
+    nullable: true,
     example: 'gs://ziggle-resources/2026년 학생 학사편람.pdf',
   })
-  gcsPdfPath: string;
+  gcsPdfPath: string | null;
 
   @ApiProperty({
     description: '처리 실패 시 오류 메시지',

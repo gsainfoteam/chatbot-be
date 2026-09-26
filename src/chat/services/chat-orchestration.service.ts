@@ -21,6 +21,7 @@ import {
 } from './resource-content.service';
 import { ChatStreamTransport } from './chat-stream.transport';
 import { RetrievalService } from '../../retrieval/retrieval.service';
+import { UnansweredQuestionsRepository } from '../../unanswered-questions/unanswered-questions.repository';
 
 export type { ResourceInfo };
 
@@ -48,6 +49,7 @@ export class ChatOrchestrationService {
     private readonly usageService: UsageService,
     private readonly resourceContentService: ResourceContentService,
     private readonly chatStreamTransport: ChatStreamTransport,
+    private readonly unansweredQuestionsRepository: UnansweredQuestionsRepository,
   ) {}
 
   private createEmptyUsage(): LlmUsage {
@@ -81,6 +83,28 @@ export class ChatOrchestrationService {
     );
   }
 
+  /** 미답변 질문 기록 실패가 채팅 응답을 막지 않도록 경고만 남긴다. */
+  private async recordUnansweredQuestion(
+    sessionId: string,
+    question: string,
+    answerMessageId: string | null,
+    countOccurrence: boolean,
+  ): Promise<void> {
+    try {
+      await this.unansweredQuestionsRepository.record({
+        sessionId,
+        question,
+        answerMessageId,
+        countOccurrence,
+      });
+    } catch (err) {
+      this.logger.warn(
+        'Failed to record unanswered question',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+
   /**
    * 사용자 질문을 처리하여 스트리밍 답변을 생성
    */
@@ -91,6 +115,8 @@ export class ChatOrchestrationService {
   ): Promise<{
     stream: Readable;
     resources: ResourceInfo[];
+    /** 답변 근거로 사용한 문서(chunk) 수. FE 참조 목록 노출 여부와 무관하다. */
+    referencedDocumentCount: number;
     usage: LlmUsage;
   }> {
     const perfTurnStart = Date.now();
@@ -139,7 +165,7 @@ export class ChatOrchestrationService {
           this.llmClient.getModel('normal'),
           { temperature: 0 },
         );
-        return { stream, resources: [], usage };
+        return { stream, resources: [], referencedDocumentCount: 0, usage };
       }
 
       t0 = Date.now();
@@ -169,7 +195,7 @@ export class ChatOrchestrationService {
           this.llmClient.getModel('normal'),
           { temperature: 0 },
         );
-        return { stream, resources: [], usage };
+        return { stream, resources: [], referencedDocumentCount: 0, usage };
       }
 
       const resultText =
@@ -227,7 +253,12 @@ export class ChatOrchestrationService {
       ];
 
       const allResources: ResourceInfo[] = [];
-      const seenFePdfPaths = new Set<string>();
+      // 텍스트 지식 문서는 원본 PDF가 없으므로 이미 본 경로로 취급해 FE 참조 목록에서 제외한다.
+      const seenFePdfPaths = new Set<string>(
+        (listResult.resources ?? [])
+          .filter((resource) => resource.sourceType === 'text')
+          .map((resource) => resource.path),
+      );
       for (const r of relevantResult.usedResources) {
         this.resourceContentService.appendFePdfResourceEntryFromUsed(
           allResources,
@@ -289,7 +320,12 @@ export class ChatOrchestrationService {
         `[PERF] processUserQuestionStream 전체: ${Date.now() - perfTurnStart}ms`,
       );
 
-      return { stream, resources: allResources, usage };
+      return {
+        stream,
+        resources: allResources,
+        referencedDocumentCount: relevantResult.usedResources.length,
+        usage,
+      };
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
@@ -319,6 +355,7 @@ export class ChatOrchestrationService {
       const {
         stream,
         resources,
+        referencedDocumentCount,
         usage: reasoningUsage,
       } = await this.processUserQuestionStream(sessionId, userQuestion, {
         persistUserMessage: options.persistUserMessage,
@@ -345,8 +382,9 @@ export class ChatOrchestrationService {
         this.addTokenUsage(totalUsage, streamResult.usage);
         const usage = this.hasTokenUsage(totalUsage) ? totalUsage : undefined;
 
+        let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
-          await this.chatService.createMessage(sessionId, {
+          const answer = await this.chatService.createMessage(sessionId, {
             role: MessageRole.ASSISTANT,
             content: streamResult.accumulatedContent,
             metadata: {
@@ -356,6 +394,7 @@ export class ChatOrchestrationService {
               resources: resources.length > 0 ? resources : undefined,
             },
           });
+          answerMessageId = answer.id;
         }
 
         if (usage?.total_tokens != null) {
@@ -373,6 +412,16 @@ export class ChatOrchestrationService {
 
         this.chatStreamTransport.writeResources(reply, resources);
         this.chatStreamTransport.writeDone(reply);
+
+        // 응답 종료 후 기록해 SSE 완료 시점을 늦추지 않는다.
+        if (referencedDocumentCount === 0) {
+          await this.recordUnansweredQuestion(
+            sessionId,
+            userQuestion,
+            answerMessageId,
+            options.persistUserMessage ?? true,
+          );
+        }
       } catch (error) {
         this.logger.error('Error saving final message:', error);
         this.chatStreamTransport.writeError(reply, 'Failed to save message');

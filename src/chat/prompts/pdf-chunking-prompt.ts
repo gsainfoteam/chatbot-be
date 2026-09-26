@@ -29,6 +29,7 @@ export const PDF_CHUNKING_PROMPT = `
   ]
 }
 4. 입력으로 주어진 모든 index를 빠짐없이 한 번씩 포함하세요.
+   섹션을 더 나누거나 입력에 없는 index를 만들지 마세요. chunks 개수는 입력 섹션 개수와 같아야 합니다.
 5. path 요구사항:
    - 파일명(stem)을 path에 넣지 마세요. 서버가 prefix를 붙입니다.
    - 상대 path만 사용 (예: "수강신청/신청방법", "학사-일정")

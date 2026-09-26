@@ -20,6 +20,8 @@ function document(overrides: Partial<Document> = {}): Document {
     title: 'Document',
     resourceName: 'document',
     summary: null,
+    sourceType: 'pdf',
+    sourceText: null,
     gcsPdfPath: 'gs://bucket/document.pdf',
     status: 'ready',
     errorMessage: null,

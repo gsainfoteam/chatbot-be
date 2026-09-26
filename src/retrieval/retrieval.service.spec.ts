@@ -11,6 +11,7 @@ describe('RetrievalService', () => {
           title: '학사편람',
           resourceName: '학사편람',
           summary: '학사 안내',
+          sourceType: 'pdf' as const,
           chunks: [
             {
               path: '학사편람/졸업요건',
@@ -32,6 +33,7 @@ describe('RetrievalService', () => {
       {
         path: '학사편람.pdf',
         description: '학사 안내',
+        sourceType: 'pdf',
         chunks: [{ path: '학사편람/졸업요건', description: '졸업' }],
       },
     ]);
@@ -82,6 +84,7 @@ describe('RetrievalService', () => {
           title: '제목만',
           resourceName: 'doc',
           summary: '  ',
+          sourceType: 'text' as const,
           chunks: [
             {
               path: 'doc/a',
@@ -99,5 +102,6 @@ describe('RetrievalService', () => {
     );
     const catalog = await service.listCatalog();
     expect(catalog.resources?.[0]?.description).toBe('제목만');
+    expect(catalog.resources?.[0]?.sourceType).toBe('text');
   });
 });

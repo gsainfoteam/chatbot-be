@@ -54,6 +54,9 @@ describeDatabase('Unanswered questions database (e2e)', () => {
       username: process.env.DB_USER ?? 'postgres',
       password: process.env.DB_PASSWORD ?? 'postgres',
       max: 3,
+      // timestamp(without time zone) 컬럼을 앱 시계와 DB 시계로 섞어 쓰면
+      // UTC가 아닌 세션에서 어긋나므로, 일부러 비UTC 세션으로 검증한다.
+      connection: { TimeZone: 'Asia/Seoul' },
     });
     db = drizzle(client, { schema });
     repo = new UnansweredQuestionsRepository(db as unknown as Database);
@@ -311,8 +314,19 @@ describeDatabase('Unanswered questions database (e2e)', () => {
       .where(eq(unansweredQuestions.widgetKeyId, ownerKeyId))
       .limit(1);
 
+    await repo.record({
+      sessionId,
+      question: target.question,
+      answerMessageId: null,
+      countOccurrence: true,
+    });
     await repo.linkDocument(target.id, document.id, ownerUuid);
     const linked = await repo.findById(target.id);
+
+    // 방금 연결했으므로 해결 이후 재질문으로 판정되면 안 된다.
+    expect(linked!.question.resolvedAt!.getTime()).toBeGreaterThanOrEqual(
+      linked!.question.lastAskedAt.getTime(),
+    );
 
     expect(linked?.question.status).toBe('resolved');
     expect(linked?.document).toEqual({

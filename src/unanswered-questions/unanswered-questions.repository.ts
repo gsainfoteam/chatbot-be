@@ -219,7 +219,7 @@ export class UnansweredQuestionsRepository {
           };
     const updated = await this.db
       .update(unansweredQuestions)
-      .set({ status, ...resolution, updatedAt: new Date() })
+      .set({ status, ...resolution, updatedAt: sql`now()` })
       .where(eq(unansweredQuestions.id, id))
       .returning({ id: unansweredQuestions.id });
     return updated.length > 0;
@@ -230,15 +230,15 @@ export class UnansweredQuestionsRepository {
     documentId: string,
     actorIdpUuid: string,
   ): Promise<boolean> {
-    const now = new Date();
+    // lastAskedAt(DB now())과 비교하므로 같은 시계로 기록한다.
     const updated = await this.db
       .update(unansweredQuestions)
       .set({
         status: 'resolved',
         resolvedDocumentId: documentId,
-        resolvedAt: now,
+        resolvedAt: sql`now()`,
         resolvedByIdpUuid: actorIdpUuid,
-        updatedAt: now,
+        updatedAt: sql`now()`,
       })
       .where(eq(unansweredQuestions.id, id))
       .returning({ id: unansweredQuestions.id });

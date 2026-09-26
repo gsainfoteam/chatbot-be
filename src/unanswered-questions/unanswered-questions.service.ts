@@ -10,13 +10,16 @@ import {
   type UnansweredQuestionRecord,
 } from './unanswered-questions.repository';
 import type {
-  CreateTextKnowledgeDto,
+  InjectedKnowledgeDto,
+  InjectTextKnowledgeDto,
   ListUnansweredQuestionsQueryDto,
-  RegisteredKnowledgeDocumentDto,
   UnansweredQuestionDetailDto,
   UnansweredQuestionDto,
   UnansweredQuestionsResponseDto,
 } from './dto/unanswered-question.dto';
+
+/** 제목 없이 텍스트 지식을 등록할 때 질문에서 가져올 최대 제목 길이 */
+const DEFAULT_TITLE_MAX_CHARS = 100;
 
 /**
  * 미답변 질문 조회·처리와 질문별 지식 문서 등록.
@@ -86,15 +89,18 @@ export class UnansweredQuestionsService {
     return this.toDto(await this.reload(id));
   }
 
-  async registerTextDocument(
+  async injectTextKnowledge(
     id: string,
-    dto: CreateTextKnowledgeDto,
+    dto: InjectTextKnowledgeDto,
     principal: AdminPrincipal,
-  ): Promise<RegisteredKnowledgeDocumentDto> {
-    await this.requireAccessible(id, principal);
+  ): Promise<UnansweredQuestionDto> {
+    const record = await this.requireAccessible(id, principal);
+    const title =
+      dto.title?.trim() ||
+      record.question.question.trim().slice(0, DEFAULT_TITLE_MAX_CHARS);
     const document = await this.uploadService.createTextDocument(
-      dto.title,
-      dto.content,
+      title,
+      dto.text,
       principal,
       dto.organizationId,
       dto.expiresAt,
@@ -102,11 +108,11 @@ export class UnansweredQuestionsService {
     return this.linkDocument(id, document, principal);
   }
 
-  async registerPdfDocument(
+  async injectPdfKnowledge(
     id: string,
     form: PdfUploadForm,
     principal: AdminPrincipal,
-  ): Promise<RegisteredKnowledgeDocumentDto> {
+  ): Promise<UnansweredQuestionDto> {
     await this.requireAccessible(id, principal);
     const document = await this.uploadService.upload(
       form.file,
@@ -123,7 +129,7 @@ export class UnansweredQuestionsService {
     id: string,
     document: DocumentListItemDto,
     principal: AdminPrincipal,
-  ): Promise<RegisteredKnowledgeDocumentDto> {
+  ): Promise<UnansweredQuestionDto> {
     if (!(await this.repo.linkDocument(id, document.id, principal.uuid))) {
       // 문서 등록 중 질문이 삭제된 경우(위젯 키 삭제 cascade). 문서는 문서 관리에서 계속 다룰 수 있다.
       this.logger.warn(
@@ -134,7 +140,7 @@ export class UnansweredQuestionsService {
     this.logger.log(
       `Knowledge document linked: question=${id} document=${document.id} source=${document.sourceType}`,
     );
-    return { question: this.toDto(await this.reload(id)), document };
+    return this.toDto(await this.reload(id));
   }
 
   private async reload(id: string): Promise<UnansweredQuestionRecord> {
@@ -175,21 +181,39 @@ export class UnansweredQuestionsService {
     const q = record.question;
     return {
       id: q.id,
-      widgetKeyId: q.widgetKeyId,
-      widgetKeyName: record.widgetKeyName,
       question: q.question,
-      language: q.language,
-      askCount: q.askCount,
+      createdAt: q.createdAt,
       status: q.status,
-      lastSessionId: q.lastSessionId,
-      firstAskedAt: q.firstAskedAt,
-      lastAskedAt: q.lastAskedAt,
+      occurrenceCount: q.occurrenceCount,
       resolvedAt: q.resolvedAt,
-      resolvedByIdpUuid: q.resolvedByIdpUuid,
+      injectedKnowledge: this.toInjectedKnowledge(record),
+      lastAskedAt: q.lastAskedAt,
       askedAgainAfterResolved:
         q.resolvedAt != null &&
         q.lastAskedAt.getTime() > q.resolvedAt.getTime(),
-      document: record.document,
+      widgetKeyId: q.widgetKeyId,
+      widgetKeyName: record.widgetKeyName,
+      language: q.language,
+      lastSessionId: q.lastSessionId,
+      resolvedByIdpUuid: q.resolvedByIdpUuid,
+    };
+  }
+
+  private toInjectedKnowledge(
+    record: UnansweredQuestionRecord,
+  ): InjectedKnowledgeDto | null {
+    const document = record.document;
+    if (!document) return null;
+    return {
+      type: document.sourceType,
+      injectedAt: record.question.resolvedAt ?? record.question.updatedAt,
+      ...(document.sourceType === 'text'
+        ? { text: document.sourceText ?? '' }
+        : { fileName: `${document.resourceName}.pdf` }),
+      documentId: document.id,
+      documentTitle: document.title,
+      documentStatus: document.status,
+      documentActive: document.isActive,
     };
   }
 }

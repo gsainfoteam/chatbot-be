@@ -6,6 +6,7 @@ import type { AdminPrincipal } from '../organizations/organization.types';
 import type { UploadService } from '../upload/upload.service';
 import type { DocumentListItemDto } from '../upload/dto/document-list-item.dto';
 import type {
+  LinkedDocumentRecord,
   UnansweredQuestionRecord,
   UnansweredQuestionsRepository,
 } from './unanswered-questions.repository';
@@ -16,6 +17,7 @@ const QUESTION_ID = '00000000-0000-0000-0000-0000000000a1';
 const OWN_KEY_ID = '00000000-0000-0000-0000-0000000000b1';
 const OTHER_KEY_ID = '00000000-0000-0000-0000-0000000000b2';
 const DOCUMENT_ID = '00000000-0000-0000-0000-0000000000c1';
+const RESOLVED_AT = new Date('2026-09-12T00:00:00Z');
 
 function principal(overrides: Partial<AdminPrincipal> = {}): AdminPrincipal {
   return {
@@ -35,14 +37,13 @@ function question(
     question: '부산에서 외국인도 은행 계좌를 만들 수 있나요?',
     normalizedQuestion: '부산에서 외국인도 은행 계좌를 만들 수 있나요',
     language: 'KO',
-    askCount: 3,
-    status: 'OPEN',
+    occurrenceCount: 3,
+    status: 'open',
     lastSessionId: null,
     lastAnswerMessageId: 'message-1',
     resolvedDocumentId: null,
     resolvedByIdpUuid: null,
     resolvedAt: null,
-    firstAskedAt: new Date('2026-09-01T00:00:00Z'),
     lastAskedAt: new Date('2026-09-11T00:00:00Z'),
     createdAt: new Date('2026-09-01T00:00:00Z'),
     updatedAt: new Date('2026-09-11T00:00:00Z'),
@@ -50,21 +51,49 @@ function question(
   };
 }
 
+function linkedDocument(
+  overrides: Partial<LinkedDocumentRecord> = {},
+): LinkedDocumentRecord {
+  return {
+    id: DOCUMENT_ID,
+    title: '외국인 계좌 개설',
+    resourceName: '외국인 계좌 개설',
+    status: 'queued',
+    sourceType: 'text',
+    sourceText: '여권과 외국인등록증이 필요합니다.',
+    isActive: true,
+    ...overrides,
+  };
+}
+
 function record(
   overrides: Partial<UnansweredQuestion> = {},
+  document: LinkedDocumentRecord | null = null,
 ): UnansweredQuestionRecord {
   return {
     question: question(overrides),
     widgetKeyName: '학생 포털',
-    document: null,
+    document,
   };
+}
+
+function resolvedRecord(document: LinkedDocumentRecord) {
+  return record(
+    {
+      status: 'resolved',
+      resolvedAt: RESOLVED_AT,
+      resolvedDocumentId: document.id,
+      resolvedByIdpUuid: 'admin-1',
+    },
+    document,
+  );
 }
 
 const listQuery: ListUnansweredQuestionsQueryDto = {
   page: 1,
   size: 20,
-  status: 'all',
-  sort: 'count',
+  status: 'open',
+  sort: 'created',
   order: 'desc',
 };
 
@@ -133,7 +162,8 @@ describe('UnansweredQuestionsService access', () => {
     expect(repo.list).toHaveBeenCalledWith(
       expect.objectContaining({
         widgetKeyIds: null,
-        sort: 'count',
+        status: 'open',
+        sort: 'created',
       }),
     );
   });
@@ -155,11 +185,22 @@ describe('UnansweredQuestionsService access', () => {
       hasNext: false,
       hasPrevious: false,
     });
+  });
+
+  it('maps rows to the dashboard question shape', async () => {
+    const { service } = createService();
+
+    const result = await service.list(principal(), listQuery);
+
     expect(result.items[0]).toEqual(
       expect.objectContaining({
         id: QUESTION_ID,
-        widgetKeyName: '학생 포털',
-        askCount: 3,
+        question: '부산에서 외국인도 은행 계좌를 만들 수 있나요?',
+        createdAt: new Date('2026-09-01T00:00:00Z'),
+        status: 'open',
+        occurrenceCount: 3,
+        resolvedAt: null,
+        injectedKnowledge: null,
         askedAgainAfterResolved: false,
       }),
     );
@@ -173,14 +214,10 @@ describe('UnansweredQuestionsService access', () => {
       service.getDetail(QUESTION_ID, principal()),
     ).rejects.toBeInstanceOf(NotFoundException);
     await expect(
-      service.updateStatus(QUESTION_ID, 'DISMISSED', principal()),
+      service.updateStatus(QUESTION_ID, 'resolved', principal()),
     ).rejects.toBeInstanceOf(NotFoundException);
     await expect(
-      service.registerTextDocument(
-        QUESTION_ID,
-        { title: '계좌', content: '본문' },
-        principal(),
-      ),
+      service.injectTextKnowledge(QUESTION_ID, { text: '본문' }, principal()),
     ).rejects.toBeInstanceOf(NotFoundException);
 
     expect(repo.updateStatus).not.toHaveBeenCalled();
@@ -197,25 +234,24 @@ describe('UnansweredQuestionsService access', () => {
   });
 });
 
-describe('UnansweredQuestionsService knowledge registration', () => {
-  it('creates a text document and links it to the question', async () => {
+describe('UnansweredQuestionsService knowledge injection', () => {
+  it('injects text knowledge titled after the question and returns the resolved question', async () => {
     const { service, repo, uploadService } = createService();
+    repo.findById
+      .mockResolvedValueOnce(record())
+      .mockResolvedValueOnce(resolvedRecord(linkedDocument()));
 
-    const result = await service.registerTextDocument(
+    const result = await service.injectTextKnowledge(
       QUESTION_ID,
-      {
-        title: '외국인 계좌 개설',
-        content: '여권과 외국인등록증이 필요합니다.',
-        organizationId: '00000000-0000-0000-0000-000000000010',
-      },
+      { text: '여권과 외국인등록증이 필요합니다.' },
       principal(),
     );
 
     expect(uploadService.createTextDocument).toHaveBeenCalledWith(
-      '외국인 계좌 개설',
+      '부산에서 외국인도 은행 계좌를 만들 수 있나요?',
       '여권과 외국인등록증이 필요합니다.',
       principal(),
-      '00000000-0000-0000-0000-000000000010',
+      undefined,
       undefined,
     );
     expect(repo.linkDocument).toHaveBeenCalledWith(
@@ -223,18 +259,64 @@ describe('UnansweredQuestionsService knowledge registration', () => {
       DOCUMENT_ID,
       'admin-1',
     );
-    expect(result.document.id).toBe(DOCUMENT_ID);
+    expect(result).toEqual(
+      expect.objectContaining({
+        status: 'resolved',
+        resolvedAt: RESOLVED_AT,
+        injectedKnowledge: {
+          type: 'text',
+          injectedAt: RESOLVED_AT,
+          text: '여권과 외국인등록증이 필요합니다.',
+          documentId: DOCUMENT_ID,
+          documentTitle: '외국인 계좌 개설',
+          documentStatus: 'queued',
+          documentActive: true,
+        },
+      }),
+    );
   });
 
-  it('uploads a PDF and links it to the question', async () => {
+  it('uses an explicit title and truncates long questions for the default title', async () => {
     const { service, repo, uploadService } = createService();
+    repo.findById.mockResolvedValue(record({ question: '가'.repeat(300) }));
 
-    await service.registerPdfDocument(
+    await service.injectTextKnowledge(
+      QUESTION_ID,
+      { text: '본문', title: '  직접 입력한 제목 ' },
+      principal(),
+    );
+    await service.injectTextKnowledge(
+      QUESTION_ID,
+      { text: '본문' },
+      principal(),
+    );
+
+    expect(uploadService.createTextDocument.mock.calls[0]?.[0]).toBe(
+      '직접 입력한 제목',
+    );
+    expect(uploadService.createTextDocument.mock.calls[1]?.[0]).toBe(
+      '가'.repeat(100),
+    );
+  });
+
+  it('injects a PDF and reports its file name', async () => {
+    const { service, repo, uploadService } = createService();
+    repo.findById.mockResolvedValueOnce(record()).mockResolvedValueOnce(
+      resolvedRecord(
+        linkedDocument({
+          sourceType: 'pdf',
+          sourceText: null,
+          resourceName: 'bank',
+        }),
+      ),
+    );
+
+    const result = await service.injectPdfKnowledge(
       QUESTION_ID,
       {
         file: Buffer.from('%PDF-test'),
         filename: 'bank.pdf',
-        title: '은행 안내',
+        title: 'bank',
       },
       principal(),
     );
@@ -242,23 +324,22 @@ describe('UnansweredQuestionsService knowledge registration', () => {
     expect(uploadService.upload).toHaveBeenCalledWith(
       Buffer.from('%PDF-test'),
       'bank.pdf',
-      '은행 안내',
+      'bank',
       principal(),
       undefined,
       undefined,
     );
-    expect(repo.linkDocument).toHaveBeenCalledWith(
-      QUESTION_ID,
-      DOCUMENT_ID,
-      'admin-1',
+    expect(result.injectedKnowledge).toEqual(
+      expect.objectContaining({ type: 'pdf', fileName: 'bank.pdf' }),
     );
+    expect(result.injectedKnowledge).not.toHaveProperty('text');
   });
 
-  it('flags questions asked again after being resolved', async () => {
+  it('resolves without knowledge and flags questions asked again afterwards', async () => {
     const { service, repo } = createService();
     repo.findById.mockResolvedValue(
       record({
-        status: 'RESOLVED',
+        status: 'resolved',
         resolvedAt: new Date('2026-09-05T00:00:00Z'),
         lastAskedAt: new Date('2026-09-11T00:00:00Z'),
       }),
@@ -266,15 +347,16 @@ describe('UnansweredQuestionsService knowledge registration', () => {
 
     const updated = await service.updateStatus(
       QUESTION_ID,
-      'RESOLVED',
+      'resolved',
       principal(),
     );
 
     expect(repo.updateStatus).toHaveBeenCalledWith(
       QUESTION_ID,
-      'RESOLVED',
+      'resolved',
       'admin-1',
     );
+    expect(updated.injectedKnowledge).toBeNull();
     expect(updated.askedAgainAfterResolved).toBe(true);
   });
 });

@@ -24,14 +24,13 @@ import { AdminJwtGuard } from '../auth/guards/admin-jwt.guard';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import { AdminContext } from '../auth/context/admin-context.entity';
 import {
-  PDF_UPLOAD_FORM_SCHEMA,
+  PDF_KNOWLEDGE_FORM_SCHEMA,
   readPdfUploadForm,
 } from '../upload/pdf-upload-form';
 import { UnansweredQuestionsService } from './unanswered-questions.service';
 import {
-  CreateTextKnowledgeDto,
+  InjectTextKnowledgeDto,
   ListUnansweredQuestionsQueryDto,
-  RegisteredKnowledgeDocumentDto,
   UnansweredQuestionDetailDto,
   UnansweredQuestionDto,
   UnansweredQuestionsResponseDto,
@@ -49,7 +48,7 @@ export class UnansweredQuestionsController {
   @ApiOperation({
     summary: '미답변 질문 목록',
     description:
-      '참고 문서 0개로 답변된 질문을 위젯 키·질문 단위로 모아 반환합니다. SUPER_ADMIN은 전체, 그 외 관리자는 자신이 만들었거나 협업자로 초대받은 위젯 키의 질문만 조회합니다.',
+      '참고 문서 0개로 답변된 질문을 위젯 키·질문 단위로 모아 반환합니다. 기본값은 미해결(open), 최초 발생 시각 내림차순입니다. SUPER_ADMIN은 전체, 그 외 관리자는 자신이 만들었거나 협업자로 초대받은 위젯 키의 질문만 조회합니다.',
   })
   @ApiResponse({ status: 200, type: UnansweredQuestionsResponseDto })
   @ApiResponse({ status: 400, description: '잘못된 쿼리 파라미터' })
@@ -81,7 +80,7 @@ export class UnansweredQuestionsController {
   @ApiOperation({
     summary: '미답변 질문 상태 변경',
     description:
-      'OPEN(다시 열기), DISMISSED(무시), RESOLVED(문서 없이 해결 처리)로 변경합니다. OPEN/DISMISSED는 연결된 문서와 해결 정보를 해제합니다.',
+      'resolved: 지식 없이 해결됨으로 표시합니다(이미 해결됐으면 그대로). open: 다시 미해결로 되돌리며 해결 정보와 지식 연결을 해제합니다.',
   })
   @ApiParam({ name: 'id', description: '미답변 질문 UUID' })
   @ApiBody({ type: UpdateUnansweredQuestionDto })
@@ -97,15 +96,19 @@ export class UnansweredQuestionsController {
     return this.service.updateStatus(id, body.status, admin);
   }
 
-  @Post(':id/documents/text')
+  @Post(':id/knowledge/text')
   @ApiOperation({
-    summary: '질문에 텍스트 지식 문서 등록',
+    summary: '질문에 텍스트 지식 주입',
     description:
-      '관리자가 직접 입력한 텍스트를 지식 문서로 만들어 처리 큐에 등록하고 질문을 RESOLVED로 연결합니다. 텍스트 문서는 답변 참조 목록(PDF 링크)에 노출되지 않습니다.',
+      '입력한 텍스트를 지식 문서로 만들어 처리 큐에 등록하고 질문을 해결됨(resolved)으로 연결합니다. title을 생략하면 질문 내용을 제목으로 씁니다. 텍스트 문서는 답변 참조 목록(PDF 링크)에 노출되지 않습니다.',
   })
   @ApiParam({ name: 'id', description: '미답변 질문 UUID' })
-  @ApiBody({ type: CreateTextKnowledgeDto })
-  @ApiResponse({ status: 201, type: RegisteredKnowledgeDocumentDto })
+  @ApiBody({ type: InjectTextKnowledgeDto })
+  @ApiResponse({
+    status: 201,
+    description: '갱신된 질문',
+    type: UnansweredQuestionDto,
+  })
   @ApiResponse({ status: 400, description: '잘못된 요청' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: '조직 멤버십 필요' })
@@ -114,24 +117,28 @@ export class UnansweredQuestionsController {
     status: 409,
     description: '같은 제목(resource_name)의 활성 문서가 이미 존재',
   })
-  registerText(
+  injectText(
     @CurrentAdmin() admin: AdminContext,
     @Param('id', new ParseUUIDPipe()) id: string,
-    @Body() body: CreateTextKnowledgeDto,
-  ): Promise<RegisteredKnowledgeDocumentDto> {
-    return this.service.registerTextDocument(id, body, admin);
+    @Body() body: InjectTextKnowledgeDto,
+  ): Promise<UnansweredQuestionDto> {
+    return this.service.injectTextKnowledge(id, body, admin);
   }
 
-  @Post(':id/documents')
+  @Post(':id/knowledge/pdf')
   @ApiOperation({
-    summary: '질문에 PDF 지식 문서 등록',
+    summary: '질문에 PDF 지식 주입',
     description:
-      '문서 업로드(POST /api/v1/admin/upload)와 같은 방식으로 PDF를 등록하고 질문을 RESOLVED로 연결합니다.',
+      '문서 업로드(POST /api/v1/admin/upload)와 같은 방식으로 PDF를 등록하고 질문을 해결됨(resolved)으로 연결합니다. title을 생략하면 파일명을 제목으로 씁니다.',
   })
   @ApiParam({ name: 'id', description: '미답변 질문 UUID' })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({ schema: PDF_UPLOAD_FORM_SCHEMA })
-  @ApiResponse({ status: 201, type: RegisteredKnowledgeDocumentDto })
+  @ApiBody({ schema: PDF_KNOWLEDGE_FORM_SCHEMA })
+  @ApiResponse({
+    status: 201,
+    description: '갱신된 질문',
+    type: UnansweredQuestionDto,
+  })
   @ApiResponse({ status: 400, description: '잘못된 요청 (PDF 아님 등)' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: '조직 멤버십 필요' })
@@ -141,12 +148,12 @@ export class UnansweredQuestionsController {
     description: '동일 resource_name 문서가 이미 존재',
   })
   @ApiResponse({ status: 503, description: '문서 저장소(GCS) 일시 장애' })
-  async registerPdf(
+  async injectPdf(
     @CurrentAdmin() admin: AdminContext,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Req() req: FastifyRequest,
-  ): Promise<RegisteredKnowledgeDocumentDto> {
-    const form = await readPdfUploadForm(req);
-    return this.service.registerPdfDocument(id, form, admin);
+  ): Promise<UnansweredQuestionDto> {
+    const form = await readPdfUploadForm(req, { titleFromFilename: true });
+    return this.service.injectPdfKnowledge(id, form, admin);
   }
 }

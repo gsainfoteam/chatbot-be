@@ -19,7 +19,11 @@ import {
   normalizeQuestion,
 } from './question-normalizer';
 
-export const UNANSWERED_QUESTION_SORTS = ['recent', 'count', 'first'] as const;
+export const UNANSWERED_QUESTION_SORTS = [
+  'created',
+  'recent',
+  'count',
+] as const;
 export type UnansweredQuestionSort = (typeof UNANSWERED_QUESTION_SORTS)[number];
 
 export interface UnansweredQuestionListQuery {
@@ -34,16 +38,20 @@ export interface UnansweredQuestionListQuery {
   order: 'asc' | 'desc';
 }
 
+export interface LinkedDocumentRecord {
+  id: string;
+  title: string;
+  resourceName: string;
+  status: DocumentStatus;
+  sourceType: DocumentSourceType;
+  sourceText: string | null;
+  isActive: boolean;
+}
+
 export interface UnansweredQuestionRecord {
   question: UnansweredQuestion;
   widgetKeyName: string;
-  document: {
-    id: string;
-    title: string;
-    status: DocumentStatus;
-    sourceType: DocumentSourceType;
-    isActive: boolean;
-  } | null;
+  document: LinkedDocumentRecord | null;
 }
 
 export interface LastAnswerRecord {
@@ -96,7 +104,7 @@ export class UnansweredQuestionsRepository {
         set: {
           question: sql`excluded.question`,
           language: sql`excluded.language`,
-          askCount: sql`${unansweredQuestions.askCount} + ${increment}`,
+          occurrenceCount: sql`${unansweredQuestions.occurrenceCount} + ${increment}`,
           lastSessionId: sql`excluded.last_session_id`,
           lastAnswerMessageId: sql`coalesce(excluded.last_answer_message_id, ${unansweredQuestions.lastAnswerMessageId})`,
           lastAskedAt: input.countOccurrence
@@ -190,18 +198,20 @@ export class UnansweredQuestionsRepository {
   }
 
   /**
-   * RESOLVED는 처리자·처리 시각만 기록하고 연결 문서는 유지한다.
-   * OPEN/DISMISSED로 되돌리면 해결 정보를 비운다.
+   * resolved: 이미 해결된 질문이면 처리 정보를 덮어쓰지 않고, 연결 문서는 유지한다.
+   * open: 해결 정보와 문서 연결을 비운다.
    */
   async updateStatus(
     id: string,
     status: UnansweredQuestionStatus,
     actorIdpUuid: string,
   ): Promise<boolean> {
-    const now = new Date();
     const resolution =
-      status === 'RESOLVED'
-        ? { resolvedAt: now, resolvedByIdpUuid: actorIdpUuid }
+      status === 'resolved'
+        ? {
+            resolvedAt: sql`coalesce(${unansweredQuestions.resolvedAt}, now())`,
+            resolvedByIdpUuid: sql`coalesce(${unansweredQuestions.resolvedByIdpUuid}, ${actorIdpUuid})`,
+          }
         : {
             resolvedAt: null,
             resolvedByIdpUuid: null,
@@ -209,7 +219,7 @@ export class UnansweredQuestionsRepository {
           };
     const updated = await this.db
       .update(unansweredQuestions)
-      .set({ status, ...resolution, updatedAt: now })
+      .set({ status, ...resolution, updatedAt: new Date() })
       .where(eq(unansweredQuestions.id, id))
       .returning({ id: unansweredQuestions.id });
     return updated.length > 0;
@@ -224,7 +234,7 @@ export class UnansweredQuestionsRepository {
     const updated = await this.db
       .update(unansweredQuestions)
       .set({
-        status: 'RESOLVED',
+        status: 'resolved',
         resolvedDocumentId: documentId,
         resolvedAt: now,
         resolvedByIdpUuid: actorIdpUuid,
@@ -240,11 +250,15 @@ export class UnansweredQuestionsRepository {
       .select({
         question: unansweredQuestions,
         widgetKeyName: widgetKeys.name,
-        documentId: documents.id,
-        documentTitle: documents.title,
-        documentStatus: documents.status,
-        documentSourceType: documents.sourceType,
-        documentIsActive: documents.isActive,
+        document: {
+          id: documents.id,
+          title: documents.title,
+          resourceName: documents.resourceName,
+          status: documents.status,
+          sourceType: documents.sourceType,
+          sourceText: documents.sourceText,
+          isActive: documents.isActive,
+        },
       })
       .from(unansweredQuestions)
       .innerJoin(widgetKeys, eq(unansweredQuestions.widgetKeyId, widgetKeys.id))
@@ -258,25 +272,12 @@ export class UnansweredQuestionsRepository {
   private toRecord(row: {
     question: UnansweredQuestion;
     widgetKeyName: string;
-    documentId: string | null;
-    documentTitle: string | null;
-    documentStatus: DocumentStatus | null;
-    documentSourceType: DocumentSourceType | null;
-    documentIsActive: boolean | null;
+    document: LinkedDocumentRecord | null;
   }): UnansweredQuestionRecord {
     return {
       question: row.question,
       widgetKeyName: row.widgetKeyName,
-      document:
-        row.documentId != null
-          ? {
-              id: row.documentId,
-              title: row.documentTitle ?? '',
-              status: row.documentStatus ?? 'failed',
-              sourceType: row.documentSourceType ?? 'pdf',
-              isActive: row.documentIsActive ?? false,
-            }
-          : null,
+      document: row.document,
     };
   }
 
@@ -293,11 +294,12 @@ export class UnansweredQuestionsRepository {
     if (options.status !== 'all') {
       conditions.push(eq(unansweredQuestions.status, options.status));
     }
-    const query = options.query?.trim();
+    // 저장 키와 같은 규칙(NFC·소문자·공백 축약)으로 비교해 표기 차이를 무시한다.
+    const query = options.query ? normalizeQuestion(options.query) : '';
     if (query) {
-      const escaped = query.normalize('NFC').replace(/[%_\\]/g, '\\$&');
+      const escaped = query.replace(/[%_\\]/g, '\\$&');
       conditions.push(
-        sql`${unansweredQuestions.question} ILIKE ${`%${escaped}%`} ESCAPE '\\'`,
+        sql`${unansweredQuestions.normalizedQuestion} ILIKE ${`%${escaped}%`} ESCAPE '\\'`,
       );
     }
     return conditions.length > 0 ? and(...conditions) : undefined;
@@ -310,19 +312,19 @@ export class UnansweredQuestionsRepository {
     const direction = order === 'asc' ? asc : desc;
     if (sort === 'count') {
       return [
-        direction(unansweredQuestions.askCount),
+        direction(unansweredQuestions.occurrenceCount),
         desc(unansweredQuestions.lastAskedAt),
         asc(unansweredQuestions.id),
       ];
     }
-    if (sort === 'first') {
+    if (sort === 'recent') {
       return [
-        direction(unansweredQuestions.firstAskedAt),
+        direction(unansweredQuestions.lastAskedAt),
         asc(unansweredQuestions.id),
       ];
     }
     return [
-      direction(unansweredQuestions.lastAskedAt),
+      direction(unansweredQuestions.createdAt),
       asc(unansweredQuestions.id),
     ];
   }

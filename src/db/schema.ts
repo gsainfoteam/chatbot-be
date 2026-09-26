@@ -63,7 +63,7 @@ export const documentSourceTypeEnum = pgEnum('document_source_type', [
 
 export const unansweredQuestionStatusEnum = pgEnum(
   'unanswered_question_status',
-  ['OPEN', 'RESOLVED', 'DISMISSED'],
+  ['open', 'resolved'],
 );
 
 // Tables
@@ -546,8 +546,8 @@ export const unansweredQuestions = pgTable(
     question: text('question').notNull(),
     normalizedQuestion: text('normalized_question').notNull(),
     language: varchar('language', { length: 8 }).notNull(),
-    askCount: integer('ask_count').notNull().default(1),
-    status: unansweredQuestionStatusEnum('status').notNull().default('OPEN'),
+    occurrenceCount: integer('occurrence_count').notNull().default(1),
+    status: unansweredQuestionStatusEnum('status').notNull().default('open'),
     lastSessionId: uuid('last_session_id').references(() => sessions.id, {
       onDelete: 'set null',
     }),
@@ -561,7 +561,6 @@ export const unansweredQuestions = pgTable(
     ),
     resolvedByIdpUuid: varchar('resolved_by_idp_uuid', { length: 255 }),
     resolvedAt: timestamp('resolved_at'),
-    firstAskedAt: timestamp('first_asked_at').notNull().defaultNow(),
     lastAskedAt: timestamp('last_asked_at').notNull().defaultNow(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
@@ -577,12 +576,15 @@ export const unansweredQuestions = pgTable(
     lastAskedIdx: index('unanswered_questions_last_asked_at_idx').on(
       table.lastAskedAt,
     ),
+    createdAtIdx: index('unanswered_questions_created_at_idx').on(
+      table.createdAt,
+    ),
     resolvedDocumentIdx: index(
       'unanswered_questions_resolved_document_id_idx',
     ).on(table.resolvedDocumentId),
-    askCountPositive: check(
-      'unanswered_questions_ask_count_positive',
-      sql`${table.askCount} >= 1`,
+    occurrenceCountPositive: check(
+      'unanswered_questions_occurrence_count_positive',
+      sql`${table.occurrenceCount} >= 1`,
     ),
   }),
 );

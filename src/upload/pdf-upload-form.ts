@@ -13,26 +13,44 @@ export interface PdfUploadForm {
   organizationId?: string;
 }
 
-/** PDF 업로드 multipart Swagger 스키마 (문서 업로드·미답변 질문 문서 등록 공용) */
+const PDF_UPLOAD_OPTIONAL_PROPERTIES = {
+  expiresAt: {
+    type: 'string',
+    format: 'date-time',
+    description:
+      '문서 유효기간 (ISO-8601, optional). 미전송/빈 값이면 무기한. 과거 시각은 400.',
+    nullable: true,
+  },
+  organizationId: {
+    type: 'string',
+    format: 'uuid',
+    description:
+      '소유 조직 UUID. 생략한 경우에만 출시 호환성을 위해 기본 조직을 사용하며, 빈 값은 잘못된 입력입니다.',
+  },
+};
+
+/** 문서 업로드 multipart Swagger 스키마 */
 export const PDF_UPLOAD_FORM_SCHEMA = {
   type: 'object',
   required: ['file', 'title'],
   properties: {
     file: { type: 'string', format: 'binary', description: 'PDF 파일' },
     title: { type: 'string', description: '파일 제목' },
-    expiresAt: {
+    ...PDF_UPLOAD_OPTIONAL_PROPERTIES,
+  },
+};
+
+/** 미답변 질문 PDF 지식 등록 multipart Swagger 스키마 (title 생략 시 파일명 사용) */
+export const PDF_KNOWLEDGE_FORM_SCHEMA = {
+  type: 'object',
+  required: ['file'],
+  properties: {
+    file: { type: 'string', format: 'binary', description: 'PDF 파일' },
+    title: {
       type: 'string',
-      format: 'date-time',
-      description:
-        '문서 유효기간 (ISO-8601, optional). 미전송/빈 값이면 무기한. 과거 시각은 400.',
-      nullable: true,
+      description: '문서 제목. 생략하면 파일명(확장자 제외)을 사용',
     },
-    organizationId: {
-      type: 'string',
-      format: 'uuid',
-      description:
-        '소유 조직 UUID. 생략한 경우에만 출시 호환성을 위해 기본 조직을 사용하며, 빈 값은 잘못된 입력입니다.',
-    },
+    ...PDF_UPLOAD_OPTIONAL_PROPERTIES,
   },
 };
 
@@ -46,6 +64,7 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 
 export async function readPdfUploadForm(
   req: FastifyRequest,
+  options: { titleFromFilename?: boolean } = {},
 ): Promise<PdfUploadForm> {
   const fastifyReq = req as FastifyRequest & {
     isMultipart: () => boolean;
@@ -85,6 +104,9 @@ export async function readPdfUploadForm(
     }
   }
 
+  if (!title.trim() && options.titleFromFilename) {
+    title = filename.replace(/\.pdf$/i, '');
+  }
   if (!title || typeof title !== 'string' || !title.trim()) {
     throw new BadRequestException('title is required');
   }

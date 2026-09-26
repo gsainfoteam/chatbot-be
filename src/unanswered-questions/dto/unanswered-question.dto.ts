@@ -18,7 +18,6 @@ import type {
   DocumentStatus,
   UnansweredQuestionStatus,
 } from '../../db';
-import { DocumentListItemDto } from '../../upload/dto/document-list-item.dto';
 import { TEXT_KNOWLEDGE_MAX_CHARS } from '../../pdf-processor/text-knowledge';
 import {
   UNANSWERED_QUESTION_SORTS,
@@ -26,12 +25,11 @@ import {
 } from '../unanswered-questions.repository';
 
 export const UNANSWERED_QUESTION_STATUSES: UnansweredQuestionStatus[] = [
-  'OPEN',
-  'RESOLVED',
-  'DISMISSED',
+  'open',
+  'resolved',
 ];
 
-const STATUS_FILTERS = ['all', ...UNANSWERED_QUESTION_STATUSES] as const;
+const STATUS_FILTERS = [...UNANSWERED_QUESTION_STATUSES, 'all'] as const;
 const SORT_ORDERS = ['asc', 'desc'] as const;
 
 const trimToDefault =
@@ -53,7 +51,10 @@ export class ListUnansweredQuestionsQueryDto {
   @Max(100)
   size: number = 20;
 
-  @ApiPropertyOptional({ description: '질문 내용 검색어', maxLength: 255 })
+  @ApiPropertyOptional({
+    description: '질문 검색어 (NFC·대소문자·연속 공백 차이 무시)',
+    maxLength: 255,
+  })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.trim() || undefined : value,
   )
@@ -62,10 +63,10 @@ export class ListUnansweredQuestionsQueryDto {
   @MaxLength(255)
   query?: string;
 
-  @ApiPropertyOptional({ enum: STATUS_FILTERS, default: 'all' })
-  @Transform(trimToDefault('all'))
+  @ApiPropertyOptional({ enum: STATUS_FILTERS, default: 'open' })
+  @Transform(trimToDefault('open'))
   @IsIn(STATUS_FILTERS)
-  status: UnansweredQuestionStatus | 'all' = 'all';
+  status: UnansweredQuestionStatus | 'all' = 'open';
 
   @ApiPropertyOptional({
     description: '특정 위젯 키로 제한 (접근 가능한 키만)',
@@ -76,13 +77,14 @@ export class ListUnansweredQuestionsQueryDto {
   widgetKeyId?: string;
 
   @ApiPropertyOptional({
-    description: 'recent: 최근 질문일, count: 반복 질문 수, first: 최초 질문일',
+    description:
+      'created: 최초 발생 시각, recent: 최근 발생 시각, count: 발생 횟수',
     enum: UNANSWERED_QUESTION_SORTS,
-    default: 'recent',
+    default: 'created',
   })
-  @Transform(trimToDefault('recent'))
+  @Transform(trimToDefault('created'))
   @IsIn(UNANSWERED_QUESTION_SORTS)
-  sort: UnansweredQuestionSort = 'recent';
+  sort: UnansweredQuestionSort = 'created';
 
   @ApiPropertyOptional({ enum: SORT_ORDERS, default: 'desc' })
   @Transform(trimToDefault('desc'))
@@ -90,34 +92,45 @@ export class ListUnansweredQuestionsQueryDto {
   order: 'asc' | 'desc' = 'desc';
 }
 
-export class UnansweredQuestionDocumentDto {
-  @ApiProperty({ format: 'uuid' })
-  id: string;
-
-  @ApiProperty()
-  title: string;
+export class InjectedKnowledgeDto {
+  @ApiProperty({ enum: ['text', 'pdf'] })
+  type: DocumentSourceType;
 
   @ApiProperty({
+    description: '지식을 등록한 시각',
+    type: String,
+    format: 'date-time',
+  })
+  injectedAt: Date;
+
+  @ApiPropertyOptional({ description: 'type=text일 때 등록한 지식 본문' })
+  text?: string;
+
+  @ApiPropertyOptional({
+    description: 'type=pdf일 때 등록된 PDF 파일명',
+    example: '유학생 은행 계좌 안내.pdf',
+  })
+  fileName?: string;
+
+  @ApiProperty({ format: 'uuid' })
+  documentId: string;
+
+  @ApiProperty()
+  documentTitle: string;
+
+  @ApiProperty({
+    description: '문서 처리 상태. ready가 되어야 답변에 사용됩니다.',
     enum: ['uploading', 'queued', 'processing', 'ready', 'failed'],
   })
-  status: DocumentStatus;
+  documentStatus: DocumentStatus;
 
-  @ApiProperty({ enum: ['pdf', 'text'] })
-  sourceType: DocumentSourceType;
-
-  @ApiProperty({ description: 'false면 삭제된 문서' })
-  isActive: boolean;
+  @ApiProperty({ description: 'false면 문서 관리에서 삭제된 문서' })
+  documentActive: boolean;
 }
 
 export class UnansweredQuestionDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
-
-  @ApiProperty({ format: 'uuid' })
-  widgetKeyId: string;
-
-  @ApiProperty({ example: '학생 포털' })
-  widgetKeyName: string;
 
   @ApiProperty({
     description: '가장 최근에 들어온 질문 원문',
@@ -125,42 +138,56 @@ export class UnansweredQuestionDto {
   })
   question: string;
 
-  @ApiProperty({ enum: ['KO', 'EN', 'OTHER'], example: 'KO' })
-  language: string;
-
-  @ApiProperty({ description: '같은 질문(정규화 기준)이 들어온 횟수' })
-  askCount: number;
+  @ApiProperty({
+    description: '처음 발생한 시각',
+    type: String,
+    format: 'date-time',
+  })
+  createdAt: Date;
 
   @ApiProperty({ enum: UNANSWERED_QUESTION_STATUSES })
   status: UnansweredQuestionStatus;
 
-  @ApiProperty({ format: 'uuid', nullable: true })
-  lastSessionId: string | null;
-
-  @ApiProperty({ type: String, format: 'date-time' })
-  firstAskedAt: Date;
-
-  @ApiProperty({ type: String, format: 'date-time' })
-  lastAskedAt: Date;
+  @ApiProperty({ description: '같은 질문(정규화 기준)이 발생한 횟수' })
+  occurrenceCount: number;
 
   @ApiProperty({ type: String, format: 'date-time', nullable: true })
   resolvedAt: Date | null;
 
-  @ApiProperty({ nullable: true })
-  resolvedByIdpUuid: string | null;
+  @ApiProperty({
+    description: '질문에 등록한 지식. 지식 없이 해결했거나 미해결이면 null',
+    type: () => InjectedKnowledgeDto,
+    nullable: true,
+  })
+  injectedKnowledge: InjectedKnowledgeDto | null;
+
+  @ApiProperty({
+    description: '가장 최근에 발생한 시각',
+    type: String,
+    format: 'date-time',
+  })
+  lastAskedAt: Date;
 
   @ApiProperty({
     description:
-      '해결 이후 같은 질문이 다시 들어왔는지 (lastAskedAt > resolvedAt)',
+      '해결 이후 같은 질문이 다시 발생했는지 (lastAskedAt > resolvedAt)',
   })
   askedAgainAfterResolved: boolean;
 
-  @ApiProperty({
-    description: '질문에 연결된 지식 문서',
-    type: () => UnansweredQuestionDocumentDto,
-    nullable: true,
-  })
-  document: UnansweredQuestionDocumentDto | null;
+  @ApiProperty({ format: 'uuid' })
+  widgetKeyId: string;
+
+  @ApiProperty({ example: '학생 포털' })
+  widgetKeyName: string;
+
+  @ApiProperty({ enum: ['KO', 'EN', 'OTHER'], example: 'KO' })
+  language: string;
+
+  @ApiProperty({ format: 'uuid', nullable: true })
+  lastSessionId: string | null;
+
+  @ApiProperty({ nullable: true })
+  resolvedByIdpUuid: string | null;
 }
 
 export class UnansweredQuestionAnswerDto {
@@ -213,28 +240,31 @@ export class UnansweredQuestionsResponseDto {
 export class UpdateUnansweredQuestionDto {
   @ApiProperty({
     description:
-      'OPEN/DISMISSED로 바꾸면 해결 정보와 문서 연결이 해제됩니다. RESOLVED는 문서 없이 해결 처리할 때 사용합니다.',
+      'resolved: 지식 없이 해결 처리(이미 해결됐으면 그대로). open: 해결 정보와 지식 연결을 해제',
     enum: UNANSWERED_QUESTION_STATUSES,
   })
   @IsIn(UNANSWERED_QUESTION_STATUSES)
   status: UnansweredQuestionStatus;
 }
 
-export class CreateTextKnowledgeDto {
-  @ApiProperty({ description: '문서 제목', maxLength: 255 })
-  @IsString()
-  @IsNotEmpty()
-  @MaxLength(255)
-  title: string;
-
+export class InjectTextKnowledgeDto {
   @ApiProperty({
-    description: '질문에 대한 지식 본문 (마크다운 가능)',
+    description: '질문에 답할 수 있는 지식 본문 (마크다운 가능)',
     maxLength: TEXT_KNOWLEDGE_MAX_CHARS,
   })
   @IsString()
   @IsNotEmpty()
   @MaxLength(TEXT_KNOWLEDGE_MAX_CHARS)
-  content: string;
+  text: string;
+
+  @ApiPropertyOptional({
+    description: '문서 제목. 생략하면 질문 내용을 제목으로 사용',
+    maxLength: 255,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  title?: string;
 
   @ApiPropertyOptional({
     description: '소유 조직 UUID. 생략하면 기본 조직',
@@ -252,12 +282,4 @@ export class CreateTextKnowledgeDto {
   @ValidateIf((_, value) => value !== null)
   @IsDateString()
   expiresAt?: string | null;
-}
-
-export class RegisteredKnowledgeDocumentDto {
-  @ApiProperty({ type: UnansweredQuestionDto })
-  question: UnansweredQuestionDto;
-
-  @ApiProperty({ type: DocumentListItemDto })
-  document: DocumentListItemDto;
 }

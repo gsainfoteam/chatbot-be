@@ -1,5 +1,5 @@
 {
-  "id": "7bdee836-826c-4e73-99db-0f3c8383d9e9",
+  "id": "d5c8bcaa-d9d7-4276-994f-15bd83807ae3",
   "prevId": "1fd1f587-5616-4c6f-8a40-2d21b495dac0",
   "version": "7",
   "dialect": "postgresql",
@@ -1464,8 +1464,8 @@
           "primaryKey": false,
           "notNull": true
         },
-        "ask_count": {
-          "name": "ask_count",
+        "occurrence_count": {
+          "name": "occurrence_count",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,
@@ -1477,7 +1477,7 @@
           "typeSchema": "public",
           "primaryKey": false,
           "notNull": true,
-          "default": "'OPEN'"
+          "default": "'open'"
         },
         "last_session_id": {
           "name": "last_session_id",
@@ -1508,13 +1508,6 @@
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
-        },
-        "first_asked_at": {
-          "name": "first_asked_at",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
         },
         "last_asked_at": {
           "name": "last_asked_at",
@@ -1586,6 +1579,21 @@
           "columns": [
             {
               "expression": "last_asked_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "unanswered_questions_created_at_idx": {
+          "name": "unanswered_questions_created_at_idx",
+          "columns": [
+            {
+              "expression": "created_at",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -1670,9 +1678,9 @@
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {
-        "unanswered_questions_ask_count_positive": {
-          "name": "unanswered_questions_ask_count_positive",
-          "value": "\"unanswered_questions\".\"ask_count\" >= 1"
+        "unanswered_questions_occurrence_count_positive": {
+          "name": "unanswered_questions_occurrence_count_positive",
+          "value": "\"unanswered_questions\".\"occurrence_count\" >= 1"
         }
       },
       "isRLSEnabled": false
@@ -2287,9 +2295,8 @@
       "name": "unanswered_question_status",
       "schema": "public",
       "values": [
-        "OPEN",
-        "RESOLVED",
-        "DISMISSED"
+        "open",
+        "resolved"
       ]
     },
     "public.widget_key_status": {

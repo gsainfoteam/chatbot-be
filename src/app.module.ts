@@ -12,6 +12,7 @@ import { ChatModule } from './chat/chat.module';
 import { UploadModule } from './upload/upload.module';
 import { PdfProcessorModule } from './pdf-processor/pdf-processor.module';
 import { OrganizationsModule } from './organizations/organizations.module';
+import { UnansweredQuestionsAdminModule } from './unanswered-questions/unanswered-questions-admin.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { OrganizationsModule } from './organizations/organizations.module';
     PdfProcessorModule,
     OrganizationsModule,
     UploadModule,
+    UnansweredQuestionsAdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

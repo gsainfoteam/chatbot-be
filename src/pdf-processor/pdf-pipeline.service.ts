@@ -324,8 +324,7 @@ export class PdfPipelineService {
     }
 
     const expectedIndexes = new Set(batch.map((s) => s.index));
-    const seen = new Set<number>();
-    const chunks: ChunkMetadata[] = [];
+    const entries: ChunkMetadata[] = [];
 
     for (const item of obj.chunks) {
       if (!item || typeof item !== 'object') {
@@ -339,12 +338,6 @@ export class PdfPipelineService {
       if (typeof index !== 'number' || !Number.isInteger(index)) {
         throw new Error(`Pass 2 metadata invalid index: ${String(index)}`);
       }
-      if (!expectedIndexes.has(index)) {
-        throw new Error(`Pass 2 metadata unexpected index: ${index}`);
-      }
-      if (seen.has(index)) {
-        throw new Error(`Pass 2 metadata duplicate index: ${index}`);
-      }
       if (typeof path !== 'string' || !path.trim()) {
         throw new Error(`Pass 2 metadata missing path for index ${index}`);
       }
@@ -353,13 +346,41 @@ export class PdfPipelineService {
           `Pass 2 metadata missing description for index ${index}`,
         );
       }
-
-      seen.add(index);
-      chunks.push({
+      entries.push({
         index,
         path: path.trim(),
         description: description.trim(),
       });
+    }
+
+    const indexContext = `(returned [${entries.map((e) => e.index).join(',')}], expected [${[...expectedIndexes].join(',')}])`;
+    const extras = entries.filter((e) => !expectedIndexes.has(e.index));
+    if (extras.length > 0) {
+      const returned = new Set(entries.map((e) => e.index));
+      const coversBatch = [...expectedIndexes].every((i) => returned.has(i));
+      if (!coversBatch) {
+        throw new Error(
+          `Pass 2 metadata unexpected index: ${extras[0].index} ${indexContext}`,
+        );
+      }
+      // LLM이 서버가 나눈 섹션을 스스로 더 쪼개 라벨을 추가로 붙이는 경우가 있다.
+      // 추가 항목에는 대응하는 섹션 본문이 없으므로 버린다.
+      this.logger.warn(
+        `Pass 2 metadata returned ${extras.length} extra index(es); ignoring ${indexContext}`,
+      );
+    }
+
+    const seen = new Set<number>();
+    const chunks: ChunkMetadata[] = [];
+    for (const entry of entries) {
+      if (!expectedIndexes.has(entry.index)) continue;
+      if (seen.has(entry.index)) {
+        throw new Error(
+          `Pass 2 metadata duplicate index: ${entry.index} ${indexContext}`,
+        );
+      }
+      seen.add(entry.index);
+      chunks.push(entry);
     }
 
     if (seen.size !== expectedIndexes.size) {

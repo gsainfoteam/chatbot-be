@@ -12,6 +12,7 @@ import { McpModule } from '../mcp/mcp.module';
 import { RetrievalModule } from '../retrieval/retrieval.module';
 import { EmbeddingModule } from '../embedding/embedding.module';
 import { UsageModule } from '../usage/usage.module';
+import { UnansweredQuestionsModule } from '../unanswered-questions/unanswered-questions.module';
 import { LLM_CLIENT } from './llm/llm-client.interface';
 import { llmClientProvider } from './llm/llm-client.provider';
 
@@ -23,6 +24,7 @@ import { llmClientProvider } from './llm/llm-client.provider';
     RetrievalModule,
     EmbeddingModule,
     UsageModule,
+    UnansweredQuestionsModule,
   ],
   controllers: [ChatController],
   providers: [

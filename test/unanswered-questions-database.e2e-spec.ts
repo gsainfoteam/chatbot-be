@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq, inArray } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -12,6 +13,7 @@ import {
   type Database,
 } from '../src/db';
 import * as schema from '../src/db/schema';
+import { DocumentsRepository } from '../src/pdf-processor/documents.repository';
 import { UnansweredQuestionsRepository } from '../src/unanswered-questions/unanswered-questions.repository';
 
 /**
@@ -368,5 +370,61 @@ describeDatabase('Unanswered questions database (e2e)', () => {
         ownerOrganizationId: organizationId,
       }),
     ).rejects.toThrow();
+  });
+
+  it('reopens a question while its knowledge document is unusable', async () => {
+    const documentsRepo = new DocumentsRepository(db as unknown as Database);
+    const [firstAttempt, secondAttempt] = [randomUUID(), randomUUID()];
+    const [document] = await db
+      .insert(documents)
+      .values({
+        title: `${testPrefix} 기숙사 안내`,
+        resourceName: `${testPrefix}-기숙사-안내`,
+        sourceType: 'text',
+        sourceText: '입사 신청은 학기 시작 2주 전에 마감됩니다.',
+        uploadedByIdpUuid: ownerUuid,
+        ownerOrganizationId: organizationId,
+        status: 'processing',
+        processingToken: firstAttempt,
+      })
+      .returning();
+    documentIds.push(document.id);
+    const [target] = await db
+      .select()
+      .from(unansweredQuestions)
+      .where(eq(unansweredQuestions.widgetKeyId, ownerKeyId))
+      .limit(1);
+
+    await repo.linkDocument(target.id, document.id, ownerUuid);
+    await expect(
+      documentsRepo.markFailed(document.id, firstAttempt, 'Pass 2 failed'),
+    ).resolves.toBe(true);
+    const failed = await repo.findById(target.id);
+    expect(failed?.question).toMatchObject({
+      status: 'open',
+      resolvedDocumentId: document.id,
+      resolvedAt: null,
+      resolvedByIdpUuid: null,
+    });
+    expect(failed?.document?.status).toBe('failed');
+
+    // 이미 실패한 문서를 연결해도 해결로 두지 않는다.
+    await repo.linkDocument(target.id, document.id, ownerUuid);
+    expect((await repo.findById(target.id))?.question.status).toBe('open');
+
+    await db
+      .update(documents)
+      .set({ status: 'processing', processingToken: secondAttempt })
+      .where(eq(documents.id, document.id));
+    await expect(
+      documentsRepo.completeProcessing(document.id, secondAttempt, '요약', []),
+    ).resolves.toBe(true);
+    const ready = await repo.findById(target.id);
+    expect(ready?.question).toMatchObject({
+      status: 'resolved',
+      resolvedDocumentId: document.id,
+      resolvedByIdpUuid: ownerUuid,
+    });
+    expect(ready?.question.resolvedAt).not.toBeNull();
   });
 });

@@ -225,24 +225,37 @@ export class UnansweredQuestionsRepository {
     return updated.length > 0;
   }
 
+  /**
+   * 문서를 연결하고 해결 처리한다. 문서 처리 실패 시 질문을 다시 여는 전이
+   * (DocumentsRepository.markFailed)와 문서 행 잠금으로 직렬화해, 이미 실패한
+   * 문서로는 해결 처리하지 않는다.
+   */
   async linkDocument(
     id: string,
     documentId: string,
     actorIdpUuid: string,
   ): Promise<boolean> {
-    // lastAskedAt(DB now())과 비교하므로 같은 시계로 기록한다.
-    const updated = await this.db
-      .update(unansweredQuestions)
-      .set({
-        status: 'resolved',
-        resolvedDocumentId: documentId,
-        resolvedAt: sql`now()`,
-        resolvedByIdpUuid: actorIdpUuid,
-        updatedAt: sql`now()`,
-      })
-      .where(eq(unansweredQuestions.id, id))
-      .returning({ id: unansweredQuestions.id });
-    return updated.length > 0;
+    return this.db.transaction(async (tx) => {
+      const [document] = await tx
+        .select({ status: documents.status })
+        .from(documents)
+        .where(eq(documents.id, documentId))
+        .for('share');
+      const resolved = document?.status !== 'failed';
+      // lastAskedAt(DB now())과 비교하므로 같은 시계로 기록한다.
+      const updated = await tx
+        .update(unansweredQuestions)
+        .set({
+          status: resolved ? 'resolved' : 'open',
+          resolvedDocumentId: documentId,
+          resolvedAt: resolved ? sql`now()` : null,
+          resolvedByIdpUuid: resolved ? actorIdpUuid : null,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(unansweredQuestions.id, id))
+        .returning({ id: unansweredQuestions.id });
+      return updated.length > 0;
+    });
   }
 
   private selectRecords() {

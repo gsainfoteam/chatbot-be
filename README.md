@@ -231,6 +231,8 @@ $ docker run -p 3000:3000 --env-file .env ziggle-chatbot-be
 
 참고 문서 0개로 답변된 질문은 위젯 키·질문 단위로 누적됩니다. SUPER_ADMIN은 전체,
 그 외 관리자는 자신이 만들었거나 협업자로 초대받은 위젯 키의 질문만 다룹니다.
+지식을 주입하면 질문은 바로 해결 처리되고, 그 문서 처리가 실패하면 다시 미해결로
+돌아갑니다(문서 연결은 유지되어 재처리에 성공하면 다시 해결 처리).
 
 - `GET /api/v1/admin/unanswered-questions` - 미답변 질문 목록 (기본: 미해결, 검색·상태·정렬)
 - `GET /api/v1/admin/unanswered-questions/:id` - 상세 (최근 답변 포함)

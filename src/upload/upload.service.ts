@@ -13,6 +13,10 @@ import type { Document } from '../db';
 import { DocumentsRepository } from '../pdf-processor/documents.repository';
 import { GcsStorageService } from '../pdf-processor/gcs-storage.service';
 import { toResourceName } from '../pdf-processor/pdf-chunk-parser';
+import {
+  TEXT_KNOWLEDGE_MAX_CHARS,
+  toTextResourceName,
+} from '../pdf-processor/text-knowledge';
 import { isExpiredAt } from '../retrieval/retrieval.repository';
 import { OrganizationAccessService } from '../organizations/organization-access.service';
 import { evaluateDocumentAccess } from '../organizations/organization-access.policy';
@@ -31,7 +35,6 @@ import type {
 } from './dto/list-accessible-documents.dto';
 import { isUUID } from 'class-validator';
 
-const PDF_MIME = 'application/pdf';
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 export const REPROCESS_COOLDOWN_MS = 24 * 60 * 60 * 1000;
@@ -235,6 +238,69 @@ export class UploadService {
     }
 
     this.logger.log(`Upload queued: id=${record.id} resource=${resourceName}`);
+    return (await this.toListItems([record], principal))[0];
+  }
+
+  /**
+   * 관리자가 직접 입력한 텍스트를 지식 문서로 등록한다.
+   * PDF와 같은 처리 큐를 타지만 Pass 1 없이 Pass 2·임베딩만 수행한다.
+   */
+  async createTextDocument(
+    title: string,
+    content: string,
+    principal: AdminPrincipal,
+    organizationId?: string,
+    expiresAtRaw?: string | null,
+  ): Promise<DocumentListItemDto> {
+    const trimmedTitle = title?.trim() ?? '';
+    const trimmedContent = content?.trim() ?? '';
+    if (!trimmedTitle) {
+      throw new BadRequestException('title is required');
+    }
+    if (!trimmedContent) {
+      throw new BadRequestException('content is required');
+    }
+    if (trimmedContent.length > TEXT_KNOWLEDGE_MAX_CHARS) {
+      throw new BadRequestException(
+        `content must be at most ${TEXT_KNOWLEDGE_MAX_CHARS} characters`,
+      );
+    }
+
+    const organization = await this.access.resolveUploadOrganization(
+      organizationId,
+      principal,
+    );
+    const expiresAt = parseExpiresAt(expiresAtRaw);
+    const resourceName = toTextResourceName(trimmedTitle);
+    if (!resourceName) {
+      throw new BadRequestException('Invalid title');
+    }
+
+    let record: Document;
+    try {
+      record = await this.organizationsRepo.createTextDocument({
+        title: trimmedTitle,
+        resourceName,
+        sourceText: trimmedContent,
+        ownerOrganizationId: organization.id,
+        expiresAt,
+        actor: principal,
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ConflictException(
+          `An active document with resource name "${resourceName}" already exists`,
+        );
+      }
+      if (error instanceof RepositoryAuthorizationError) {
+        throw new ForbiddenException('Organization membership changed');
+      }
+      throw error;
+    }
+
+    this.logger.log(
+      `Text document queued: id=${record.id} resource=${resourceName}`,
+    );
     return (await this.toListItems([record], principal))[0];
   }
 
@@ -511,6 +577,7 @@ export class UploadService {
         resourceName: row.resourceName,
         status: row.status,
         summary: row.summary,
+        sourceType: row.sourceType,
         gcsPdfPath: row.gcsPdfPath,
         errorMessage: row.errorMessage,
         uploadedAt: row.createdAt,
@@ -602,8 +669,6 @@ export class UploadService {
     }
   }
 }
-
-export { PDF_MIME };
 
 function isUniqueViolation(error: unknown): boolean {
   let current: unknown = error;

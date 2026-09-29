@@ -11,7 +11,12 @@ import {
 } from './documents.repository';
 import { GcsStorageService } from './gcs-storage.service';
 import { parseFiniteNumber } from './parse-finite-number';
-import { PdfPipelineService, type PipelineChunk } from './pdf-pipeline.service';
+import {
+  PdfPipelineService,
+  type PipelineChunk,
+  type PipelineResult,
+} from './pdf-pipeline.service';
+import { buildTextKnowledgeMarkdown } from './text-knowledge';
 import { EmbeddingService } from '../embedding/embedding.service';
 import { buildChunkEmbeddingInput } from '../embedding/chunk-embedding-input';
 import type { Document } from '../db';
@@ -147,11 +152,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     const heartbeat = this.startHeartbeat(doc.id, processingToken);
     let generatedArtifactsMayExist = false;
     try {
-      const pdfBytes = await this.gcs.downloadPdf(resourceName);
-      const result = await this.pipeline.processPdf(
-        pdfBytes,
-        `${resourceName}.pdf`,
-      );
+      const result = await this.runPipeline(doc);
 
       if (!result.chunks.length) {
         throw new Error(
@@ -219,6 +220,21 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     } finally {
       heartbeat.stop();
     }
+  }
+
+  private async runPipeline(doc: Document): Promise<PipelineResult> {
+    if (doc.sourceType === 'text') {
+      if (!doc.sourceText?.trim()) {
+        throw new Error(`Text document has no source text: id=${doc.id}`);
+      }
+      return this.pipeline.processMarkdown(
+        buildTextKnowledgeMarkdown(doc.title, doc.sourceText),
+        doc.resourceName,
+      );
+    }
+
+    const pdfBytes = await this.gcs.downloadPdf(doc.resourceName);
+    return this.pipeline.processPdf(pdfBytes, `${doc.resourceName}.pdf`);
   }
 
   /**

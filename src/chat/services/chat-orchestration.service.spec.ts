@@ -7,6 +7,7 @@ import type { LlmResponse } from '../types/llm.types';
 import { ResourceContentService } from './resource-content.service';
 import { ResourceSelectionService } from './resource-selection.service';
 import { ChatStreamTransport } from './chat-stream.transport';
+import { ANSWER_GROUNDING_REMINDER, NO_ANSWER_MESSAGE } from '../prompts';
 
 describe('ChatOrchestrationService', () => {
   function createLlmResponse(
@@ -161,6 +162,7 @@ describe('ChatOrchestrationService', () => {
       options?: Parameters<
         ChatOrchestrationService['handleStreamingResponse']
       >[4],
+      answer = '졸업요건 답변',
     ) => {
       const handlePromise = service.handleStreamingResponse(
         'session-id',
@@ -177,7 +179,7 @@ describe('ChatOrchestrationService', () => {
       finalStream.write(
         `data: ${JSON.stringify({
           model: 'heavy-model',
-          choices: [{ delta: { content: '졸업요건 답변' } }],
+          choices: [{ delta: { content: answer } }],
         })}\n\n`,
       );
       finalStream.write(
@@ -296,6 +298,82 @@ describe('ChatOrchestrationService', () => {
       expect.objectContaining({
         metadata: expect.objectContaining({ resources: undefined }),
       }),
+    );
+  });
+
+  it('hides documents and records the question when the answer is a no-answer reply', async () => {
+    const { run, chatService, unansweredQuestionsRepository, writtenSse } =
+      setup(createCatalog());
+
+    await run(
+      'GIST에서 광주송정역까지 가는 방법 알려줘',
+      undefined,
+      NO_ANSWER_MESSAGE,
+    );
+
+    expect(writtenSse()).not.toContain('"type":"resources"');
+    expect(chatService.createMessage).toHaveBeenCalledWith(
+      'session-id',
+      expect.objectContaining({
+        metadata: expect.objectContaining({ resources: undefined }),
+      }),
+    );
+    expect(unansweredQuestionsRepository.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: 'GIST에서 광주송정역까지 가는 방법 알려줘',
+        answerMessageId: 'message-id',
+      }),
+    );
+  });
+
+  it('keeps documents for a partial answer that mentions missing information', async () => {
+    const { run, unansweredQuestionsRepository, writtenSse } =
+      setup(createCatalog());
+
+    await run(
+      '졸업 요건과 기숙사 비용 알려줘',
+      undefined,
+      `졸업 요건은 130학점입니다. 기숙사 비용은 ${NO_ANSWER_MESSAGE}`,
+    );
+
+    expect(writtenSse()).toContain('"type":"resources"');
+    expect(unansweredQuestionsRepository.record).not.toHaveBeenCalled();
+  });
+
+  it('treats a reworded refusal as unanswered', async () => {
+    const { run, chatService, unansweredQuestionsRepository, writtenSse } =
+      setup(createCatalog());
+
+    await run(
+      'GIFT 프로그램 지원하면 장학금 얼마 받아?',
+      undefined,
+      '현재 GIFT 프로그램 지원 시 장학금에 대한 정보는 확인할 수 없습니다.',
+    );
+
+    expect(writtenSse()).not.toContain('"type":"resources"');
+    expect(chatService.createMessage).toHaveBeenCalledWith(
+      'session-id',
+      expect.objectContaining({
+        metadata: expect.objectContaining({ resources: undefined }),
+      }),
+    );
+    expect(unansweredQuestionsRepository.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        question: 'GIFT 프로그램 지원하면 장학금 얼마 받아?',
+      }),
+    );
+  });
+
+  it('reminds the answer model to stay within the materials right after them', async () => {
+    const { run, llmClient } = setup(createCatalog());
+
+    await run('졸업 요건 알려줘');
+
+    const [, toolResults] = llmClient.generateFinalResponseStream.mock
+      .calls[0] as unknown as [unknown, Array<{ content: string }>];
+    expect(toolResults[0].content).toContain('졸업요건 문서 본문입니다.');
+    expect(toolResults[0].content.endsWith(ANSWER_GROUNDING_REMINDER)).toBe(
+      true,
     );
   });
 });

@@ -364,6 +364,18 @@ describe('ChatOrchestrationService', () => {
     );
   });
 
+  it('records the question when the stream ends without any answer', async () => {
+    const { run, unansweredQuestionsRepository, writtenSse } =
+      setup(createCatalog());
+
+    await run('졸업 요건 알려줘', undefined, '');
+
+    expect(writtenSse()).not.toContain('"type":"resources"');
+    expect(unansweredQuestionsRepository.record).toHaveBeenCalledWith(
+      expect.objectContaining({ answerMessageId: null }),
+    );
+  });
+
   it('reminds the answer model to stay within the materials right after them', async () => {
     const { run, llmClient } = setup(createCatalog());
 

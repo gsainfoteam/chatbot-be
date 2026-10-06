@@ -12,7 +12,10 @@ export const NO_ANSWER_MESSAGE =
  * 정보 부재를 말하는 표현으로만 좁힌다.
  */
 const REFUSAL_SENTENCE =
-  /확인\s*할\s*수\s*없|확인\s*가능한\s*(정보|내용|자료)\S*\s*없(?!이)|정보\S{0,2}\s*없(?!이)|(문서|정보|자료)\S{0,2}\s*찾지\s*못|답변(드리기|하기|드릴\s*수)\s*(어렵|없)/;
+  /확인\s*할\s*수\s*없|확인\s*가능한\s*(정보|내용|자료)\S*\s*없(?!이)|정보\S{0,2}\s*없(?!이)|(문서|정보|자료)\S{0,2}\s*찾지\s*못|답변(드리기|하기|할\s*수|드릴\s*수)\s*(어렵|없)/;
+
+/** "A는 ~이지만 B는 확인할 수 없습니다"처럼 한 문장에 답과 거절이 섞이는 연결 지점 */
+const CLAUSE_BOUNDARY = /(?:지만|으나)\s*,?\s+|(?:고|며),\s+/;
 
 /** 사과·재문의 권유처럼 정보를 담지 않는 문장. 연락처 등 숫자가 있으면 정보로 본다. */
 const COURTESY_SENTENCE =
@@ -21,22 +24,23 @@ const COURTESY_SENTENCE =
 /**
  * 최종 응답이 답변 불가인지 판정한다.
  * 모델이 정해진 문장 대신 "장학금 정보는 확인할 수 없습니다"처럼 바꿔 말하는 경우가 있어
- * 문장 단위로 본다. 모든 문장이 거절·인사 문장이고 거절 문장이 하나 이상이면 답변 불가다.
- * 내용을 담은 문장이 하나라도 있으면(부분 답변) 답변으로 취급한다.
+ * 절 단위로 본다. 모든 절이 거절·인사이고 거절이 하나 이상이면 답변 불가다.
+ * 내용을 담은 절이 하나라도 있으면(부분 답변) 답변으로 취급한다. 빈 응답은 답변 불가다.
  */
 export function isNoAnswerResponse(content: string): boolean {
-  const sentences = content
+  const clauses = content
     .replace(/[#*`]/g, '')
     .split(/(?<=[.!?。])\s+|\n+/)
-    .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length > 0);
-  if (sentences.length === 0) return false;
+    .flatMap((sentence) => sentence.split(CLAUSE_BOUNDARY))
+    .map((clause) => clause.trim())
+    .filter((clause) => clause.length > 0);
+  if (clauses.length === 0) return true;
 
   let refusals = 0;
-  for (const sentence of sentences) {
-    if (REFUSAL_SENTENCE.test(sentence)) {
+  for (const clause of clauses) {
+    if (REFUSAL_SENTENCE.test(clause)) {
       refusals += 1;
-    } else if (!COURTESY_SENTENCE.test(sentence) || /\d/.test(sentence)) {
+    } else if (!COURTESY_SENTENCE.test(clause) || /\d/.test(clause)) {
       return false;
     }
   }

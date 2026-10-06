@@ -24,6 +24,10 @@ describe('isNoAnswerResponse', () => {
     '입사할 때 필요한 서류에 대한 정보는 현재 확인 가능한 내용이 없습니다.',
     '해당하는 문서를 찾지 못해 답변할 수 없습니다. 죄송합니다. 다른 질문이 있으면 물어봐 주세요.',
     '기숙사비에 대한 정보는 없습니다.\n\n추가로 궁금한 사항이 있으시면 말씀해 주세요.',
+    '해당 질문에는 답변할 수 없습니다.',
+    '죄송하지만 해당 정보는 확인할 수 없습니다.',
+    // 스트림이 내용 없이 끝난 경우
+    '',
   ])('treats a refusal-only answer as unanswered: %s', (answer) => {
     expect(isNoAnswerResponse(answer)).toBe(true);
   });
@@ -40,7 +44,9 @@ describe('isNoAnswerResponse', () => {
     '분실물을 찾지 못한 경우 학생지원팀에 신고하세요.',
     '본인 확인이 어려운 경우 학생증을 지참하세요.',
     '개인정보 없이도 신청할 수 있습니다.',
-    '',
+    // 한 문장 안에 답과 거절이 섞인 부분 답변
+    '졸업 요건은 130학점이지만 기숙사비는 확인할 수 없습니다.',
+    '기숙사비는 확인할 수 없으나, 입사일은 2월 26일입니다.',
   ])('treats an answer with content as answered: %s', (answer) => {
     expect(isNoAnswerResponse(answer)).toBe(false);
   });

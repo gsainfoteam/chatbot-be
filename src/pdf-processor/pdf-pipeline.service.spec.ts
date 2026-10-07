@@ -260,3 +260,81 @@ describe('PdfPipelineService metadata pass', () => {
     ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold/);
   });
 });
+
+describe('PdfPipelineService metadata index tolerance', () => {
+  const twoSections = [
+    `## 수강신청\n\n${'수강신청 본문 '.repeat(700)}`,
+    `## 학사일정\n\n${'학사일정 본문 '.repeat(700)}`,
+  ].join('\n\n');
+
+  function metadataPipeline(indexes: number[]) {
+    const callLLM = jest
+      .fn<(...args: unknown[]) => Promise<LlmResponse>>()
+      .mockResolvedValueOnce(
+        llmResponse(
+          JSON.stringify({
+            summary: '안내',
+            chunks: indexes.map((index) => ({
+              index,
+              path: `항목-${index}`,
+              description: `설명 ${index}`,
+            })),
+          }),
+        ),
+      );
+    return createPipeline({ pages: [], callLLM });
+  }
+
+  it('ignores extra labels when the LLM splits a single section further', async () => {
+    const pipeline = metadataPipeline([0, 1, 2]);
+
+    const result = await pipeline.processMarkdown(
+      '# 의무실\n\n위치: LG도서관 B동 2층\n\n운영: 평일 09:00-18:00',
+      '의무실',
+    );
+
+    expect(result.chunks.map((c) => c.path)).toEqual([
+      '의무실',
+      '의무실/항목-0',
+    ]);
+    expect(result.chunks[1].description).toBe('설명 0');
+    expect(result.chunks[1].content).toContain('LG도서관');
+  });
+
+  it('keeps every section when extra labels follow a complete batch', async () => {
+    const pipeline = metadataPipeline([0, 1, 5]);
+
+    const result = await pipeline.processMarkdown(twoSections, '학사편람');
+
+    const byPath = new Map(result.chunks.map((c) => [c.path, c.content]));
+    expect(byPath.get('학사편람/항목-0')).toContain('수강신청 본문');
+    expect(byPath.get('학사편람/항목-1')).toContain('학사일정 본문');
+    expect(byPath.has('학사편람/항목-5')).toBe(false);
+  });
+
+  it('rejects unknown indexes when an expected section is missing', async () => {
+    const pipeline = metadataPipeline([0, 2]);
+
+    await expect(
+      pipeline.processMarkdown(twoSections, '학사편람'),
+    ).rejects.toThrow(
+      'Pass 2 metadata unexpected index: 2 (returned [0,2], expected [0,1])',
+    );
+  });
+
+  it('still rejects duplicate indexes', async () => {
+    const pipeline = metadataPipeline([0, 0, 1]);
+
+    await expect(
+      pipeline.processMarkdown(twoSections, '학사편람'),
+    ).rejects.toThrow('Pass 2 metadata duplicate index: 0');
+  });
+
+  it('still rejects a batch with a missing index', async () => {
+    const pipeline = metadataPipeline([0]);
+
+    await expect(
+      pipeline.processMarkdown(twoSections, '학사편람'),
+    ).rejects.toThrow('Pass 2 metadata incomplete batch');
+  });
+});

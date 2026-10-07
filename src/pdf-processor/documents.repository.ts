@@ -16,6 +16,7 @@ import {
   documents,
   documentChunks,
   organizationMemberships,
+  unansweredQuestions,
 } from '../db';
 import type { Database, Document, DocumentChunk } from '../db';
 import type { AdminPrincipal } from '../organizations/organization.types';
@@ -209,7 +210,10 @@ export class DocumentsRepository {
             eq(documents.isActive, true),
           ),
         )
-        .returning({ id: documents.id });
+        .returning({
+          id: documents.id,
+          uploadedByIdpUuid: documents.uploadedByIdpUuid,
+        });
       if (!completed) return false;
 
       await tx
@@ -227,6 +231,22 @@ export class DocumentsRepository {
           })),
         );
       }
+
+      // 처리 실패로 다시 열린 질문만 해당한다. 수동으로 연 질문은 연결이 비워져 있다.
+      await tx
+        .update(unansweredQuestions)
+        .set({
+          status: 'resolved',
+          resolvedAt: sql`now()`,
+          resolvedByIdpUuid: completed.uploadedByIdpUuid,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(unansweredQuestions.resolvedDocumentId, documentId),
+            eq(unansweredQuestions.status, 'open'),
+          ),
+        );
       return true;
     });
   }
@@ -236,24 +256,44 @@ export class DocumentsRepository {
     processingToken: string,
     errorMessage: string,
   ): Promise<boolean> {
-    const result = await this.db
-      .update(documents)
-      .set({
-        status: 'failed',
-        errorMessage: errorMessage.slice(0, 4000),
-        processingToken: null,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(documents.id, id),
-          eq(documents.status, 'processing'),
-          eq(documents.processingToken, processingToken),
-          eq(documents.isActive, true),
-        ),
-      )
-      .returning({ id: documents.id });
-    return result.length > 0;
+    return this.db.transaction(async (tx) => {
+      const result = await tx
+        .update(documents)
+        .set({
+          status: 'failed',
+          errorMessage: errorMessage.slice(0, 4000),
+          processingToken: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(documents.id, id),
+            eq(documents.status, 'processing'),
+            eq(documents.processingToken, processingToken),
+            eq(documents.isActive, true),
+          ),
+        )
+        .returning({ id: documents.id });
+      if (result.length === 0) return false;
+
+      // 쓸 수 없는 지식으로 해결된 질문을 다시 연다. 연결은 남겨 실패한 문서를 보여주고,
+      // 재처리가 성공하면 completeProcessing이 다시 해결 처리한다.
+      await tx
+        .update(unansweredQuestions)
+        .set({
+          status: 'open',
+          resolvedAt: null,
+          resolvedByIdpUuid: null,
+          updatedAt: sql`now()`,
+        })
+        .where(
+          and(
+            eq(unansweredQuestions.resolvedDocumentId, id),
+            eq(unansweredQuestions.status, 'resolved'),
+          ),
+        );
+      return true;
+    });
   }
 
   async listChunks(documentId: string): Promise<DocumentChunk[]> {

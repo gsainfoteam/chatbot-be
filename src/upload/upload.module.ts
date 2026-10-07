@@ -13,5 +13,6 @@ import { OrganizationsModule } from '../organizations/organizations.module';
   imports: [AuthModule, DbModule, PdfProcessorModule, OrganizationsModule],
   controllers: [UploadController, OrganizationDocumentsController],
   providers: [UploadService],
+  exports: [UploadService],
 })
 export class UploadModule {}

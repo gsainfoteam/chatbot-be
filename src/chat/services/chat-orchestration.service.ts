@@ -14,6 +14,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   FINAL_RESPONSE_SYSTEM_PROMPT,
   NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
+  ANSWER_GROUNDING_REMINDER,
+  isNoAnswerResponse,
 } from '../prompts';
 import {
   ResourceContentService,
@@ -204,7 +206,8 @@ export class ChatOrchestrationService {
         listResult.texts.join('\n') || JSON.stringify(listResult.raw, null, 2);
 
       // LLM 입력 길이가 커지면 400이 발생할 수 있어, tool 호출 컨텐츠는 하드 캡을 둡니다.
-      const MAX_TOOL_CONTENT_CHARS = 50000;
+      // 끝에 붙는 답변 규칙 리마인더 몫은 미리 뺀다.
+      const MAX_TOOL_CONTENT_CHARS = 50000 - ANSWER_GROUNDING_REMINDER.length;
       const separator = '\n\n';
       const relevantPart = relevantResult.content;
       const listPart = resultText;
@@ -250,7 +253,9 @@ export class ChatOrchestrationService {
         {
           tool_call_id: syntheticToolCallId,
           name: 'list_resources',
-          content: fullContent,
+          // 시스템 프롬프트의 금지 규칙만으로는 자료에 없는 항목을 덧붙이는 경우가 많아,
+          // 자료 바로 뒤에 규칙을 한 번 더 둔다.
+          content: fullContent + ANSWER_GROUNDING_REMINDER,
         },
       ];
 
@@ -384,6 +389,12 @@ export class ChatOrchestrationService {
         this.addTokenUsage(totalUsage, streamResult.usage);
         const usage = this.hasTokenUsage(totalUsage) ? totalUsage : undefined;
 
+        // 검색에 걸린 문서가 있어도 최종 답변이 답변 불가면 참조 문서를 숨기고 미답변으로 본다.
+        const answered =
+          referencedDocumentCount > 0 &&
+          !isNoAnswerResponse(streamResult.accumulatedContent);
+        const answerResources = answered ? resources : [];
+
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
           const answer = await this.chatService.createMessage(sessionId, {
@@ -393,7 +404,8 @@ export class ChatOrchestrationService {
               ...(options.assistantMetadata ?? {}),
               model: streamResult.model || undefined,
               usage,
-              resources: resources.length > 0 ? resources : undefined,
+              resources:
+                answerResources.length > 0 ? answerResources : undefined,
             },
           });
           answerMessageId = answer.id;
@@ -412,11 +424,11 @@ export class ChatOrchestrationService {
           }
         }
 
-        this.chatStreamTransport.writeResources(reply, resources);
+        this.chatStreamTransport.writeResources(reply, answerResources);
         this.chatStreamTransport.writeDone(reply);
 
         // 응답 종료 후 기록해 SSE 완료 시점을 늦추지 않는다.
-        if (referencedDocumentCount === 0) {
+        if (!answered) {
           await this.recordUnansweredQuestion(
             sessionId,
             userQuestion,

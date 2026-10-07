@@ -585,6 +585,48 @@ export class OrganizationsRepository {
     });
   }
 
+  /**
+   * 텍스트 지식 문서는 외부 저장소 업로드가 없으므로 바로 queued로 생성한다.
+   */
+  async createTextDocument(input: {
+    title: string;
+    resourceName: string;
+    sourceText: string;
+    ownerOrganizationId: string;
+    expiresAt: Date | null;
+    actor: AdminPrincipal;
+  }): Promise<Document> {
+    return this.db.transaction(async (tx) => {
+      await this.lockOrganizations(tx, [input.ownerOrganizationId]);
+      if (
+        !(await this.isCurrentMember(
+          tx,
+          input.ownerOrganizationId,
+          input.actor,
+        ))
+      ) {
+        throw new RepositoryAuthorizationError();
+      }
+      const [document] = await tx
+        .insert(documents)
+        .values({
+          title: input.title.normalize('NFC'),
+          resourceName: input.resourceName,
+          sourceType: 'text',
+          sourceText: input.sourceText.normalize('NFC'),
+          gcsPdfPath: null,
+          uploadedByIdpUuid: input.actor.uuid,
+          ownerOrganizationId: input.ownerOrganizationId,
+          expiresAt: input.expiresAt,
+          status: 'queued',
+          isActive: true,
+        })
+        .returning();
+      if (!document) throw new Error('Failed to insert document');
+      return document;
+    });
+  }
+
   async finalizeUploadingDocument(input: {
     documentId: string;
     expectedOwnerOrganizationId: string;

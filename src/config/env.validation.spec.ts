@@ -96,3 +96,53 @@ describe('env validation for GCS credentials', () => {
     ).toThrow(/base64/);
   });
 });
+
+describe('embedding backfill configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it.each([false, 'false', 'FALSE'])(
+    'honors the kill-switch value %s',
+    (value) => {
+      expect(
+        validate(baseEnv({ ...credentials, EMBEDDING_BACKFILL_ENABLED: value }))
+          .EMBEDDING_BACKFILL_ENABLED,
+      ).toBe(false);
+    },
+  );
+
+  it.each(['fasle', '0', 'off'])('rejects an ambiguous boolean %s', (value) => {
+    expect(() =>
+      validate(baseEnv({ ...credentials, EMBEDDING_BACKFILL_ENABLED: value })),
+    ).toThrow();
+  });
+
+  it.each([
+    { EMBEDDING_BACKFILL_BATCH_SIZE: 0 },
+    { EMBEDDING_BACKFILL_BATCH_SIZE: 65 },
+    { EMBEDDING_BACKFILL_BATCH_SIZE: 1.5 },
+    { EMBEDDING_BACKFILL_INTERVAL_MS: 999 },
+    { EMBEDDING_BACKFILL_INTERVAL_MS: 86400001 },
+    { EMBEDDING_BACKFILL_INTERVAL_MS: 'NaN' },
+  ])('rejects invalid limits %j', (settings) => {
+    expect(() => validate(baseEnv({ ...credentials, ...settings }))).toThrow();
+  });
+
+  it('accepts numeric strings and keeps the search and backfill switches independent', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        EMBEDDING_BACKFILL_ENABLED: 'true',
+        EMBEDDING_BACKFILL_BATCH_SIZE: '32',
+        EMBEDDING_BACKFILL_INTERVAL_MS: '300000',
+        EMBEDDING_RETRIEVAL_ENABLED: false,
+      }),
+    );
+    expect(result.EMBEDDING_BACKFILL_ENABLED).toBe(true);
+    expect(result.EMBEDDING_BACKFILL_BATCH_SIZE).toBe(32);
+    expect(result.EMBEDDING_BACKFILL_INTERVAL_MS).toBe(300000);
+    expect(result.EMBEDDING_RETRIEVAL_ENABLED).toBe(false);
+  });
+});

@@ -1,0 +1,1 @@
+CREATE INDEX "document_chunks_missing_embedding_idx" ON "document_chunks" USING btree ("id") WHERE "document_chunks"."embedding" IS NULL;

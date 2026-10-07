@@ -12,7 +12,9 @@ import type {
   AdminPrincipal,
   DocumentAccessDecision,
 } from './organization.types';
+import { Trace } from '@gsainfoteam/nest-observability';
 
+@Trace()
 @Injectable()
 export class OrganizationAccessService {
   constructor(private readonly organizationsRepo: OrganizationsRepository) {}

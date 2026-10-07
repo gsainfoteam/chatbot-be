@@ -16,7 +16,9 @@ import {
 } from '../common/utils/domain-validator.util';
 import { WidgetSessionRequestDto } from '../common/dto/widget-session-request.dto';
 import { WidgetSessionResponseDto } from '../common/dto/widget-session-response.dto';
+import { Trace } from '@gsainfoteam/nest-observability';
 
+@Trace()
 @Injectable()
 export class WidgetAuthService {
   constructor(

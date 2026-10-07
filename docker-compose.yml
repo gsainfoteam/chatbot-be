@@ -23,6 +23,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      secrets:
+        - npmrc
     container_name: ziggle-chatbot-app
     restart: unless-stopped
     ports:
@@ -74,6 +76,9 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       EMBEDDING_MAX_DISTANCE: ${EMBEDDING_MAX_DISTANCE:-0.70}
       EMBEDDING_RETRIEVAL_ENABLED: ${EMBEDDING_RETRIEVAL_ENABLED:-true}
+      EMBEDDING_BACKFILL_ENABLED: ${EMBEDDING_BACKFILL_ENABLED:-true}
+      EMBEDDING_BACKFILL_INTERVAL_MS: ${EMBEDDING_BACKFILL_INTERVAL_MS:-300000}
+      EMBEDDING_BACKFILL_BATCH_SIZE: ${EMBEDDING_BACKFILL_BATCH_SIZE:-64}
       # 벡터 검색(dense + exact 가점) 튜닝
       RETRIEVAL_DENSE_CANDIDATE_LIMIT: ${RETRIEVAL_DENSE_CANDIDATE_LIMIT:-20}
       RETRIEVAL_STRONG_DISTANCE: ${RETRIEVAL_STRONG_DISTANCE:-0.55}
@@ -94,3 +99,7 @@ services:
 
 volumes:
   postgres_data:
+
+secrets:
+  npmrc:
+    file: ~/.npmrc

@@ -8,6 +8,8 @@
   },
   "moduleNameMapper": {
     "^@lib/infoteam-idp$": "<rootDir>/libs/infoteam-idp/src/index.ts",
-    "^@lib/infoteam-idp/(.*)$": "<rootDir>/libs/infoteam-idp/src/$1"
+    "^@lib/infoteam-idp/(.*)$": "<rootDir>/libs/infoteam-idp/src/$1",
+    "@gsainfoteam/nest-observability": "<rootDir>/jest.mocks/nest-observability.js",
+    "@kubiks/otel-drizzle": "<rootDir>/jest.mocks/otel-drizzle.js"
   }
 }

@@ -15,6 +15,7 @@ import { DB_CONNECTION, admins, widgetKeyCollaborators } from '../db';
 import type { Database } from '../db';
 import type { Admin } from '../db';
 import { and, eq } from 'drizzle-orm';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 export interface LoginResult {
   accessToken: string;
@@ -22,6 +23,7 @@ export interface LoginResult {
   expiresIn: number;
 }
 
+@Trace()
 @Injectable()
 export class AdminAuthService {
   private readonly logger = new Logger(AdminAuthService.name);

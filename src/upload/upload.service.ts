@@ -34,6 +34,7 @@ import type {
   ListAccessibleDocumentsQueryDto,
 } from './dto/list-accessible-documents.dto';
 import { isUUID } from 'class-validator';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -56,6 +57,7 @@ export function parseExpiresAt(raw?: string | null): Date | null {
   return parsed;
 }
 
+@Trace()
 @Injectable()
 export class UploadService {
   private readonly logger = new Logger(UploadService.name);

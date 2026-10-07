@@ -20,7 +20,9 @@ import { RegisterAppIdDto } from '../common/dto/register-app-id.dto';
 import { InviteCollaboratorDto } from '../common/dto/invite-collaborator.dto';
 import { WidgetKeyDto, WidgetKeyStatus } from '../common/dto/widget-key.dto';
 import { CollaboratorDto } from '../common/dto/collaborator.dto';
+import { Trace } from '@gsainfoteam/nest-observability';
 
+@Trace()
 @Injectable()
 export class AdminService {
   constructor(@Inject(DB_CONNECTION) private db: Database) {}

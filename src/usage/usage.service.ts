@@ -16,6 +16,7 @@ import {
   UsageDataDto,
   DomainStatDto,
 } from '../common/dto/widget-key-usage.dto';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 /**
  * usage_daily에 쓰기 작업을 수행할 실행자(전체 DB 또는 트랜잭션).
@@ -96,6 +97,7 @@ function toUtcDateString(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+@Trace()
 @Injectable()
 export class UsageService {
   private readonly logger = new Logger(UsageService.name);

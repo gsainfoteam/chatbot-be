@@ -7,13 +7,13 @@ FROM base AS install
 RUN mkdir -p /temp/dev
 COPY package.json bun.lock /temp/dev/
 COPY patches /temp/dev/patches/
-RUN cd /temp/dev && bun install --frozen-lockfile
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc cd /temp/dev && bun install --frozen-lockfile
 
 # 프로덕션 의존성만 설치 (postinstall에서 patch-package가 patches/ 적용)
 RUN mkdir -p /temp/prod
 COPY package.json bun.lock /temp/prod/
 COPY patches /temp/prod/patches/
-RUN cd /temp/prod && bun install --frozen-lockfile --production
+RUN --mount=type=secret,id=npmrc,target=/root/.npmrc cd /temp/prod && bun install --frozen-lockfile --production
 
 # 빌드 단계
 FROM base AS build

@@ -7,6 +7,7 @@ import {
   needsTlsVerificationWarning,
   TLS_VERIFICATION_WARNING,
 } from './ssl-options';
+import { instrumentDrizzleClient } from '@kubiks/otel-drizzle';
 
 // Database connection token
 export const DB_CONNECTION = Symbol('DB_CONNECTION');
@@ -110,7 +111,9 @@ export const createDatabaseConnection = (params: DatabaseConnectionParams) => {
     password: params.password,
     ...options,
   });
-  return drizzle(client, { schema });
+  const db = drizzle(client, { schema });
+  instrumentDrizzleClient(db);
+  return db;
 };
 
 // Run migrations with SSL options

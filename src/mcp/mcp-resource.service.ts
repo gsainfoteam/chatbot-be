@@ -10,11 +10,13 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { catchError } from 'rxjs/operators';
 import { AxiosError } from 'axios';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 /**
  * MCP 리소스 서비스
  * MCP 서버의 리소스 API를 프록시하여 제공합니다.
  */
+@Trace()
 @Injectable()
 export class McpResourceService {
   private readonly logger = new Logger(McpResourceService.name);

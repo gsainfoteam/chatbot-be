@@ -28,6 +28,7 @@ import {
   MessageFeedbackInputDto,
 } from '../../common/dto/message-feedback.dto';
 import { MAX_QUESTIONS_PER_SESSION } from '../constants';
+import { Trace } from '@gsainfoteam/nest-observability';
 
 export interface AnswerRegenerationTarget {
   question: string;
@@ -35,6 +36,7 @@ export interface AnswerRegenerationTarget {
   historyBefore: Date;
 }
 
+@Trace()
 @Injectable()
 export class ChatService {
   constructor(

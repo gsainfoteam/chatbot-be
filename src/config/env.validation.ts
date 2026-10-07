@@ -1,4 +1,8 @@
-import { plainToInstance, Transform } from 'class-transformer';
+import {
+  plainToInstance,
+  Transform,
+  type TransformFnParams,
+} from 'class-transformer';
 import {
   IsString,
   IsNumber,
@@ -6,6 +10,7 @@ import {
   IsEnum,
   IsNotEmpty,
   IsOptional,
+  IsInt,
   IsBase64,
   Min,
   Max,
@@ -32,7 +37,10 @@ enum LlmProvider {
  * 미설정(undefined/빈 문자열)은 기존 동작을 유지하기 위해 기본값을 사용합니다.
  */
 function parseBooleanEnv(defaultValue: boolean) {
-  return ({ value }: { value: unknown }): unknown => {
+  return ({ obj, key }: TransformFnParams): unknown => {
+    // Implicit conversion runs before @Transform and turns "false" into true.
+    // Parse the original environment value instead of the converted boolean.
+    const value: unknown = (obj as Record<string, unknown>)[key];
     if (typeof value === 'boolean') return value;
     if (value === undefined || value === null || value === '') {
       return defaultValue;
@@ -186,6 +194,24 @@ export class EnvironmentVariables {
   @IsBoolean()
   @Transform(parseBooleanEnv(true))
   EMBEDDING_RETRIEVAL_ENABLED?: boolean;
+
+  /** Background repair, independent of the vector retrieval switch. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(true))
+  EMBEDDING_BACKFILL_ENABLED?: boolean;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(86400000)
+  EMBEDDING_BACKFILL_INTERVAL_MS?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(64)
+  EMBEDDING_BACKFILL_BATCH_SIZE?: number;
 
   // 벡터 검색(dense + exact 가점) 튜닝
   // 기본값은 src/retrieval/retrieval.constants.ts 참고.

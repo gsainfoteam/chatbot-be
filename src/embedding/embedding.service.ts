@@ -83,7 +83,7 @@ export class EmbeddingService {
   /**
    * 입력 순서대로 임베딩 벡터를 반환합니다. 비활성화/실패 시 throw.
    */
-  async embedTexts(texts: string[]): Promise<number[][]> {
+  async embedTexts(texts: string[], signal?: AbortSignal): Promise<number[][]> {
     if (!this.isEnabled()) {
       throw new Error('Embedding API is not configured');
     }
@@ -100,6 +100,7 @@ export class EmbeddingService {
               'Content-Type': 'application/json',
             },
             timeout: this.timeoutMs,
+            signal,
             // 리디렉션을 따라가지 않습니다. base URL이 HTTPS여도 서버가 307/308로
             // HTTP에 넘기면 Bearer 토큰과 질의 본문이 평문으로 재전송됩니다.
             maxRedirects: 0,

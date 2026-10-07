@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { EmbeddingBackfillModule } from './embedding/backfill/embedding-backfill.module';
 import { ConfigModule } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -30,6 +31,7 @@ import { UnansweredQuestionsAdminModule } from './unanswered-questions/unanswere
     PdfProcessorModule,
     OrganizationsModule,
     UploadModule,
+    EmbeddingBackfillModule,
     UnansweredQuestionsAdminModule,
   ],
   controllers: [AppController],

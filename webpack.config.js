@@ -12,6 +12,10 @@ module.exports = function (options, webpackInstance) {
     entry: {
       main: path.resolve(__dirname, 'src/main.ts'),
       instrumentation: path.resolve(__dirname, 'src/instrumentation.mts'),
+      'backfill-chunk-embeddings': path.resolve(
+        __dirname,
+        'src/scripts/backfill-chunk-embeddings.ts',
+      ),
     },
     output: {
       filename: '[name].js',

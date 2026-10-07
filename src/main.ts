@@ -7,6 +7,7 @@ import { ValidationPipe, BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
+import { EmbeddingBackfillWorker } from './embedding/backfill/embedding-backfill.worker';
 import {
   initializeMetrics,
   MetricsInterceptor,
@@ -148,7 +149,9 @@ async function bootstrap() {
 
   app.useGlobalInterceptors(new MetricsInterceptor());
 
+  app.enableShutdownHooks();
   await app.listen(port, '0.0.0.0');
+  app.get(EmbeddingBackfillWorker).start();
   console.log(`Application is running on: http://localhost:${port}`);
   console.log(`Swagger documentation: http://localhost:${port}/api/docs`);
 }

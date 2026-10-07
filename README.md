@@ -321,3 +321,76 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 ## License
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+
+## 저장된 chunk 임베딩 자동 복구
+
+앱은 DB 마이그레이션과 HTTP 서버 시작이 끝난 뒤, 임베딩이 없는
+`document_chunks`를 백그라운드에서 복구합니다. 기존 문서의 초기 백필과
+업로드 중 API 장애로 누락된 임베딩을 같은 워커가 처리합니다.
+임베딩 작업이나 API 장애는 HTTP 서버 시작을 막지 않습니다.
+
+| 환경 변수 | 기본값 | 설명 |
+| --- | --- | --- |
+| `EMBEDDING_BACKFILL_ENABLED` | `true` | 자동 복구 활성화. 검색 설정과 독립적입니다. |
+| `EMBEDDING_BACKFILL_INTERVAL_MS` | `300000` | 한 번의 작업이 끝난 뒤 다음 확인까지 대기 시간. 1초~24시간. |
+| `EMBEDDING_BACKFILL_BATCH_SIZE` | `64` | DB 조회 및 API 요청 배치 크기. 정수 1~64. |
+
+앱과 같은 DB 설정 및 Letsur 또는 OpenRouter의 URL/API 키 쌍을 사용합니다.
+임베딩 설정이 없거나 사용할 수 없는 URL이면 자동 워커는 비활성화됩니다.
+기본 모델은 `text-embedding-3-large`이고, 현재 DB는 3072차원입니다.
+검색을 끄는 `EMBEDDING_RETRIEVAL_ENABLED=false`는 백필을 끄지 않습니다.
+
+각 실행은 전용 DB 연결의 advisory lock을 얻은 경우에만 진행합니다.
+여러 Pod와 수동 CLI 사이에서도 한 실행자만 백필하며, 다른 실행자는
+대기하지 않고 건너뜁니다. 연결이 끊기면 작업도 중단합니다.
+API 요청 동안 DB 트랜잭션이나 행 잠금을 유지하지 않습니다.
+
+대상은 ID 순서로 제한된 크기만 읽고, 배치별로 저장합니다.
+조회 후 chunk 내용이나 문서 제목이 변경되거나 chunk가 삭제되면 해당 결과는
+저장하지 않습니다. 기본 실행은 이미 생성된 임베딩을 덮어쓰지 않습니다.
+작업 도중 추가된 chunk는 다음 실행에서 처리될 수 있습니다.
+
+입력 오류(413/422 및 입력 관련 코드가 있는 400)는 배치를 나눠 실패한 chunk를
+분리합니다. 다른 입력은 계속 처리하고, 실패한 chunk는 다음 실행에서 재시도합니다.
+인증·모델 설정 오류, 429, 서버 장애 등은 현재 실행을 중단하고 대기 시간을
+두 배씩 늘립니다(최대 1시간, 설정 간격이 더 길면 그 간격).
+복구 후에는 기본 간격으로 돌아갑니다.
+성공한 배치는 유지되지만 API 응답 후 DB 저장 전에 중단된 배치는 재호출될 수 있습니다.
+
+로그의 `Embedding backfill progress`와 `Embedding backfill complete`에서
+조회(`selected`), 저장(`saved`), 입력 실패(`failed`) 건수와 실행 시간을 확인할 수 있습니다.
+SIGTERM/SIGINT 또는 앱 종료 시 새 배치를 중단하고 진행 중 API 요청을 취소합니다.
+
+수동 복구도 동일한 처리 로직과 잠금을 사용합니다. 앱의 마이그레이션이 완료된 뒤 실행하세요.
+
+```bash
+# 소스 체크아웃에서 실행
+bun run db:backfill:embeddings
+
+# 배포 이미지에서 실행 (development의 Webpack 빌드 결과)
+kubectl exec -n <namespace> <app-pod> -- bun /app/dist/backfill-chunk-embeddings.js
+
+# Docker Compose
+docker compose exec app bun run db:backfill:embeddings:prod
+
+# 기존 임베딩까지 전체 재생성: 명시적인 운영 작업으로만 실행
+bun run db:backfill:embeddings --all
+```
+
+다른 백필이 실행 중이거나 복구하지 못한 입력이 남으면 수동 CLI는 실패 코드로 종료합니다.
+모델 변경 시 동일 차원이더라도 기존 벡터와 새 모델 벡터가 섞이지 않도록 자동 워커를 끄고
+전체 재임베딩을 별도로 진행하세요. 차원이 달라지면 먼저 스키마 변경이 필요합니다.
+
+실제 DB 검증은 **빈 테스트 전용 DB**에서 실행합니다. DB 이름은 `_test`로 끝나야 합니다.
+외부 임베딩 API를 호출하지 않으며, 고정 벡터로 마이그레이션·잠금·동시 수정 보호를 확인합니다.
+
+```bash
+bun run build
+EMBEDDING_BACKFILL_TEST_DB=true DB_NAME=embedding_backfill_test \
+  bun run test:e2e --runInBand test/embedding-backfill-database.e2e-spec.ts
+```
+
+자동 임베딩 복구는 앱이 연결한 DB만 처리합니다. 브랜치별 배포 설정은 유지합니다.
+`development` push는 `staging.yml`에서 `dev` 이미지를 만들고 `values.stg.yaml`을 갱신하며,
+`v*` 태그는 `production.yml`에서 `prod` 이미지를 만들고 `values.prod.yaml`을 갱신합니다.
+최신 기능 코드 동기화 시에도 배포 목적지·인증·관측 설정을 일괄 덮어쓰지 않습니다.

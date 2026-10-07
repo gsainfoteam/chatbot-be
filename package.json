@@ -31,7 +31,8 @@
     "db:backfill:answers": "bun src/scripts/backfill-usage-answers.ts",
     "db:backfill:embeddings": "bun src/scripts/backfill-chunk-embeddings.ts",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:backfill:embeddings:prod": "bun dist/backfill-chunk-embeddings.js"
   },
   "dependencies": {
     "@fastify/multipart": "^9.0.1",

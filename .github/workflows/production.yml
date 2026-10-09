@@ -78,19 +78,19 @@ jobs:
           IMAGE_TAG: ${{ env.IMAGE_TAG }}
         run: |
           echo "Updating image to: $REGISTRY/$REPOSITORY:$IMAGE_TAG"
-          ls -la infoteam/service/chatbot/
+          ls -la infoteam/service-v2/chatbot/
           echo "Before sed:"
-          cat infoteam/service/chatbot/values.prod.yaml | grep "tag:"
-          sed -i "s|tag: .*|tag: $IMAGE_TAG|g" infoteam/service/chatbot/values.prod.yaml
+          cat infoteam/service-v2/chatbot/prod/values.yaml | grep "tag:"
+          sed -i "s|tag: .*|tag: $IMAGE_TAG|g" infoteam/service-v2/chatbot/prod/values.yaml
           echo "After sed:"
-          cat infoteam/service/chatbot/values.prod.yaml | grep "tag:"
-          git diff infoteam/service/chatbot/values.prod.yaml
+          cat infoteam/service-v2/chatbot/prod/values.yaml | grep "tag:"
+          git diff infoteam/service-v2/chatbot/prod/values.yaml
 
       - name: Commit and Push
         run: |
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global user.name "GitHub Actions"
-          git add infoteam/service/chatbot/values.prod.yaml
+          git add infoteam/service-v2/chatbot/prod/values.yaml
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else

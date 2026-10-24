@@ -5,6 +5,10 @@
   "author": "",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "bun": ">=1.4.4",
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
+  },
   "imports": {
     "@lib/infoteam-idp": "./dist/libs/infoteam-idp/index.js",
     "@lib/infoteam-idp/*": "./dist/libs/infoteam-idp/*.js"
@@ -19,6 +23,7 @@
     "start:prod": "node --import ./dist/instrumentation.js ./dist/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
+    "test:runtime": "node scripts/check-brotli-runtime.cjs",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",

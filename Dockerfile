@@ -1,4 +1,4 @@
-# Bun 1.4.4 includes the Brotli fix for CVE-2026-111497.
+# Bun을 사용하는 Dockerfile
 FROM oven/bun:1.4.4 AS base
 WORKDIR /app
 COPY scripts/check-brotli-runtime.cjs scripts/check-brotli-runtime.cjs

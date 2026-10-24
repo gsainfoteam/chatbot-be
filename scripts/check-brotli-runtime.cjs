@@ -5,13 +5,12 @@ const {
   brotliDecompressSync,
 } = require('node:zlib');
 
-// The CVE-2026-111497 fix introduces this permanent block-switch error.
+// Require a decoder that supports permanent block-switch errors.
 // Check before decoding anything, so this check is safe on old runtimes too.
-// https://github.com/oven-sh/bun/security/advisories/GHSA-663w-cv8g-jj2p
 assert.equal(
   constants.BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH,
   -17,
-  'CVE-2026-111497: upgrade to Bun >=1.4.4 or a patched Node.js release (see README)',
+  'Unsupported Brotli decoder: use the runtime versions specified in package.json',
 );
 
 const payload = Buffer.from('chatbot-be Brotli runtime smoke test');

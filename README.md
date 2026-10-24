@@ -27,15 +27,12 @@
 
 ## Tech Stack
 
-- **Runtime**: Bun 1.4.4 이상 (Docker), Node.js 22.23.4 (로컬 실행 스크립트)
+- **Runtime**: Bun
 - **Framework**: NestJS + Fastify
 - **Database**: PostgreSQL
 - **ORM**: Drizzle ORM
 
 ## Project setup
-
-`.bun-version`의 Bun 1.4.4와 `.nvmrc`의 Node.js 22.23.4를 사용하세요.
-Node.js는 `nvm install && nvm use`로 맞출 수 있습니다.
 
 ```bash
 # 패키지 설치
@@ -45,24 +42,6 @@ $ bun install
 $ cp .env.example .env
 # .env 파일을 열어서 데이터베이스 정보를 입력하세요
 ```
-
-### CVE-2026-111497 런타임 패치
-
-Brotli 디코더의 메모리 손상 취약점으로, 외부 서버가 보낸 압축 응답을
-`fetch`나 Axios 등이 해제할 때도 영향을 받을 수 있습니다. npm 패키지 업데이트만으로는
-해결되지 않으며 런타임을 업데이트해야 합니다.
-
-- Docker의 모든 단계는 패치된 `oven/bun:1.4.4`를 사용합니다.
-- 로컬의 `start`, `start:dev`, `start:prod` 및 Jest는 Node.js를 사용합니다.
-  지원 버전은 Node.js 22.23.4+, 24.22.1+, 26.12.1+의 각 메이저 릴리스입니다.
-- `bun run test:runtime`으로 PATH의 Node.js를, `bun scripts/check-brotli-runtime.cjs`로
-  Bun을 확인할 수 있습니다. 검사는 패치에 추가된 오류 상수와 정상 압축 해제를 확인합니다.
-  Docker 빌드에서도 Bun과 `node` fallback을 모두 검사하며, 미패치 런타임이면 실패합니다.
-- 기존 컨테이너에는 자동 적용되지 않습니다. 새 이미지로 빌드하고 재배포해야 합니다.
-  `development` 병합은 staging 배포를 트리거하며, production은 기존 `v*` 태그 배포 절차를 따릅니다.
-
-공식 권고: [Bun GHSA-663w-cv8g-jj2p](https://github.com/oven-sh/bun/security/advisories/GHSA-663w-cv8g-jj2p),
-[Node.js October 2026 security releases](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases).
 
 ## Patched dependencies
 

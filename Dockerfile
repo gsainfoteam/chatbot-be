@@ -1,6 +1,9 @@
 # Bun을 사용하는 Dockerfile
-FROM oven/bun:1 AS base
+FROM oven/bun:1.4.4 AS base
 WORKDIR /app
+COPY scripts/check-brotli-runtime.cjs scripts/check-brotli-runtime.cjs
+# Check both Bun and the node fallback used by start:prod before installing packages.
+RUN bun scripts/check-brotli-runtime.cjs && node scripts/check-brotli-runtime.cjs
 
 # 의존성 설치 단계 (postinstall에서 patch-package가 patches/ 적용)
 FROM base AS install

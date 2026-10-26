@@ -30,6 +30,12 @@ enum LlmProvider {
   OpenRouter = 'openrouter',
 }
 
+enum AgentModelTier {
+  Light = 'light',
+  Normal = 'normal',
+  Heavy = 'heavy',
+}
+
 /**
  * "true"/"false"만 불리언으로 변환하고, 그 외 값은 문자열 그대로 남깁니다.
  * 남은 문자열은 `@IsBoolean()`이 거부하므로 `fasle`·`0`·`off` 같은 오타가
@@ -236,6 +242,33 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(10)
   RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT?: number;
+
+  // 에이전트(ReAct) 답변 경로. 기본값은 src/chat/agent/agent.config.ts 참고.
+
+  /** 첫 검색이 비거나 약할 때 에이전트 재탐색을 쓸지. 기본 false. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  AGENT_ENABLED?: boolean;
+
+  /** 에이전트 도구 호출 라운드 상한. 기본 3. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(6)
+  AGENT_MAX_ROUNDS?: number;
+
+  /** 에이전트 재탐색 전체 시간 예산(ms). 넘으면 모은 자료로 답한다. 기본 20000. */
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(120000)
+  AGENT_TIME_BUDGET_MS?: number;
+
+  /** 도구를 고르는 라운드에 쓸 모델 티어. 기본 normal. */
+  @IsOptional()
+  @IsEnum(AgentModelTier)
+  AGENT_MODEL_TIER?: AgentModelTier;
 
   // Client Domain Configuration
   @IsString()

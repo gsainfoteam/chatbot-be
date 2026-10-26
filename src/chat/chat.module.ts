@@ -15,6 +15,8 @@ import { UsageModule } from '../usage/usage.module';
 import { UnansweredQuestionsModule } from '../unanswered-questions/unanswered-questions.module';
 import { LLM_CLIENT } from './llm/llm-client.interface';
 import { llmClientProvider } from './llm/llm-client.provider';
+import { AgentLoopService } from './agent/agent-loop.service';
+import { SearchDocumentsTool } from './agent/tools/search-documents.tool';
 
 @Module({
   imports: [
@@ -34,6 +36,8 @@ import { llmClientProvider } from './llm/llm-client.provider';
     VectorChunkSelectionService,
     ResourceContentService,
     ChatStreamTransport,
+    SearchDocumentsTool,
+    AgentLoopService,
     ChatOrchestrationService,
   ],
   exports: [LLM_CLIENT],

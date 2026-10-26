@@ -3,6 +3,7 @@ import { AgentLoopService, type AgentRunInput } from './agent-loop.service';
 import type { AgentStep, AgentToolResult } from './agent.types';
 import type { LlmMessage, LlmResponse, LlmToolCall } from '../types/llm.types';
 import type { ListResourcesResult } from '../../retrieval/retrieval.types';
+import { SearchDocumentsTool } from './tools/search-documents.tool';
 
 const CATALOG: ListResourcesResult = {
   raw: {},
@@ -97,6 +98,7 @@ function setup(
       },
     },
     execute,
+    describeStep: SearchDocumentsTool.prototype.describeStep,
   };
 
   const service = new AgentLoopService(
@@ -256,21 +258,109 @@ describe('AgentLoopService', () => {
     expect(result.usedResources).toHaveLength(1);
   });
 
-  it('reports tool progress with the reason the model gave', async () => {
+  it('reports each search with a server label and the model reason as thought', async () => {
     const steps: AgentStep[] = [];
     const { run } = setup([
-      response([toolCall('a', '졸업 요건', '졸업 요건을 찾아볼게요')]),
+      response([toolCall('a', '졸업 요건', '졸업 요건을 먼저 확인해 볼게요')]),
     ]);
+
+    await run({ onStep: (step) => steps.push(step) });
+
+    const searchSteps = steps.filter(
+      (step) => step.kind === 'search_documents',
+    );
+    expect(searchSteps).toEqual([
+      expect.objectContaining({
+        status: 'running',
+        label: "'졸업 요건' 문서를 찾고 있어요",
+        thought: '졸업 요건을 먼저 확인해 볼게요',
+      }),
+      expect.objectContaining({
+        status: 'done',
+        label: "'졸업 요건' 관련 문서 1개를 찾았어요",
+        resultCount: 1,
+      }),
+    ]);
+  });
+
+  it('wraps the research in a step that opens first and closes last', async () => {
+    const steps: AgentStep[] = [];
+    const { run } = setup([response([toolCall('a', '졸업 요건')])]);
 
     const result = await run({ onStep: (step) => steps.push(step) });
 
-    expect(steps.map((step) => step.status)).toEqual(['running', 'done']);
-    expect(steps[1]).toMatchObject({
-      kind: 'search_documents',
-      label: '졸업 요건을 찾아볼게요',
+    expect(steps[0]).toMatchObject({ kind: 'research', status: 'running' });
+    expect(steps.at(-1)).toMatchObject({
+      kind: 'research',
+      status: 'done',
+      label: '자료 1개를 모았어요',
       resultCount: 1,
     });
-    expect(result.steps).toEqual([steps[1]]);
+    // 저장용 결과에는 단계마다 최종 상태 하나만 남는다.
+    expect(result.steps.map((step) => [step.kind, step.status])).toEqual([
+      ['research', 'done'],
+      ['search_documents', 'done'],
+    ]);
+  });
+
+  it('says nothing was found when the research ends empty-handed', async () => {
+    const steps: AgentStep[] = [];
+    const { run } = setup([response([toolCall('a', '학식')])], {
+      search: async () => ({ content: '없음', resultCount: 0 }),
+    });
+
+    await run({ onStep: (step) => steps.push(step) });
+
+    expect(steps.at(-1)).toMatchObject({
+      kind: 'research',
+      label: '관련 자료를 찾지 못했어요',
+    });
+    expect(
+      steps.find(
+        (step) => step.kind === 'search_documents' && step.status === 'done',
+      )?.label,
+    ).toBe("'학식'으로는 문서를 찾지 못했어요");
+  });
+
+  it('stops once a round adds no new documents to what it already has', async () => {
+    const { run, callLLM } = setup(
+      [
+        response([toolCall('a', '졸업')]),
+        response([toolCall('b', '학위 수여')]),
+        response([toolCall('c', '졸업 요건')]),
+      ],
+      {
+        search: async () => ({
+          content: '같은 문서',
+          resultCount: 1,
+          documents: [{ path: '학사편람/졸업', content: '본문' }],
+          usedResources: [],
+        }),
+      },
+    );
+
+    const result = await run();
+
+    expect(callLLM).toHaveBeenCalledTimes(2);
+    expect(result.stopReason).toBe('no-progress');
+  });
+
+  it('keeps rephrasing while nothing has been found yet', async () => {
+    const { run, callLLM } = setup(
+      [
+        response([toolCall('a', '학식')]),
+        response([toolCall('b', '식당 메뉴')]),
+      ],
+      {
+        config: { AGENT_MAX_ROUNDS: 2 },
+        search: async () => ({ content: '없음', resultCount: 0 }),
+      },
+    );
+
+    const result = await run();
+
+    expect(callLLM).toHaveBeenCalledTimes(2);
+    expect(result.stopReason).toBe('max-rounds');
   });
 
   it('turns a failing tool into a tool message instead of throwing', async () => {
@@ -283,7 +373,12 @@ describe('AgentLoopService', () => {
 
     const result = await run({ onStep: (step) => steps.push(step) });
 
-    expect(steps.at(-1)?.status).toBe('failed');
+    expect(
+      steps.filter((step) => step.kind === 'search_documents').at(-1),
+    ).toMatchObject({
+      status: 'failed',
+      label: "'졸업' 문서 검색에 실패했어요",
+    });
     expect(result.documents).toEqual([]);
     const secondRound = callLLM.mock.calls[1][0] as LlmMessage[];
     expect(secondRound.at(-1)?.content).toContain('오류');

@@ -23,7 +23,8 @@ export class ChatMessageDto {
   content: string;
 
   @ApiPropertyOptional({
-    description: '토큰 사용량 등 부가 정보',
+    description:
+      '토큰 사용량(usage), 참조 문서(resources), 에이전트 진행 단계(steps) 등 부가 정보',
     example: { tokens: 150, model: 'gpt-4' },
   })
   metadata?: Record<string, any>;

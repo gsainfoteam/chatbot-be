@@ -28,12 +28,15 @@ import { Trace } from '@gsainfoteam/nest-observability';
 import { UnansweredQuestionsRepository } from '../../unanswered-questions/unanswered-questions.repository';
 import { AgentLoopService } from '../agent/agent-loop.service';
 import { decideAnswerRoute } from '../agent/answer-route';
+import type { AgentStep } from '../agent/agent.types';
 
 export type { ResourceInfo };
 
 interface ProcessUserQuestionStreamOptions {
   persistUserMessage?: boolean;
   historyBefore?: Date;
+  /** 에이전트 재탐색 진행 단계를 받는다. 빠른 경로에서는 호출되지 않는다. */
+  onStep?: (step: AgentStep) => void;
 }
 
 interface StreamingResponseOptions extends ProcessUserQuestionStreamOptions {
@@ -139,9 +142,12 @@ export class ChatOrchestrationService {
     historyMessages: LlmMessage[],
     listResult: Awaited<ReturnType<RetrievalService['listCatalog']>>,
     usage: LlmUsage,
+    onStep?: (step: AgentStep) => void,
   ): Promise<{
     content: string;
     usedResources: Array<{ path: string; formats: string[] }>;
+    /** 에이전트가 거친 단계의 최종 상태. 빠른 경로면 비어 있다. */
+    steps: AgentStep[];
   }> {
     let t0 = Date.now();
     const initial =
@@ -160,9 +166,14 @@ export class ChatOrchestrationService {
       confident: initial.confident,
     });
     this.logger.log(`[DEBUG] answer route: ${route} (${reason})`);
-    if (route === 'direct') return initial;
+    if (route === 'direct') return { ...initial, steps: [] };
 
     t0 = Date.now();
+    const steps = new Map<string, AgentStep>();
+    const recordStep = (step: AgentStep) => {
+      steps.set(step.id, step);
+      onStep?.(step);
+    };
     try {
       const agentResult = await this.agentLoopService.run({
         question: userQuestion,
@@ -173,6 +184,7 @@ export class ChatOrchestrationService {
           documents: initial.documents,
           usedResources: initial.usedResources,
         },
+        onStep: recordStep,
       });
       this.logger.log(`[PERF] agent research: ${Date.now() - t0}ms`);
       return {
@@ -180,6 +192,7 @@ export class ChatOrchestrationService {
           .map((doc) => formatRelevantDocument(doc.content))
           .join('\n'),
         usedResources: agentResult.usedResources,
+        steps: agentResult.steps,
       };
     } catch (error) {
       this.logger.warn(
@@ -187,7 +200,13 @@ export class ChatOrchestrationService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return initial;
+      // FE에 진행 중으로 남은 단계가 없도록 실패로 닫는다.
+      for (const step of [...steps.values()]) {
+        if (step.status === 'running') {
+          recordStep({ ...step, status: 'failed' });
+        }
+      }
+      return { ...initial, steps: [...steps.values()] };
     }
   }
 
@@ -204,6 +223,8 @@ export class ChatOrchestrationService {
     /** 답변 근거로 사용한 문서(chunk) 수. FE 참조 목록 노출 여부와 무관하다. */
     referencedDocumentCount: number;
     usage: LlmUsage;
+    /** 에이전트 재탐색 단계. 빠른 경로면 비어 있다. */
+    steps: AgentStep[];
   }> {
     const perfTurnStart = Date.now();
     const usage = this.createEmptyUsage();
@@ -245,7 +266,13 @@ export class ChatOrchestrationService {
           historyMessages,
           userQuestion,
         );
-        return { stream, resources: [], referencedDocumentCount: 0, usage };
+        return {
+          stream,
+          resources: [],
+          referencedDocumentCount: 0,
+          usage,
+          steps: [],
+        };
       }
 
       const relevantResult = await this.gatherRelevantContent(
@@ -253,6 +280,7 @@ export class ChatOrchestrationService {
         historyMessages,
         listResult,
         usage,
+        options.onStep,
       );
 
       const hasContent =
@@ -265,7 +293,13 @@ export class ChatOrchestrationService {
           historyMessages,
           userQuestion,
         );
-        return { stream, resources: [], referencedDocumentCount: 0, usage };
+        return {
+          stream,
+          resources: [],
+          referencedDocumentCount: 0,
+          usage,
+          steps: relevantResult.steps,
+        };
       }
 
       const resultText =
@@ -398,6 +432,7 @@ export class ChatOrchestrationService {
         resources: allResources,
         referencedDocumentCount: relevantResult.usedResources.length,
         usage,
+        steps: relevantResult.steps,
       };
     } catch (error) {
       const errorMessage =
@@ -430,9 +465,11 @@ export class ChatOrchestrationService {
         resources,
         referencedDocumentCount,
         usage: reasoningUsage,
+        steps,
       } = await this.processUserQuestionStream(sessionId, userQuestion, {
         persistUserMessage: options.persistUserMessage,
         historyBefore: options.historyBefore,
+        onStep: (step) => this.chatStreamTransport.writeStep(reply, step),
       });
 
       let streamResult: {
@@ -472,6 +509,8 @@ export class ChatOrchestrationService {
               usage,
               resources:
                 answerResources.length > 0 ? answerResources : undefined,
+              // 히스토리에서도 진행 과정을 다시 보여줄 수 있게 최종 상태를 남긴다.
+              steps: steps.length > 0 ? steps : undefined,
             },
           });
           answerMessageId = answer.id;

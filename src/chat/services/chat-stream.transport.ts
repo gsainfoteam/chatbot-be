@@ -4,6 +4,18 @@ import type { Readable } from 'stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { LlmUsage } from '../types/llm.types';
 import type { ResourceInfo } from './resource-content.service';
+import type { AgentStep } from '../agent/agent.types';
+
+/** SSE `step` 이벤트 페이로드 */
+export type StepEvent = {
+  type: 'step';
+  id: string;
+  kind: string;
+  label: string;
+  status: AgentStep['status'];
+  thought?: string;
+  resultCount?: number;
+};
 
 export type StreamConsumeResult = {
   accumulatedContent: string;
@@ -146,6 +158,31 @@ export class ChatStreamTransport {
         resolve({ accumulatedContent, model, usage });
       });
     });
+  }
+
+  /**
+   * 에이전트 진행 단계 이벤트. 기존 클라이언트는 `content`·`error`가 없는 이벤트를 무시하므로
+   * 두 키를 절대 넣지 않는다.
+   */
+  writeStep(reply: FastifyReply, step: AgentStep): void {
+    if (reply.raw.writableEnded) return;
+    const event: StepEvent = {
+      type: 'step',
+      id: step.id,
+      kind: step.kind,
+      label: step.label,
+      status: step.status,
+      ...(step.thought ? { thought: step.thought } : {}),
+      ...(step.resultCount != null ? { resultCount: step.resultCount } : {}),
+    };
+    try {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    } catch (error) {
+      // 단계 표시는 부가 정보라 실패해도 답변 생성을 멈추지 않는다.
+      this.logger.warn(
+        `SSE step write failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   writeResources(reply: FastifyReply, resources: ResourceInfo[]): void {

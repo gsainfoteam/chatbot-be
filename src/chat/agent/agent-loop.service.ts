@@ -6,14 +6,15 @@ import type { ListResourcesResult } from '../../retrieval/retrieval.types';
 import { normalizeForMatch } from '../../retrieval/query-signals';
 import { buildAgentResearchPrompt, formatSeoulDate } from '../prompts';
 import { readAgentConfig, type AgentConfig } from './agent.config';
-import type {
-  AgentDocument,
-  AgentRunResult,
-  AgentStep,
-  AgentStopReason,
-  AgentTool,
-  AgentToolContext,
-  UsedResource,
+import {
+  RESEARCH_STEP_KIND,
+  type AgentDocument,
+  type AgentRunResult,
+  type AgentStep,
+  type AgentStopReason,
+  type AgentTool,
+  type AgentToolContext,
+  type UsedResource,
 } from './agent.types';
 import {
   SEARCH_DOCUMENTS_TOOL_NAME,
@@ -75,6 +76,13 @@ export class AgentLoopService {
       steps.set(step.id, step);
       input.onStep?.(step);
     };
+    const researchStep: AgentStep = {
+      id: RESEARCH_STEP_KIND,
+      kind: RESEARCH_STEP_KIND,
+      label: '자료를 더 찾아보고 있어요',
+      status: 'running',
+    };
+    emit(researchStep);
 
     const messages: LlmMessage[] = [
       {
@@ -186,6 +194,7 @@ export class AgentLoopService {
         ),
       );
 
+      const collectedBefore = collected.size();
       toolCalls.forEach((call, index) => {
         const result = results[index];
         const content = typeof result === 'string' ? result : result.content;
@@ -199,7 +208,25 @@ export class AgentLoopService {
           content,
         });
       });
+
+      // 이미 자료가 있는데 이번 라운드에 새 문서가 없으면 더 돌아도 같은 결과일 가능성이 높다.
+      // 자료가 하나도 없을 때는 검색어를 바꿔 보는 것이 이 루프의 목적이므로 계속한다.
+      if (collectedBefore > 0 && collected.size() === collectedBefore) {
+        stopReason = 'no-progress';
+        break;
+      }
     }
+
+    const documentCount = collected.size();
+    emit({
+      ...researchStep,
+      status: 'done',
+      label:
+        documentCount > 0
+          ? `자료 ${documentCount}개를 모았어요`
+          : '관련 자료를 찾지 못했어요',
+      resultCount: documentCount,
+    });
 
     const result: AgentRunResult = {
       documents: collected.documents(),
@@ -210,7 +237,7 @@ export class AgentLoopService {
     };
     this.logger.log(
       `[PERF] agent loop: ${Date.now() - startedAt}ms, rounds=${rounds}, stop=${stopReason}, ` +
-        `toolCalls=${result.steps.length}, documents=${result.documents.length}`,
+        `toolCalls=${result.steps.length - 1}, documents=${result.documents.length}`,
     );
     return result;
   }
@@ -254,24 +281,38 @@ export class AgentLoopService {
     }
     params.executedCalls.add(key);
 
+    const thought =
+      typeof args.reason === 'string' && args.reason.trim()
+        ? args.reason.trim().slice(0, 80)
+        : undefined;
     const step: AgentStep = {
       id: `r${params.round}_${call.id}`,
       kind: name,
-      label:
-        typeof args.reason === 'string' && args.reason.trim()
-          ? args.reason.trim().slice(0, 80)
-          : '자료를 찾고 있어요',
+      label: tool.describeStep(args, { status: 'running' }),
       status: 'running',
+      ...(thought ? { thought } : {}),
     };
     params.emit(step);
 
     try {
       const result = await tool.execute(args, params.context);
-      params.emit({ ...step, status: 'done', resultCount: result.resultCount });
+      params.emit({
+        ...step,
+        status: 'done',
+        label: tool.describeStep(args, {
+          status: 'done',
+          resultCount: result.resultCount,
+        }),
+        resultCount: result.resultCount,
+      });
       return result;
     } catch (error) {
       this.logger.warn(`Agent tool ${name} failed: ${describeError(error)}`);
-      params.emit({ ...step, status: 'failed' });
+      params.emit({
+        ...step,
+        status: 'failed',
+        label: tool.describeStep(args, { status: 'failed' }),
+      });
       return '도구 실행 중 오류가 발생했습니다. 다른 방법을 시도하거나 조사를 마치세요.';
     }
   }
@@ -295,6 +336,10 @@ class DocumentCollector {
 
   paths(): ReadonlySet<string> {
     return new Set(this.byPath.keys());
+  }
+
+  size(): number {
+    return this.byPath.size;
   }
 
   documents(): AgentDocument[] {

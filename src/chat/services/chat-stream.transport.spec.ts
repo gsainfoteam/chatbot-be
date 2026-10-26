@@ -134,4 +134,91 @@ describe('ChatStreamTransport', () => {
     expect(reply.raw.write).toHaveBeenNthCalledWith(2, 'data: [DONE]\n\n');
     expect(reply.raw.end).toHaveBeenCalled();
   });
+
+  describe('writeStep', () => {
+    function stepReply(writableEnded = false) {
+      return { raw: { write: jest.fn(), end: jest.fn(), writableEnded } };
+    }
+
+    it('writes a step event that old clients ignore', () => {
+      const transport = createTransport();
+      const reply = stepReply();
+
+      transport.writeStep(reply as never, {
+        id: 'r1_a',
+        kind: 'search_documents',
+        label: "'졸업 요건' 관련 문서 2개를 찾았어요",
+        status: 'done',
+        thought: '졸업 요건을 먼저 확인해 볼게요',
+        resultCount: 2,
+      });
+
+      const written = String(reply.raw.write.mock.calls[0][0]);
+      expect(written.startsWith('data: ')).toBe(true);
+      expect(written.endsWith('\n\n')).toBe(true);
+      const event = JSON.parse(written.slice(6)) as Record<string, unknown>;
+      expect(event).toEqual({
+        type: 'step',
+        id: 'r1_a',
+        kind: 'search_documents',
+        label: "'졸업 요건' 관련 문서 2개를 찾았어요",
+        status: 'done',
+        thought: '졸업 요건을 먼저 확인해 볼게요',
+        resultCount: 2,
+      });
+      // 웹 위젯·Flutter 패키지는 content를 답변에 붙이고 error를 실패로 본다.
+      expect(event).not.toHaveProperty('content');
+      expect(event).not.toHaveProperty('error');
+    });
+
+    it('omits optional fields that are not set', () => {
+      const transport = createTransport();
+      const reply = stepReply();
+
+      transport.writeStep(reply as never, {
+        id: 'research',
+        kind: 'research',
+        label: '자료를 더 찾아보고 있어요',
+        status: 'running',
+      });
+
+      const event = JSON.parse(
+        String(reply.raw.write.mock.calls[0][0]).slice(6),
+      ) as Record<string, unknown>;
+      expect(Object.keys(event).sort()).toEqual(
+        ['id', 'kind', 'label', 'status', 'type'].sort(),
+      );
+    });
+
+    it('does nothing after the response has ended', () => {
+      const transport = createTransport();
+      const reply = stepReply(true);
+
+      transport.writeStep(reply as never, {
+        id: 'research',
+        kind: 'research',
+        label: '자료를 더 찾아보고 있어요',
+        status: 'running',
+      });
+
+      expect(reply.raw.write).not.toHaveBeenCalled();
+    });
+
+    it('keeps going when the socket write throws', () => {
+      const transport = createTransport();
+      const reply = stepReply();
+      reply.raw.write.mockImplementation(() => {
+        throw new Error('socket closed');
+      });
+
+      expect(() =>
+        transport.writeStep(reply as never, {
+          id: 'research',
+          kind: 'research',
+          label: '자료를 더 찾아보고 있어요',
+          status: 'running',
+        }),
+      ).not.toThrow();
+    });
+  });
 });

@@ -24,28 +24,45 @@ export type AgentToolResult = {
   usedResources?: UsedResource[];
 };
 
+export type AgentStepStatus = 'running' | 'done' | 'failed';
+
+export type AgentStepOutcome =
+  | { status: 'running' }
+  | { status: 'done'; resultCount: number }
+  | { status: 'failed' };
+
 export interface AgentTool {
   readonly definition: LlmTool;
   execute(
     args: Record<string, unknown>,
     context: AgentToolContext,
   ): Promise<AgentToolResult>;
+  /** 진행 단계 문구. 모델 문체에 기대지 않도록 서버가 인자로 만든다. */
+  describeStep(
+    args: Record<string, unknown>,
+    outcome: AgentStepOutcome,
+  ): string;
 }
 
-export type AgentStepStatus = 'running' | 'done' | 'failed';
+/** 조사 전체를 감싸는 단계의 kind. 첫 도구 호출 전 대기 시간에도 진행 상태를 보여준다. */
+export const RESEARCH_STEP_KIND = 'research';
 
 /** FE에 진행 과정으로 보여줄 수 있는 단위. 모델의 원본 추론문은 담지 않는다. */
 export type AgentStep = {
   id: string;
+  /** `research` 또는 도구 이름 */
   kind: string;
-  /** 모델이 tool 인자 `reason`으로 남긴 진행 문구 */
+  /** 서버가 만든 진행 문구 */
   label: string;
   status: AgentStepStatus;
+  /** 모델이 tool 인자 `reason`으로 남긴 짧은 설명. 보조 문구로만 쓴다. */
+  thought?: string;
   resultCount?: number;
 };
 
 export type AgentStopReason =
   | 'ready'
+  | 'no-progress'
   | 'max-rounds'
   | 'time-budget'
   | 'llm-error';

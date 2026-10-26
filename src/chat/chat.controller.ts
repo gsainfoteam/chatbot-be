@@ -181,7 +181,7 @@ export class ChatController {
   @ApiOperation({
     summary: 'BAD 피드백 답변 1회 재생성',
     description:
-      'BAD 피드백이 저장된 assistant 답변에 대해 직전 사용자 질문으로 답변을 한 번만 재생성합니다. 재생성은 세션 질문 횟수 제한에 포함되지 않습니다.',
+      'BAD 피드백이 저장된 assistant 답변에 대해 직전 사용자 질문으로 답변을 한 번만 재생성합니다. 재생성은 세션 질문 횟수 제한에 포함되지 않습니다. SSE 이벤트 형식은 `POST chat/stream`과 같습니다.',
   })
   @ApiParam({
     name: 'messageId',
@@ -208,7 +208,8 @@ export class ChatController {
   })
   @ApiResponse({
     status: 404,
-    description: '현재 세션에서 접근 가능한 메시지 또는 원본 질문을 찾을 수 없음',
+    description:
+      '현재 세션에서 접근 가능한 메시지 또는 원본 질문을 찾을 수 없음',
   })
   async regenerateBadFeedbackAnswer(
     @CurrentSession() session: SessionPayload,
@@ -240,8 +241,18 @@ export class ChatController {
   @Post('chat/stream')
   @ApiOperation({
     summary: '사용자 질문 처리 및 스트리밍 답변 생성',
-    description:
+    description: [
       '사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 스트리밍으로 생성합니다. Server-Sent Events (SSE) 형식으로 응답을 전송합니다.',
+      '',
+      '각 이벤트는 `data: <JSON>` 한 줄입니다.',
+      '- `{"content": "..."}`: 답변 조각. 이어 붙이면 전체 답변이 됩니다.',
+      '- `{"type": "step", "id", "kind", "label", "status", "thought"?, "resultCount"?}`: 첫 검색이 비었거나 약해 자료를 다시 찾을 때만 답변 전에 옵니다. 같은 `id`가 `running` → `done`/`failed`로 다시 오면 상태를 갱신합니다. `kind`는 `research`(조사 전체) 또는 도구 이름, `label`은 서버가 만든 진행 문구, `thought`는 모델이 남긴 짧은 설명입니다.',
+      '- `{"type": "resources", "resources": [...]}`: 참조 문서. 답변 뒤에 옵니다.',
+      '- `{"error": "..."}`: 오류. 스트림이 끝납니다.',
+      '- `[DONE]`: 정상 종료.',
+      '',
+      '`step` 이벤트에는 `content`·`error` 키가 없어 이를 모르는 클라이언트는 무시합니다. 완료된 단계는 assistant 메시지 `metadata.steps`에도 저장됩니다.',
+    ].join('\n'),
   })
   @ApiResponse({
     status: 200,

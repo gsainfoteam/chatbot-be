@@ -525,6 +525,96 @@ describe('ChatOrchestrationService', () => {
       expect(toolResults[0].content).toContain('수강신청 문서 본문입니다.');
     });
 
+    it('streams agent steps before the answer and saves their final state', async () => {
+      const running = {
+        id: 'research',
+        kind: 'research',
+        label: '자료를 더 찾아보고 있어요',
+        status: 'running' as const,
+      };
+      const done = {
+        ...running,
+        status: 'done' as const,
+        label: '자료 1개를 모았어요',
+        resultCount: 1,
+      };
+      const { run, writtenSse, chatService } = setup(createCatalog(), {
+        agentEnabled: true,
+        vectorSelection: { rootPaths: [], detailPaths: [] },
+        agentRun: async (input) => {
+          input.onStep?.(running);
+          input.onStep?.(done);
+          return {
+            documents: [{ path: '학사편람/졸업요건', content: '본문' }],
+            usedResources: [{ path: '학사편람/졸업요건', formats: ['md'] }],
+            steps: [done],
+            rounds: 1,
+            stopReason: 'ready',
+          };
+        },
+      });
+
+      await run('졸업하려면 뭐 해야 돼?');
+
+      const sse = writtenSse();
+      const stepAt = sse.indexOf('"type":"step"');
+      expect(stepAt).toBeGreaterThan(-1);
+      expect(stepAt).toBeLessThan(sse.indexOf('"content"'));
+      expect(sse).toContain('"status":"running"');
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        'session-id',
+        expect.objectContaining({
+          role: MessageRole.ASSISTANT,
+          metadata: expect.objectContaining({ steps: [done] }),
+        }),
+      );
+    });
+
+    it('closes a running step as failed when the agent throws', async () => {
+      const { run, writtenSse, chatService } = setup(createCatalog(), {
+        agentEnabled: true,
+        vectorSelection: weakSelection,
+        agentRun: async (input) => {
+          input.onStep?.({
+            id: 'research',
+            kind: 'research',
+            label: '자료를 더 찾아보고 있어요',
+            status: 'running',
+          });
+          throw new Error('unexpected');
+        },
+      });
+
+      await run('수강신청 언제야?');
+
+      expect(writtenSse()).toContain('"status":"failed"');
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        'session-id',
+        expect.objectContaining({
+          role: MessageRole.ASSISTANT,
+          metadata: expect.objectContaining({
+            steps: [expect.objectContaining({ status: 'failed' })],
+          }),
+        }),
+      );
+    });
+
+    it('does not add steps to a direct answer', async () => {
+      const { run, writtenSse, chatService } = setup(createCatalog(), {
+        agentEnabled: true,
+        vectorSelection: confidentSelection,
+      });
+
+      await run('졸업 요건 알려줘');
+
+      expect(writtenSse()).not.toContain('"type":"step"');
+      const saved = chatService.createMessage.mock.calls.find(
+        ([, dto]) =>
+          (dto as { role: MessageRole }).role === MessageRole.ASSISTANT,
+      )?.[1] as { metadata: Record<string, unknown> };
+      expect(saved.metadata.steps).toBeUndefined();
+    });
+
     it('tells the user nothing was found when neither search finds documents', async () => {
       const { run, llmClient, unansweredQuestionsRepository } = setup(
         createCatalog(),

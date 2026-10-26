@@ -19,12 +19,15 @@ import {
 } from '../prompts';
 import {
   ResourceContentService,
+  formatRelevantDocument,
   type ResourceInfo,
 } from './resource-content.service';
 import { ChatStreamTransport } from './chat-stream.transport';
 import { RetrievalService } from '../../retrieval/retrieval.service';
 import { Trace } from '@gsainfoteam/nest-observability';
 import { UnansweredQuestionsRepository } from '../../unanswered-questions/unanswered-questions.repository';
+import { AgentLoopService } from '../agent/agent-loop.service';
+import { decideAnswerRoute } from '../agent/answer-route';
 
 export type { ResourceInfo };
 
@@ -54,6 +57,7 @@ export class ChatOrchestrationService {
     private readonly resourceContentService: ResourceContentService,
     private readonly chatStreamTransport: ChatStreamTransport,
     private readonly unansweredQuestionsRepository: UnansweredQuestionsRepository,
+    private readonly agentLoopService: AgentLoopService,
   ) {}
 
   private createEmptyUsage(): LlmUsage {
@@ -109,6 +113,84 @@ export class ChatOrchestrationService {
     }
   }
 
+  /** 근거 자료 없이 "찾지 못했다"는 안내만 스트리밍한다. */
+  private streamNoRelevantMaterials(
+    historyMessages: LlmMessage[],
+    userQuestion: string,
+  ): Promise<Readable> {
+    return this.llmClient.generateFinalResponseStream(
+      [
+        { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
+        ...historyMessages,
+        { role: 'user', content: userQuestion },
+      ],
+      [],
+      this.llmClient.getModel('normal'),
+      { temperature: 0 },
+    );
+  }
+
+  /**
+   * 첫 검색이 비었거나 근거가 약하면 에이전트가 검색어를 바꿔 다시 찾는다.
+   * 에이전트가 실패하면 첫 검색 결과로 답한다.
+   */
+  private async gatherRelevantContent(
+    userQuestion: string,
+    historyMessages: LlmMessage[],
+    listResult: Awaited<ReturnType<RetrievalService['listCatalog']>>,
+    usage: LlmUsage,
+  ): Promise<{
+    content: string;
+    usedResources: Array<{ path: string; formats: string[] }>;
+  }> {
+    let t0 = Date.now();
+    const initial =
+      await this.resourceContentService.fetchRelevantResourceContents(
+        userQuestion,
+        listResult,
+        usage,
+      );
+    this.logger.log(
+      `[PERF] fetchRelevantResourceContents: ${Date.now() - t0}ms`,
+    );
+
+    const { route, reason } = decideAnswerRoute({
+      agentEnabled: this.agentLoopService.isEnabled(),
+      documentCount: initial.documents.length,
+      confident: initial.confident,
+    });
+    this.logger.log(`[DEBUG] answer route: ${route} (${reason})`);
+    if (route === 'direct') return initial;
+
+    t0 = Date.now();
+    try {
+      const agentResult = await this.agentLoopService.run({
+        question: userQuestion,
+        history: historyMessages,
+        catalog: listResult,
+        usage,
+        seed: {
+          documents: initial.documents,
+          usedResources: initial.usedResources,
+        },
+      });
+      this.logger.log(`[PERF] agent research: ${Date.now() - t0}ms`);
+      return {
+        content: agentResult.documents
+          .map((doc) => formatRelevantDocument(doc.content))
+          .join('\n'),
+        usedResources: agentResult.usedResources,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Agent research failed; answering with the first search: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return initial;
+    }
+  }
+
   /**
    * 사용자 질문을 처리하여 스트리밍 답변을 생성
    */
@@ -159,28 +241,18 @@ export class ChatOrchestrationService {
       const hasResources = chunkCount > 0;
       if (!hasResources) {
         this.logger.warn('No resources from document catalog');
-        const stream = await this.llmClient.generateFinalResponseStream(
-          [
-            { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
-            ...historyMessages,
-            { role: 'user', content: userQuestion },
-          ],
-          [],
-          this.llmClient.getModel('normal'),
-          { temperature: 0 },
+        const stream = await this.streamNoRelevantMaterials(
+          historyMessages,
+          userQuestion,
         );
         return { stream, resources: [], referencedDocumentCount: 0, usage };
       }
 
-      t0 = Date.now();
-      const relevantResult =
-        await this.resourceContentService.fetchRelevantResourceContents(
-          userQuestion,
-          listResult,
-          usage,
-        );
-      this.logger.log(
-        `[PERF] fetchRelevantResourceContents: ${Date.now() - t0}ms`,
+      const relevantResult = await this.gatherRelevantContent(
+        userQuestion,
+        historyMessages,
+        listResult,
+        usage,
       );
 
       const hasContent =
@@ -189,15 +261,9 @@ export class ChatOrchestrationService {
 
       if (!hasContent) {
         this.logger.warn('No reference documents available.');
-        const stream = await this.llmClient.generateFinalResponseStream(
-          [
-            { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
-            ...historyMessages,
-            { role: 'user', content: userQuestion },
-          ],
-          [],
-          this.llmClient.getModel('normal'),
-          { temperature: 0 },
+        const stream = await this.streamNoRelevantMaterials(
+          historyMessages,
+          userQuestion,
         );
         return { stream, resources: [], referencedDocumentCount: 0, usage };
       }

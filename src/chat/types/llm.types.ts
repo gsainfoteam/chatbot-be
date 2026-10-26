@@ -31,7 +31,9 @@ export interface LlmRequest {
   tool_choice?:
     | 'auto'
     | 'none'
+    | 'required'
     | { type: 'function'; function: { name: string } };
+  parallel_tool_calls?: boolean;
   temperature?: number;
   max_tokens?: number;
   stream?: boolean;

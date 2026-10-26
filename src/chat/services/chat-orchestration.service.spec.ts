@@ -7,7 +7,14 @@ import type { LlmResponse } from '../types/llm.types';
 import { ResourceContentService } from './resource-content.service';
 import { ResourceSelectionService } from './resource-selection.service';
 import { ChatStreamTransport } from './chat-stream.transport';
-import { ANSWER_GROUNDING_REMINDER, NO_ANSWER_MESSAGE } from '../prompts';
+import {
+  ANSWER_GROUNDING_REMINDER,
+  NO_ANSWER_MESSAGE,
+  NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
+} from '../prompts';
+import type { RelevantChunkSelection } from './resource-selection.service';
+import type { AgentRunInput } from '../agent/agent-loop.service';
+import type { AgentRunResult } from '../agent/agent.types';
 
 describe('ChatOrchestrationService', () => {
   function createLlmResponse(
@@ -69,7 +76,14 @@ describe('ChatOrchestrationService', () => {
     total: 0,
   };
 
-  function setup(listResult: ListResourcesResult) {
+  type SetupOptions = {
+    agentEnabled?: boolean;
+    /** null = 벡터 검색 불가(LLM 선별로 폴백) */
+    vectorSelection?: RelevantChunkSelection | null;
+    agentRun?: (input: AgentRunInput) => Promise<AgentRunResult>;
+  };
+
+  function setup(listResult: ListResourcesResult, options: SetupOptions = {}) {
     const finalStream = new PassThrough();
     const retrievalService = {
       listCatalog: jest.fn(async () => listResult),
@@ -120,8 +134,21 @@ describe('ChatOrchestrationService', () => {
       llmClient as never,
     );
     const vectorChunkSelectionService = {
-      selectRelevantChunkPaths: jest.fn<(...args: unknown[]) => Promise<null>>(
-        async () => null,
+      selectRelevantChunkPaths: jest.fn<
+        (...args: unknown[]) => Promise<RelevantChunkSelection | null>
+      >(async () => options.vectorSelection ?? null),
+    };
+    const agentLoopService = {
+      isEnabled: jest.fn(() => options.agentEnabled ?? false),
+      run: jest.fn<(input: AgentRunInput) => Promise<AgentRunResult>>(
+        options.agentRun ??
+          (async () => ({
+            documents: [],
+            usedResources: [],
+            steps: [],
+            rounds: 1,
+            stopReason: 'ready' as const,
+          })),
       ),
     };
     const resourceContentService = new ResourceContentService(
@@ -143,6 +170,7 @@ describe('ChatOrchestrationService', () => {
       resourceContentService,
       chatStreamTransport,
       unansweredQuestionsRepository as never,
+      agentLoopService as never,
     );
 
     const reply = {
@@ -206,6 +234,7 @@ describe('ChatOrchestrationService', () => {
       chatService,
       usageService,
       unansweredQuestionsRepository,
+      agentLoopService,
     };
   }
 
@@ -387,5 +416,130 @@ describe('ChatOrchestrationService', () => {
     expect(toolResults[0].content.endsWith(ANSWER_GROUNDING_REMINDER)).toBe(
       true,
     );
+  });
+
+  describe('agent research route', () => {
+    const confidentSelection: RelevantChunkSelection = {
+      rootPaths: [],
+      detailPaths: ['학사편람/졸업요건'],
+      confident: true,
+    };
+    const weakSelection: RelevantChunkSelection = {
+      rootPaths: [],
+      detailPaths: ['학사편람/수강신청'],
+      confident: false,
+    };
+
+    it('answers directly without the agent when the first search is confident', async () => {
+      const { run, agentLoopService, llmClient } = setup(createCatalog(), {
+        agentEnabled: true,
+        vectorSelection: confidentSelection,
+      });
+
+      await run('졸업 요건 알려줘');
+
+      expect(agentLoopService.run).not.toHaveBeenCalled();
+      const [, toolResults] = llmClient.generateFinalResponseStream.mock
+        .calls[0] as unknown as [unknown, Array<{ content: string }>];
+      expect(toolResults[0].content).toContain('졸업요건 문서 본문입니다.');
+    });
+
+    it('never calls the agent while it is disabled, even for a weak match', async () => {
+      const { run, agentLoopService } = setup(createCatalog(), {
+        agentEnabled: false,
+        vectorSelection: weakSelection,
+      });
+
+      await run('졸업 요건 알려줘');
+
+      expect(agentLoopService.run).not.toHaveBeenCalled();
+    });
+
+    it('answers with documents the agent collected after an empty first search', async () => {
+      const { run, agentLoopService, llmClient, chatService } = setup(
+        createCatalog(),
+        {
+          agentEnabled: true,
+          vectorSelection: { rootPaths: [], detailPaths: [] },
+          agentRun: async () => ({
+            documents: [
+              { path: '학사편람/졸업요건', content: '재검색으로 찾은 본문' },
+            ],
+            usedResources: [{ path: '학사편람/졸업요건', formats: ['md'] }],
+            steps: [],
+            rounds: 2,
+            stopReason: 'ready',
+          }),
+        },
+      );
+
+      await run('졸업하려면 뭐 해야 돼?');
+
+      expect(agentLoopService.run).toHaveBeenCalledWith(
+        expect.objectContaining({
+          question: '졸업하려면 뭐 해야 돼?',
+          seed: { documents: [], usedResources: [] },
+        }),
+      );
+      const [, toolResults] = llmClient.generateFinalResponseStream.mock
+        .calls[0] as unknown as [unknown, Array<{ content: string }>];
+      expect(toolResults[0].content).toContain('재검색으로 찾은 본문');
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        'session-id',
+        expect.objectContaining({
+          role: MessageRole.ASSISTANT,
+          metadata: expect.objectContaining({
+            resources: [expect.objectContaining({ path: '학사편람.pdf' })],
+          }),
+        }),
+      );
+    });
+
+    it('passes the weak first search to the agent as its seed', async () => {
+      const { run, agentLoopService } = setup(createCatalog(), {
+        agentEnabled: true,
+        vectorSelection: weakSelection,
+      });
+
+      await run('수강신청 언제야?');
+
+      const input = agentLoopService.run.mock.calls[0][0];
+      expect(input.seed?.documents).toEqual([
+        { path: '학사편람/수강신청', content: '수강신청 문서 본문입니다.' },
+      ]);
+    });
+
+    it('falls back to the first search when the agent throws', async () => {
+      const { run, llmClient } = setup(createCatalog(), {
+        agentEnabled: true,
+        vectorSelection: weakSelection,
+        agentRun: async () => {
+          throw new Error('gateway down');
+        },
+      });
+
+      await run('수강신청 언제야?');
+
+      const [, toolResults] = llmClient.generateFinalResponseStream.mock
+        .calls[0] as unknown as [unknown, Array<{ content: string }>];
+      expect(toolResults[0].content).toContain('수강신청 문서 본문입니다.');
+    });
+
+    it('tells the user nothing was found when neither search finds documents', async () => {
+      const { run, llmClient, unansweredQuestionsRepository } = setup(
+        createCatalog(),
+        {
+          agentEnabled: true,
+          vectorSelection: { rootPaths: [], detailPaths: [] },
+        },
+      );
+
+      await run('학식 메뉴 알려줘');
+
+      const [messages] = llmClient.generateFinalResponseStream.mock
+        .calls[0] as unknown as [Array<{ role: string; content: string }>];
+      expect(messages[0].content).toBe(NO_RELEVANT_MATERIALS_SYSTEM_PROMPT);
+      expect(unansweredQuestionsRepository.record).toHaveBeenCalled();
+    });
   });
 });

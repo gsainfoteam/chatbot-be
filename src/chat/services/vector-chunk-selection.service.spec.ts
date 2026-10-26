@@ -260,7 +260,20 @@ describe('VectorChunkSelectionService', () => {
 
     await expect(
       service.selectRelevantChunkPaths('오늘 광주 날씨 어때?'),
-    ).resolves.toEqual({ rootPaths: [], detailPaths: [] });
+    ).resolves.toEqual({ rootPaths: [], detailPaths: [], confident: false });
+  });
+
+  it('marks a selection without strong evidence as not confident', async () => {
+    const { service } = createService({
+      denseHits: [
+        dense({ path: '학사편람/졸업', resourceName: '학사편람' }, 0.62),
+      ],
+    });
+
+    const selection = await service.selectRelevantChunkPaths('졸업 언제 해?');
+
+    expect(selection?.detailPaths).toEqual(['학사편람/졸업']);
+    expect(selection?.confident).toBe(false);
   });
 
   describe('root chunk handling', () => {
@@ -277,6 +290,7 @@ describe('VectorChunkSelectionService', () => {
       ).resolves.toEqual({
         rootPaths: ['학사편람', '장학안내'],
         detailPaths: ['학사편람/졸업', '장학안내/신청'],
+        confident: true,
       });
     });
 
@@ -313,6 +327,7 @@ describe('VectorChunkSelectionService', () => {
     ).resolves.toEqual({
       rootPaths: ['학사편람'],
       detailPaths: ['학사편람/졸업'],
+      confident: true,
     });
   });
 });

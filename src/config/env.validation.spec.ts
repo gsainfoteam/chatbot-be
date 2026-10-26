@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from '@jest/globals';
 import { validate } from './env.validation';
+import { readAgentConfig } from '../chat/agent/agent.config';
 
 function baseEnv(overrides: Record<string, unknown> = {}) {
   return {
@@ -144,5 +145,53 @@ describe('embedding backfill configuration', () => {
     expect(result.EMBEDDING_BACKFILL_BATCH_SIZE).toBe(32);
     expect(result.EMBEDDING_BACKFILL_INTERVAL_MS).toBe(300000);
     expect(result.EMBEDDING_RETRIEVAL_ENABLED).toBe(false);
+  });
+});
+
+describe('agent configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it('keeps the agent off unless it is enabled explicitly', () => {
+    const config = validate(baseEnv(credentials)) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(
+      readAgentConfig({ get: (key: string) => config[key] } as never),
+    ).toEqual({
+      enabled: false,
+      maxRounds: 3,
+      timeBudgetMs: 20000,
+      modelTier: 'normal',
+    });
+  });
+
+  it('accepts agent settings from string env values', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        AGENT_ENABLED: 'true',
+        AGENT_MAX_ROUNDS: '2',
+        AGENT_TIME_BUDGET_MS: '15000',
+        AGENT_MODEL_TIER: 'light',
+      }),
+    );
+    expect(result.AGENT_ENABLED).toBe(true);
+    expect(result.AGENT_MAX_ROUNDS).toBe(2);
+    expect(result.AGENT_TIME_BUDGET_MS).toBe(15000);
+    expect(result.AGENT_MODEL_TIER).toBe('light');
+  });
+
+  it.each([
+    { AGENT_ENABLED: 'yes' },
+    { AGENT_MAX_ROUNDS: 0 },
+    { AGENT_MAX_ROUNDS: 7 },
+    { AGENT_TIME_BUDGET_MS: 999 },
+    { AGENT_MODEL_TIER: 'huge' },
+  ])('rejects invalid agent settings %j', (settings) => {
+    expect(() => validate(baseEnv({ ...credentials, ...settings }))).toThrow();
   });
 });

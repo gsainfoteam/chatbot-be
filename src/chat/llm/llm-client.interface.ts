@@ -2,7 +2,9 @@ import type { Readable } from 'stream';
 import type {
   LlmMessage,
   LlmModelType,
+  LlmRequest,
   LlmResponse,
+  LlmTool,
   LlmToolResult,
 } from '../types/llm.types';
 
@@ -13,6 +15,11 @@ export type LlmCallOptions = {
   max_tokens?: number;
   /** axios request timeout in milliseconds (default 15000) */
   timeoutMs?: number;
+  /** function calling에 노출할 도구. 비어 있으면 요청에 싣지 않는다. */
+  tools?: LlmTool[];
+  tool_choice?: LlmRequest['tool_choice'];
+  /** 독립적인 도구 호출을 한 응답에 여러 개 받을지 여부 */
+  parallel_tool_calls?: boolean;
 };
 
 /**

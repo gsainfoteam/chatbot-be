@@ -80,12 +80,20 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       temperature: options?.temperature ?? 0.7,
       max_tokens: options?.max_tokens ?? 2000,
     };
+    if (options?.tools?.length) {
+      request.tools = options.tools;
+      if (options.tool_choice) request.tool_choice = options.tool_choice;
+      if (options.parallel_tool_calls != null) {
+        request.parallel_tool_calls = options.parallel_tool_calls;
+      }
+    }
 
     const requestLogSummary = {
       model: request.model,
       stream: false,
       temperature: request.temperature,
       max_tokens: request.max_tokens,
+      tools: request.tools?.map((tool) => tool.function.name),
       messages: this.summarizeMessages(messages),
     };
 

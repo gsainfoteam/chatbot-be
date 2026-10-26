@@ -160,7 +160,14 @@ export class VectorChunkSelectionService {
       totalMs: Date.now() - startedAt,
     });
 
-    return { rootPaths: [...rootPaths], detailPaths };
+    const confident = decisions.some(
+      (decision) =>
+        decision.keep &&
+        (decision.reason === 'strong-vector' ||
+          decision.reason === 'strong-exact'),
+    );
+
+    return { rootPaths: [...rootPaths], detailPaths, confident };
   }
 
   /**

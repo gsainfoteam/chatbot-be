@@ -81,6 +81,8 @@ describe('ChatOrchestrationService', () => {
     /** null = 벡터 검색 불가(LLM 선별로 폴백) */
     vectorSelection?: RelevantChunkSelection | null;
     agentRun?: (input: AgentRunInput) => Promise<AgentRunResult>;
+    /** Ziggle 공지를 쓸 수 있는 위젯 키 ID */
+    noticeWidgetKeyIds?: string[];
   };
 
   function setup(listResult: ListResourcesResult, options: SetupOptions = {}) {
@@ -138,6 +140,11 @@ describe('ChatOrchestrationService', () => {
         (...args: unknown[]) => Promise<RelevantChunkSelection | null>
       >(async () => options.vectorSelection ?? null),
     };
+    const ziggleNoticeClient = {
+      isEnabledFor: jest.fn((widgetKeyId: string | undefined) =>
+        (options.noticeWidgetKeyIds ?? []).includes(widgetKeyId ?? ''),
+      ),
+    };
     const agentLoopService = {
       isEnabled: jest.fn(() => options.agentEnabled ?? false),
       run: jest.fn<(input: AgentRunInput) => Promise<AgentRunResult>>(
@@ -145,6 +152,7 @@ describe('ChatOrchestrationService', () => {
           (async () => ({
             documents: [],
             usedResources: [],
+            sources: [],
             steps: [],
             rounds: 1,
             stopReason: 'ready' as const,
@@ -171,6 +179,7 @@ describe('ChatOrchestrationService', () => {
       chatStreamTransport,
       unansweredQuestionsRepository as never,
       agentLoopService as never,
+      ziggleNoticeClient as never,
     );
 
     const reply = {
@@ -466,6 +475,7 @@ describe('ChatOrchestrationService', () => {
               { path: '학사편람/졸업요건', content: '재검색으로 찾은 본문' },
             ],
             usedResources: [{ path: '학사편람/졸업요건', formats: ['md'] }],
+            sources: [],
             steps: [],
             rounds: 2,
             stopReason: 'ready',
@@ -547,6 +557,7 @@ describe('ChatOrchestrationService', () => {
           return {
             documents: [{ path: '학사편람/졸업요건', content: '본문' }],
             usedResources: [{ path: '학사편람/졸업요건', formats: ['md'] }],
+            sources: [],
             steps: [done],
             rounds: 1,
             stopReason: 'ready',
@@ -613,6 +624,169 @@ describe('ChatOrchestrationService', () => {
           (dto as { role: MessageRole }).role === MessageRole.ASSISTANT,
       )?.[1] as { metadata: Record<string, unknown> };
       expect(saved.metadata.steps).toBeUndefined();
+    });
+
+    describe('Ziggle notices', () => {
+      const noticeSource = {
+        kind: 'notice' as const,
+        id: '301',
+        title: '2026년 정원장학금 장학생 선발 안내',
+        url: 'https://ziggle.gistory.me/notice/301',
+        opened: true,
+      };
+      const noticeResult = async (): Promise<AgentRunResult> => ({
+        documents: [
+          {
+            path: 'ziggle-notice/301',
+            content:
+              '[Ziggle 공지] 2026년 정원장학금 장학생 선발 안내\n\n신청 기간 10.1.~10.6.',
+          },
+        ],
+        usedResources: [],
+        sources: [
+          noticeSource,
+          { ...noticeSource, id: '1', url: 'u1', opened: false },
+          { ...noticeSource, id: '2', url: 'u2', opened: false },
+          { ...noticeSource, id: '3', url: 'u3', opened: false },
+        ],
+        steps: [],
+        rounds: 2,
+        stopReason: 'ready',
+      });
+
+      it('researches notices for a notice-like question on an allowed widget', async () => {
+        const { run, agentLoopService } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: confidentSelection,
+          noticeWidgetKeyIds: ['w1'],
+        });
+
+        await run('장학금 신청 기간 언제야?', { widgetKeyId: 'w1' });
+
+        expect(agentLoopService.run).toHaveBeenCalledWith(
+          expect.objectContaining({
+            enabledTools: ['search_documents', 'search_notices', 'get_notice'],
+          }),
+        );
+      });
+
+      it('keeps notice tools off for a widget that is not allowed', async () => {
+        const { run, agentLoopService } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: weakSelection,
+          noticeWidgetKeyIds: ['w1'],
+        });
+
+        await run('장학금 신청 기간 언제야?', { widgetKeyId: 'other' });
+
+        expect(agentLoopService.run).toHaveBeenCalledWith(
+          expect.objectContaining({ enabledTools: ['search_documents'] }),
+        );
+      });
+
+      it('answers a confident non-notice question directly on an allowed widget', async () => {
+        const { run, agentLoopService } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: confidentSelection,
+          noticeWidgetKeyIds: ['w1'],
+        });
+
+        await run('졸업 요건 학점 알려줘', { widgetKeyId: 'w1' });
+
+        expect(agentLoopService.run).not.toHaveBeenCalled();
+      });
+
+      it('adds notice rules to the answer prompt and sends notice sources after the answer', async () => {
+        const { run, llmClient, writtenSse, chatService } = setup(
+          createCatalog(),
+          {
+            agentEnabled: true,
+            vectorSelection: { rootPaths: [], detailPaths: [] },
+            noticeWidgetKeyIds: ['w1'],
+            agentRun: noticeResult,
+          },
+        );
+
+        await run('장학금 신청 기간 언제야?', { widgetKeyId: 'w1' });
+
+        const [messages] = llmClient.generateFinalResponseStream.mock
+          .calls[0] as unknown as [Array<{ role: string; content: string }>];
+        expect(messages[0].content).toContain('### 7. Ziggle 공지 자료');
+        expect(messages[0].content).toContain('오늘 날짜는');
+
+        const sse = writtenSse();
+        const sourcesAt = sse.indexOf('"type":"sources"');
+        expect(sourcesAt).toBeGreaterThan(sse.indexOf('"content"'));
+        const event = sse
+          .split('\n\n')
+          .map((line) => line.replace(/^data: /, ''))
+          .filter((line) => line.includes('"type":"sources"'))
+          .map(
+            (line) =>
+              JSON.parse(line) as { sources: Array<Record<string, unknown>> },
+          )[0];
+        // 본문까지 읽은 공지를 먼저, 최대 3개만 보여준다.
+        expect(event.sources.map((source) => source.id)).toEqual([
+          '301',
+          '1',
+          '2',
+        ]);
+        expect(event.sources[0]).not.toHaveProperty('opened');
+        expect(chatService.createMessage).toHaveBeenCalledWith(
+          'session-id',
+          expect.objectContaining({
+            role: MessageRole.ASSISTANT,
+            metadata: expect.objectContaining({
+              sources: expect.arrayContaining([
+                expect.objectContaining({ id: '301' }),
+              ]),
+            }),
+          }),
+        );
+      });
+
+      it('counts a notice-only answer as answered', async () => {
+        const { run, unansweredQuestionsRepository } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: { rootPaths: [], detailPaths: [] },
+          noticeWidgetKeyIds: ['w1'],
+          agentRun: noticeResult,
+        });
+
+        await run('장학금 신청 기간 언제야?', { widgetKeyId: 'w1' });
+
+        expect(unansweredQuestionsRepository.record).not.toHaveBeenCalled();
+      });
+
+      it('hides notice sources when the answer is a no-answer reply', async () => {
+        const { run, writtenSse } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: { rootPaths: [], detailPaths: [] },
+          noticeWidgetKeyIds: ['w1'],
+          agentRun: noticeResult,
+        });
+
+        await run(
+          '장학금 신청 기간 언제야?',
+          { widgetKeyId: 'w1' },
+          NO_ANSWER_MESSAGE,
+        );
+
+        expect(writtenSse()).not.toContain('"type":"sources"');
+      });
+
+      it('leaves the answer prompt unchanged without notices', async () => {
+        const { run, llmClient } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: confidentSelection,
+        });
+
+        await run('졸업 요건 알려줘');
+
+        const [messages] = llmClient.generateFinalResponseStream.mock
+          .calls[0] as unknown as [Array<{ role: string; content: string }>];
+        expect(messages[0].content).not.toContain('Ziggle');
+      });
     });
 
     it('tells the user nothing was found when neither search finds documents', async () => {

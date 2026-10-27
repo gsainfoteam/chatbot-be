@@ -195,3 +195,47 @@ describe('agent configuration', () => {
     expect(() => validate(baseEnv({ ...credentials, ...settings }))).toThrow();
   });
 });
+
+describe('Ziggle MCP configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it('does not require Ziggle settings', () => {
+    expect(() => validate(baseEnv(credentials))).not.toThrow();
+  });
+
+  it('requires a long enough API key once the URL is set', () => {
+    expect(() =>
+      validate(
+        baseEnv({
+          ...credentials,
+          ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      validate(
+        baseEnv({
+          ...credentials,
+          ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+          ZIGGLE_MCP_API_KEY: 'short',
+        }),
+      ),
+    ).toThrow();
+  });
+
+  it('accepts a complete Ziggle setup', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+        ZIGGLE_MCP_API_KEY: 'k'.repeat(32),
+        ZIGGLE_MCP_TIMEOUT_MS: '3000',
+        ZIGGLE_NOTICE_WIDGET_KEY_IDS: '*',
+      }),
+    );
+    expect(result.ZIGGLE_MCP_TIMEOUT_MS).toBe(3000);
+  });
+});

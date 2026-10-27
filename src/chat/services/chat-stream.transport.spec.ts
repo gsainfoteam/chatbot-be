@@ -221,4 +221,45 @@ describe('ChatStreamTransport', () => {
       ).not.toThrow();
     });
   });
+
+  describe('writeSources', () => {
+    it('writes external sources without content, error, or internal fields', () => {
+      const transport = createTransport();
+      const reply = { raw: { write: jest.fn(), end: jest.fn() } };
+
+      transport.writeSources(reply as never, [
+        {
+          kind: 'notice',
+          id: '301',
+          title: '장학생 선발 안내',
+          url: 'https://ziggle.gistory.me/notice/301',
+          opened: true,
+        },
+      ]);
+
+      const event = JSON.parse(
+        String(reply.raw.write.mock.calls[0][0]).slice(6),
+      ) as Record<string, unknown>;
+      expect(event).toEqual({
+        type: 'sources',
+        sources: [
+          {
+            kind: 'notice',
+            id: '301',
+            title: '장학생 선발 안내',
+            url: 'https://ziggle.gistory.me/notice/301',
+          },
+        ],
+      });
+    });
+
+    it('writes nothing for an empty list', () => {
+      const transport = createTransport();
+      const reply = { raw: { write: jest.fn(), end: jest.fn() } };
+
+      transport.writeSources(reply as never, []);
+
+      expect(reply.raw.write).not.toHaveBeenCalled();
+    });
+  });
 });

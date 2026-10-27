@@ -7,6 +7,7 @@ export type AnswerRoute = 'direct' | 'agent';
 
 export type AnswerRouteReason =
   | 'agent-disabled'
+  | 'notice-intent'
   | 'confident-match'
   | 'unscored-match'
   | 'no-documents'
@@ -18,9 +19,15 @@ export function decideAnswerRoute(params: {
   documentCount: number;
   /** 벡터 선별의 신뢰도. LLM 선별처럼 판단 근거가 없으면 undefined */
   confident?: boolean;
+  /** 공지 도구를 쓸 수 있고, 질문이 공지를 필요로 해 보이는지 */
+  noticeIntent?: boolean;
 }): { route: AnswerRoute; reason: AnswerRouteReason } {
   if (!params.agentEnabled) {
     return { route: 'direct', reason: 'agent-disabled' };
+  }
+  // 문서가 강하게 맞아도 기간·모집처럼 바뀌는 정보는 공지가 더 최신일 수 있다.
+  if (params.noticeIntent) {
+    return { route: 'agent', reason: 'notice-intent' };
   }
   if (params.documentCount === 0) {
     return { route: 'agent', reason: 'no-documents' };

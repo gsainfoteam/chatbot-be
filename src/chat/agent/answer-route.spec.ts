@@ -43,4 +43,25 @@ describe('decideAnswerRoute', () => {
       }),
     ).toEqual({ route: 'agent', reason: 'weak-match' });
   });
+
+  it('researches notices even after a confident document match', () => {
+    expect(
+      decideAnswerRoute({
+        agentEnabled: true,
+        documentCount: 3,
+        confident: true,
+        noticeIntent: true,
+      }),
+    ).toEqual({ route: 'agent', reason: 'notice-intent' });
+  });
+
+  it('ignores notice intent while the agent is disabled', () => {
+    expect(
+      decideAnswerRoute({
+        agentEnabled: false,
+        documentCount: 3,
+        noticeIntent: true,
+      }),
+    ).toEqual({ route: 'direct', reason: 'agent-disabled' });
+  });
 });

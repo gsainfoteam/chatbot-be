@@ -4,7 +4,7 @@ import type { Readable } from 'stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { LlmUsage } from '../types/llm.types';
 import type { ResourceInfo } from './resource-content.service';
-import type { AgentStep } from '../agent/agent.types';
+import type { AgentStep, ExternalSource } from '../agent/agent.types';
 
 /** SSE `step` 이벤트 페이로드 */
 export type StepEvent = {
@@ -191,6 +191,25 @@ export class ChatStreamTransport {
       `data: ${JSON.stringify({
         type: 'resources',
         resources,
+      })}\n\n`,
+    );
+  }
+
+  /**
+   * 리소스 센터 밖의 출처(Ziggle 공지 등). FE는 `resources`의 url 앞에 리소스 센터 주소를 붙이므로
+   * 외부 링크는 별도 이벤트로 보낸다. `step`과 마찬가지로 content·error 키를 넣지 않는다.
+   */
+  writeSources(reply: FastifyReply, sources: ExternalSource[]): void {
+    if (sources.length === 0) return;
+    reply.raw.write(
+      `data: ${JSON.stringify({
+        type: 'sources',
+        sources: sources.map(({ kind, id, title, url }) => ({
+          kind,
+          id,
+          title,
+          url,
+        })),
       })}\n\n`,
     );
   }

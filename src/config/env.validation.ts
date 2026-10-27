@@ -270,6 +270,35 @@ export class EnvironmentVariables {
   @IsEnum(AgentModelTier)
   AGENT_MODEL_TIER?: AgentModelTier;
 
+  // Ziggle MCP 공지 검색 (에이전트 도구). URL이 비어 있으면 공지 도구를 쓰지 않는다.
+
+  @IsOptional()
+  @IsString()
+  ZIGGLE_MCP_URL?: string;
+
+  /** Ziggle MCP `x-api-key`. Ziggle 서버가 32자 이상을 요구한다. */
+  @ValidateIf((o: EnvironmentVariables) => Boolean(o.ZIGGLE_MCP_URL))
+  @IsString()
+  @MinLength(32)
+  ZIGGLE_MCP_API_KEY?: string;
+
+  /** Ziggle MCP 연결·도구 호출 각각의 시간 상한(ms). 기본 5000. */
+  @IsOptional()
+  @IsInt()
+  @Min(500)
+  @Max(30000)
+  ZIGGLE_MCP_TIMEOUT_MS?: number;
+
+  /** 공지를 쓸 위젯 키 ID(쉼표 구분). `*`는 모든 위젯. 비우면 아무 위젯에서도 쓰지 않는다. */
+  @IsOptional()
+  @IsString()
+  ZIGGLE_NOTICE_WIDGET_KEY_IDS?: string;
+
+  /** 공지 원문 링크 앞부분. 기본 https://ziggle.gistory.me/notice/ */
+  @IsOptional()
+  @IsString()
+  ZIGGLE_NOTICE_URL_BASE?: string;
+
   // Client Domain Configuration
   @IsString()
   @IsNotEmpty()

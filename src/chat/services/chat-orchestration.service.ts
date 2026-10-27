@@ -13,6 +13,8 @@ import type { Readable } from 'stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   FINAL_RESPONSE_SYSTEM_PROMPT,
+  buildNoticeAnswerRules,
+  formatSeoulDate,
   NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
   ANSWER_GROUNDING_REMINDER,
   isNoAnswerResponse,
@@ -28,7 +30,13 @@ import { Trace } from '@gsainfoteam/nest-observability';
 import { UnansweredQuestionsRepository } from '../../unanswered-questions/unanswered-questions.repository';
 import { AgentLoopService } from '../agent/agent-loop.service';
 import { decideAnswerRoute } from '../agent/answer-route';
-import type { AgentStep } from '../agent/agent.types';
+import type { AgentStep, ExternalSource } from '../agent/agent.types';
+import { hasNoticeIntent } from '../agent/notice-intent';
+import { SEARCH_DOCUMENTS_TOOL_NAME } from '../agent/tools/search-documents.tool';
+import { SEARCH_NOTICES_TOOL_NAME } from '../agent/tools/ziggle/search-notices.tool';
+import { GET_NOTICE_TOOL_NAME } from '../agent/tools/ziggle/get-notice.tool';
+import { ZiggleNoticeClient } from '../agent/tools/ziggle/ziggle-notice.client';
+import { NOTICE_MARKER } from '../agent/tools/ziggle/notice-registry';
 
 export type { ResourceInfo };
 
@@ -37,6 +45,8 @@ interface ProcessUserQuestionStreamOptions {
   historyBefore?: Date;
   /** 에이전트 재탐색 진행 단계를 받는다. 빠른 경로에서는 호출되지 않는다. */
   onStep?: (step: AgentStep) => void;
+  /** 위젯별 기능(예: Ziggle 공지) 허용 여부를 판단하는 데 쓴다. */
+  widgetKeyId?: string;
 }
 
 interface StreamingResponseOptions extends ProcessUserQuestionStreamOptions {
@@ -61,6 +71,7 @@ export class ChatOrchestrationService {
     private readonly chatStreamTransport: ChatStreamTransport,
     private readonly unansweredQuestionsRepository: UnansweredQuestionsRepository,
     private readonly agentLoopService: AgentLoopService,
+    private readonly ziggleNoticeClient: ZiggleNoticeClient,
   ) {}
 
   private createEmptyUsage(): LlmUsage {
@@ -142,13 +153,16 @@ export class ChatOrchestrationService {
     historyMessages: LlmMessage[],
     listResult: Awaited<ReturnType<RetrievalService['listCatalog']>>,
     usage: LlmUsage,
-    onStep?: (step: AgentStep) => void,
+    options: Pick<ProcessUserQuestionStreamOptions, 'onStep' | 'widgetKeyId'>,
   ): Promise<{
     content: string;
     usedResources: Array<{ path: string; formats: string[] }>;
+    /** 공지처럼 리소스 센터 밖의 출처 */
+    sources: ExternalSource[];
     /** 에이전트가 거친 단계의 최종 상태. 빠른 경로면 비어 있다. */
     steps: AgentStep[];
   }> {
+    const { onStep } = options;
     let t0 = Date.now();
     const initial =
       await this.resourceContentService.fetchRelevantResourceContents(
@@ -160,13 +174,19 @@ export class ChatOrchestrationService {
       `[PERF] fetchRelevantResourceContents: ${Date.now() - t0}ms`,
     );
 
+    const agentEnabled = this.agentLoopService.isEnabled();
+    const noticesEnabled =
+      agentEnabled && this.ziggleNoticeClient.isEnabledFor(options.widgetKeyId);
     const { route, reason } = decideAnswerRoute({
-      agentEnabled: this.agentLoopService.isEnabled(),
+      agentEnabled,
       documentCount: initial.documents.length,
       confident: initial.confident,
+      noticeIntent: noticesEnabled && hasNoticeIntent(userQuestion),
     });
-    this.logger.log(`[DEBUG] answer route: ${route} (${reason})`);
-    if (route === 'direct') return { ...initial, steps: [] };
+    this.logger.log(
+      `[DEBUG] answer route: ${route} (${reason}), notices=${noticesEnabled}`,
+    );
+    if (route === 'direct') return { ...initial, sources: [], steps: [] };
 
     t0 = Date.now();
     const steps = new Map<string, AgentStep>();
@@ -184,6 +204,13 @@ export class ChatOrchestrationService {
           documents: initial.documents,
           usedResources: initial.usedResources,
         },
+        enabledTools: noticesEnabled
+          ? [
+              SEARCH_DOCUMENTS_TOOL_NAME,
+              SEARCH_NOTICES_TOOL_NAME,
+              GET_NOTICE_TOOL_NAME,
+            ]
+          : [SEARCH_DOCUMENTS_TOOL_NAME],
         onStep: recordStep,
       });
       this.logger.log(`[PERF] agent research: ${Date.now() - t0}ms`);
@@ -192,6 +219,7 @@ export class ChatOrchestrationService {
           .map((doc) => formatRelevantDocument(doc.content))
           .join('\n'),
         usedResources: agentResult.usedResources,
+        sources: agentResult.sources,
         steps: agentResult.steps,
       };
     } catch (error) {
@@ -206,7 +234,7 @@ export class ChatOrchestrationService {
           recordStep({ ...step, status: 'failed' });
         }
       }
-      return { ...initial, steps: [...steps.values()] };
+      return { ...initial, sources: [], steps: [...steps.values()] };
     }
   }
 
@@ -225,6 +253,8 @@ export class ChatOrchestrationService {
     usage: LlmUsage;
     /** 에이전트 재탐색 단계. 빠른 경로면 비어 있다. */
     steps: AgentStep[];
+    /** 공지처럼 리소스 센터 밖의 출처 */
+    sources: ExternalSource[];
   }> {
     const perfTurnStart = Date.now();
     const usage = this.createEmptyUsage();
@@ -272,6 +302,7 @@ export class ChatOrchestrationService {
           referencedDocumentCount: 0,
           usage,
           steps: [],
+          sources: [],
         };
       }
 
@@ -280,7 +311,7 @@ export class ChatOrchestrationService {
         historyMessages,
         listResult,
         usage,
-        options.onStep,
+        options,
       );
 
       const hasContent =
@@ -299,6 +330,7 @@ export class ChatOrchestrationService {
           referencedDocumentCount: 0,
           usage,
           steps: relevantResult.steps,
+          sources: [],
         };
       }
 
@@ -377,7 +409,13 @@ export class ChatOrchestrationService {
       t0 = Date.now();
       this.logger.debug('Generating final response with tool results...');
       const messages: LlmMessage[] = [
-        { role: 'system', content: FINAL_RESPONSE_SYSTEM_PROMPT },
+        {
+          role: 'system',
+          content: relevantResult.content.includes(NOTICE_MARKER)
+            ? FINAL_RESPONSE_SYSTEM_PROMPT +
+              buildNoticeAnswerRules(formatSeoulDate(new Date()))
+            : FINAL_RESPONSE_SYSTEM_PROMPT,
+        },
         ...historyMessages,
         { role: 'user', content: userQuestion },
         {
@@ -430,9 +468,11 @@ export class ChatOrchestrationService {
       return {
         stream,
         resources: allResources,
-        referencedDocumentCount: relevantResult.usedResources.length,
+        referencedDocumentCount:
+          relevantResult.usedResources.length + relevantResult.sources.length,
         usage,
         steps: relevantResult.steps,
+        sources: relevantResult.sources,
       };
     } catch (error) {
       const errorMessage =
@@ -466,9 +506,11 @@ export class ChatOrchestrationService {
         referencedDocumentCount,
         usage: reasoningUsage,
         steps,
+        sources,
       } = await this.processUserQuestionStream(sessionId, userQuestion, {
         persistUserMessage: options.persistUserMessage,
         historyBefore: options.historyBefore,
+        widgetKeyId: options.widgetKeyId,
         onStep: (step) => this.chatStreamTransport.writeStep(reply, step),
       });
 
@@ -497,6 +539,7 @@ export class ChatOrchestrationService {
           referencedDocumentCount > 0 &&
           !isNoAnswerResponse(streamResult.accumulatedContent);
         const answerResources = answered ? resources : [];
+        const answerSources = answered ? selectDisplayedSources(sources) : [];
 
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
@@ -509,6 +552,7 @@ export class ChatOrchestrationService {
               usage,
               resources:
                 answerResources.length > 0 ? answerResources : undefined,
+              sources: answerSources.length > 0 ? answerSources : undefined,
               // 히스토리에서도 진행 과정을 다시 보여줄 수 있게 최종 상태를 남긴다.
               steps: steps.length > 0 ? steps : undefined,
             },
@@ -530,6 +574,7 @@ export class ChatOrchestrationService {
         }
 
         this.chatStreamTransport.writeResources(reply, answerResources);
+        this.chatStreamTransport.writeSources(reply, answerSources);
         this.chatStreamTransport.writeDone(reply);
 
         // 응답 종료 후 기록해 SSE 완료 시점을 늦추지 않는다.
@@ -552,4 +597,14 @@ export class ChatOrchestrationService {
       this.chatStreamTransport.writeError(reply, errorMessage);
     }
   }
+}
+
+/** 화면에 보여줄 외부 출처 수. 요약만 본 공지까지 모두 보여주면 관련 없는 링크가 섞인다. */
+const MAX_DISPLAYED_SOURCES = 3;
+
+/** 본문까지 읽은 출처를 먼저, 같은 조건이면 수집 순서대로 */
+function selectDisplayedSources(sources: ExternalSource[]): ExternalSource[] {
+  return [...sources]
+    .sort((a, b) => Number(b.opened) - Number(a.opened))
+    .slice(0, MAX_DISPLAYED_SOURCES);
 }

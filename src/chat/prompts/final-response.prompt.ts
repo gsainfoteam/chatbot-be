@@ -3,8 +3,13 @@
  */
 
 /** 관련 정보로 답할 수 없을 때 최종 응답이 출력하도록 지시하는 문장 */
-export const NO_ANSWER_MESSAGE =
-  '현재 확인 가능한 정보가 없어 답변드리기 어렵습니다.';
+/**
+ * 답변 불가 문장의 앞부분. 빠른 경로 답변이 이 말로 시작하면 에이전트 재탐색으로 다시 답한다.
+ * NO_ANSWER_MESSAGE와 같은 문장으로 유지해야 한다.
+ */
+export const NO_ANSWER_LEAD = '현재 확인 가능한 정보가 없어';
+
+export const NO_ANSWER_MESSAGE = `${NO_ANSWER_LEAD} 답변드리기 어렵습니다.`;
 
 /**
  * "정보가 없다/확인할 수 없다/답변이 어렵다"류 문장.

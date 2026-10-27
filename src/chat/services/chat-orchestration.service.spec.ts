@@ -789,6 +789,86 @@ describe('ChatOrchestrationService', () => {
       });
     });
 
+    describe('no-answer retry', () => {
+      const refusalStream = () => {
+        const stream = new PassThrough();
+        stream.end(
+          `data: ${JSON.stringify({
+            choices: [{ delta: { content: NO_ANSWER_MESSAGE } }],
+          })}\n\n`,
+        );
+        return stream;
+      };
+
+      it('retries a direct no-answer reply with agent research before anything is sent', async () => {
+        const { run, llmClient, agentLoopService, writtenSse } = setup(
+          createCatalog(),
+          {
+            agentEnabled: true,
+            vectorSelection: confidentSelection,
+            agentRun: async () => ({
+              documents: [
+                { path: '학사편람/졸업요건', content: '재탐색 본문' },
+              ],
+              usedResources: [{ path: '학사편람/졸업요건', formats: ['md'] }],
+              sources: [],
+              steps: [],
+              rounds: 2,
+              stopReason: 'ready',
+            }),
+          },
+        );
+        llmClient.generateFinalResponseStream.mockImplementationOnce(async () =>
+          refusalStream(),
+        );
+
+        await run('GIST 안강훈 교수에 대해 알려줘');
+
+        expect(llmClient.generateFinalResponseStream).toHaveBeenCalledTimes(2);
+        expect(agentLoopService.run).toHaveBeenCalledWith(
+          expect.objectContaining({
+            seed: expect.objectContaining({
+              documents: [
+                {
+                  path: '학사편람/졸업요건',
+                  content: '졸업요건 문서 본문입니다.',
+                },
+              ],
+            }),
+          }),
+        );
+        const [, retriedToolResults] = llmClient.generateFinalResponseStream
+          .mock.calls[1] as unknown as [unknown, Array<{ content: string }>];
+        expect(retriedToolResults[0].content).toContain('재탐색 본문');
+        expect(writtenSse()).not.toContain(NO_ANSWER_MESSAGE);
+        expect(writtenSse()).toContain('졸업요건 답변');
+      });
+
+      it('does not retry while the agent is disabled', async () => {
+        const { run, llmClient, agentLoopService } = setup(createCatalog(), {
+          agentEnabled: false,
+          vectorSelection: confidentSelection,
+        });
+
+        await run('졸업 요건 알려줘', undefined, NO_ANSWER_MESSAGE);
+
+        expect(llmClient.generateFinalResponseStream).toHaveBeenCalledTimes(1);
+        expect(agentLoopService.run).not.toHaveBeenCalled();
+      });
+
+      it('does not retry an answer that came from the agent already', async () => {
+        const { run, llmClient, agentLoopService } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: weakSelection,
+        });
+
+        await run('수강신청 언제야?', undefined, NO_ANSWER_MESSAGE);
+
+        expect(agentLoopService.run).toHaveBeenCalledTimes(1);
+        expect(llmClient.generateFinalResponseStream).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it('tells the user nothing was found when neither search finds documents', async () => {
       const { run, llmClient, unansweredQuestionsRepository } = setup(
         createCatalog(),

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { Readable } from 'stream';
+import { PassThrough, type Readable } from 'stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { LlmUsage } from '../types/llm.types';
 import type { ResourceInfo } from './resource-content.service';
@@ -64,6 +64,69 @@ export class ChatStreamTransport {
    * LLM SSE 스트림을 소비하며 content delta를 클라이언트로 전달합니다.
    * 스트림 종료 시 누적 결과를 resolve합니다.
    */
+  /**
+   * 답변 스트림의 앞부분만 읽어 `lead`로 시작하는지 본다. 클라이언트에는 아무것도 쓰지 않는다.
+   * - 앞부분이 lead와 달라지는 순간 판단을 끝내고, 읽은 내용을 그대로 이어 주는 스트림을 돌려준다.
+   *   일반 답변은 첫 몇 글자에서 갈라지므로 체감 지연이 거의 없다.
+   * - lead와 같으면 원래 스트림을 닫고 matched=true를 돌려준다(그 스트림의 토큰 사용량은 버려진다).
+   * 공백과 마크다운 강조(`*`)는 비교에서 뺀다.
+   */
+  detectLeadingText(
+    stream: Readable,
+    lead: string,
+  ): Promise<{ matched: boolean; stream: Readable }> {
+    const target = compactForLeadMatch(lead);
+    return new Promise((resolve) => {
+      const out = new PassThrough();
+      const buffered: Buffer[] = [];
+      let lineBuffer = '';
+      let content = '';
+      let decided = false;
+
+      const passThrough = () => {
+        decided = true;
+        for (const chunk of buffered) out.write(chunk);
+        buffered.length = 0;
+        resolve({ matched: false, stream: out });
+      };
+
+      stream.on('data', (chunk: Buffer) => {
+        if (decided) {
+          out.write(chunk);
+          return;
+        }
+        buffered.push(chunk);
+        lineBuffer += chunk.toString();
+        const lines = lineBuffer.split('\n');
+        lineBuffer = lines.pop() || '';
+        for (const line of lines) {
+          content += readContentDelta(line);
+        }
+        const seen = compactForLeadMatch(content);
+        if (seen.length >= target.length) {
+          if (seen.startsWith(target)) {
+            decided = true;
+            stream.destroy();
+            out.destroy();
+            resolve({ matched: true, stream: out });
+          } else {
+            passThrough();
+          }
+        } else if (!target.startsWith(seen)) {
+          passThrough();
+        }
+      });
+      stream.on('end', () => {
+        if (!decided) passThrough();
+        out.end();
+      });
+      stream.on('error', (error: Error) => {
+        if (!decided) passThrough();
+        out.destroy(error);
+      });
+    });
+  }
+
   consumeAndForward(
     stream: Readable,
     reply: FastifyReply,
@@ -223,4 +286,24 @@ export class ChatStreamTransport {
     reply.raw.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
     reply.raw.end();
   }
+}
+
+/** OpenAI 호환 SSE 한 줄에서 content 조각을 꺼낸다. 형식이 다르면 빈 문자열 */
+function readContentDelta(line: string): string {
+  if (!line.startsWith('data: ')) return '';
+  const data = line.slice(6).trim();
+  if (!data || data === '[DONE]') return '';
+  try {
+    const parsed = JSON.parse(data) as {
+      choices?: Array<{ delta?: { content?: unknown } }>;
+    };
+    const content = parsed.choices?.[0]?.delta?.content;
+    return typeof content === 'string' ? content : '';
+  } catch {
+    return '';
+  }
+}
+
+function compactForLeadMatch(text: string): string {
+  return text.replace(/[\s*]/g, '');
 }

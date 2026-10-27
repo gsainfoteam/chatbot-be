@@ -262,4 +262,79 @@ describe('ChatStreamTransport', () => {
       expect(reply.raw.write).not.toHaveBeenCalled();
     });
   });
+
+  describe('detectLeadingText', () => {
+    const LEAD = '현재 확인 가능한 정보가 없어';
+    const delta = (content: string) =>
+      `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`;
+
+    async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
+      let text = '';
+      for await (const chunk of stream) text += String(chunk);
+      return text;
+    }
+
+    it('passes a normal answer through untouched as soon as it differs', async () => {
+      const transport = createTransport();
+      const upstream = new PassThrough();
+      const pending = transport.detectLeadingText(upstream, LEAD);
+
+      upstream.write(delta('졸업하려면 '));
+      const result = await pending;
+      upstream.write(delta('130학점이 필요해요.'));
+      upstream.end('data: [DONE]\n\n');
+
+      expect(result.matched).toBe(false);
+      await expect(readAll(result.stream)).resolves.toBe(
+        delta('졸업하려면 ') +
+          delta('130학점이 필요해요.') +
+          'data: [DONE]\n\n',
+      );
+    });
+
+    it('matches the lead even when it arrives in small pieces with markdown', async () => {
+      const transport = createTransport();
+      const upstream = new PassThrough();
+      const pending = transport.detectLeadingText(upstream, LEAD);
+
+      for (const piece of [
+        '**현재',
+        ' 확인 ',
+        '가능한 정보',
+        '가 없어**',
+        ' 답변',
+      ]) {
+        upstream.write(delta(piece));
+      }
+      const result = await pending;
+
+      expect(result.matched).toBe(true);
+      expect(upstream.destroyed).toBe(true);
+    });
+
+    it('does not match an answer that only starts the same way', async () => {
+      const transport = createTransport();
+      const upstream = new PassThrough();
+      const pending = transport.detectLeadingText(upstream, LEAD);
+
+      upstream.write(delta('현재 확인 가능한 정보로는 '));
+      const result = await pending;
+      upstream.end();
+
+      expect(result.matched).toBe(false);
+      await expect(readAll(result.stream)).resolves.toContain('정보로는');
+    });
+
+    it('passes through a stream that ends before a decision', async () => {
+      const transport = createTransport();
+      const upstream = new PassThrough();
+      const pending = transport.detectLeadingText(upstream, LEAD);
+
+      upstream.end(delta('현재'));
+      const result = await pending;
+
+      expect(result.matched).toBe(false);
+      await expect(readAll(result.stream)).resolves.toBe(delta('현재'));
+    });
+  });
 });

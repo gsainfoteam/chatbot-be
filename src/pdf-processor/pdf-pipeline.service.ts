@@ -561,10 +561,9 @@ function buildRootOverview(
     .map((s, i) => `${i + 1}. ${s.title}`)
     .join('\n');
   // A reference here would make the image a candidate for every question.
-  const preface = normalizeImageReferences(
-    sections[0]?.content ?? '',
-    null,
-  ).slice(0, OVERVIEW_CHARS);
+  const preface = normalizeImageReferences(sections[0]?.content ?? '', null)
+    .replaceAll(PAGE_START, '')
+    .slice(0, OVERVIEW_CHARS);
   return [
     summary ? `# 개요\n\n${summary}` : '# 개요',
     '',

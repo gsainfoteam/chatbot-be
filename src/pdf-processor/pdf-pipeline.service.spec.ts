@@ -564,6 +564,26 @@ describe('PdfPipelineService page images', () => {
       expect(result.chunks[1].content).toContain(REFERENCE);
     });
 
+    it('leaves page marks out of the root preview', async () => {
+      const { callLLM } = fakeLlm([
+        '첫 쪽 본문',
+        '지도 설명\n\n![지도](IMAGE:page-2)',
+      ]);
+      const pipeline = createPipeline({
+        pages: [RICH_TEXT, { text: RICH_TEXT, image: IMAGE }],
+        callLLM,
+      });
+
+      const result = await pipeline.processPdf(
+        Buffer.from('%PDF'),
+        'doc.pdf',
+        imageSink(),
+      );
+
+      expect(result.chunks[0].content).toContain('지도 설명');
+      expect(result.chunks[0].content).not.toContain(PAGE_START);
+    });
+
     it('stores the image of a page the LLM references', async () => {
       const { callLLM } = fakeLlm([`${SECTION}\n\n${REFERENCE}`]);
       const pipeline = createPipeline({

@@ -428,9 +428,9 @@ if (parsed.type === 'web_sources') { onWebSources?.(parsed.sources); }  // 신�
 |---|---|---|
 | 1단계 | 에이전트 재탐색 (이벤트 변경 없음) | PR [gsainfoteam/chatbot-be#67](https://github.com/gsainfoteam/chatbot-be/pull/67) (→ development) |
 | 2단계 | `step` 이벤트, `metadata.steps` | PR [gsainfoteam/chatbot-be#68](https://github.com/gsainfoteam/chatbot-be/pull/68) (#67 위 stacked) |
-| 3단계 | Ziggle 공지 도구, `sources` 이벤트, `metadata.sources` | 브랜치 `ikjun1101/cha3-17-ziggle-mcp` (커밋, PR 전) |
-| Gate 보완 | 학교 이름 제외 신뢰도, 빠른 경로 답변 불가 시 재시도 (이벤트 형식 변경 없음) | 브랜치 `ikjun1101/cha3-17-gate-refusal` (커밋, PR 전) |
-| 웹 검색 (실험) | `search_web` 단계, `web_sources` 이벤트, `metadata.webSources` | 브랜치 `ikjun1101/cha3-17-web-search` (미커밋, 도입 여부 검토 중) |
+| 3단계 | Ziggle 공지 도구, `sources` 이벤트, `metadata.sources` | PR [gsainfoteam/chatbot-be#70](https://github.com/gsainfoteam/chatbot-be/pull/70) (#68 위 stacked) |
+| Gate 보완 | 학교 이름 제외 신뢰도, 빠른 경로 답변 불가 시 재시도 (이벤트 형식 변경 없음) | PR [gsainfoteam/chatbot-be#71](https://github.com/gsainfoteam/chatbot-be/pull/71) (#70 위 stacked) |
+| 웹 검색 (실험) + 출처 인용 링크 | `search_web` 단계, `web_sources` 이벤트, `metadata.webSources`, 본문 출처 링크 | Draft PR [gsainfoteam/chatbot-be#72](https://github.com/gsainfoteam/chatbot-be/pull/72) (#71 위 stacked, 도입 여부 검토 중) |
 
 ---
 

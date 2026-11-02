@@ -15,6 +15,7 @@ export type LlmCallOptions = {
   max_tokens?: number;
   /** axios request timeout in milliseconds (default 15000) */
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** function calling에 노출할 도구. 비어 있으면 요청에 싣지 않는다. */
   tools?: LlmTool[];
   tool_choice?: LlmRequest['tool_choice'];
@@ -39,6 +40,6 @@ export interface LlmClient {
     messages: LlmMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: { temperature?: number },
+    options?: Pick<LlmCallOptions, 'temperature' | 'signal'>,
   ): Promise<Readable>;
 }

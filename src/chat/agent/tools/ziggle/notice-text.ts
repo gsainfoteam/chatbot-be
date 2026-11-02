@@ -68,7 +68,8 @@ export function hasImage(html: string): boolean {
 }
 
 const RESIDENT_NUMBER = /\b\d{6}\s?-\s?[1-4]\d{6}\b/g;
-const MOBILE_NUMBER = /\b01[016789][-.\s]?\d{3,4}[-.\s]?\d{4}\b/g;
+const MOBILE_NUMBER =
+  /(?<!\d)(?:0?1[016789]|\+?82[-.\s()]*(?:0[-.\s()]*)?1[016789])[-.\s()]*\d{3,4}[-.\s()]*\d{4}(?!\d)/g;
 const STUDENT_ID = /\b(?:19|20)\d{6}\b/g;
 /** 학번이 이 개수 이상 나오면 명단으로 보고 가린다. 한두 개는 날짜·문서번호일 수 있다. */
 const STUDENT_ID_LIST_THRESHOLD = 3;

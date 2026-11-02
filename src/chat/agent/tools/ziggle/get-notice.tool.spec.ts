@@ -46,6 +46,7 @@ describe('GetNoticeTool', () => {
     expect(result.documents).toEqual([
       {
         path: 'ziggle-notice/7',
+        sourceUrls: ['https://ziggle.example/notice/7'],
         content:
           '[Ziggle 공지] 장학생 선발\n\n신청 기간: 10.1.~10.6.\n문의 [휴대전화 번호 가림]',
       },

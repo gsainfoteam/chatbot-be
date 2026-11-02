@@ -251,6 +251,11 @@ export class EnvironmentVariables {
   @Transform(parseBooleanEnv(false))
   AGENT_ENABLED?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  AGENT_ENFORCE_TIME_BUDGET?: boolean;
+
   /** 에이전트 도구 호출 라운드 상한. 기본 3. */
   @IsOptional()
   @IsInt()

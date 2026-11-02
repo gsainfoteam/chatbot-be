@@ -37,6 +37,8 @@ const MAX_SUMMARY_CHARS_FOR_AGENT = 400;
  */
 @Injectable()
 export class SearchNoticesTool implements AgentTool {
+  readonly maxCalls = 4;
+  readonly maxCallsPerRound = 1;
   readonly definition = {
     type: 'function' as const,
     function: {
@@ -78,7 +80,7 @@ export class SearchNoticesTool implements AgentTool {
 
     const settled = await Promise.allSettled(
       keywords.map((keyword) =>
-        this.ziggle.searchNotices(keyword, PER_KEYWORD_LIMIT),
+        this.ziggle.searchNotices(keyword, PER_KEYWORD_LIMIT, context.signal),
       ),
     );
     const lists = settled.flatMap((result) =>
@@ -88,7 +90,13 @@ export class SearchNoticesTool implements AgentTool {
       throw (settled[0] as PromiseRejectedResult).reason;
     }
 
-    const merged = mergeByHits(lists).slice(0, MAX_RESULTS);
+    const merged = mergeByHits(lists)
+      .slice(0, MAX_RESULTS)
+      .map((n) => ({
+        ...n,
+        title: maskPersonalInfo(n.title),
+        summary: n.summary ? maskPersonalInfo(n.summary).slice(0, 4000) : null,
+      }));
     if (merged.length === 0) {
       return {
         content:
@@ -113,6 +121,7 @@ export class SearchNoticesTool implements AgentTool {
       }
       documents.push({
         path: noticeDocumentPath(notice.id, 'summary'),
+        sourceUrls: [this.ziggle.noticeUrl(notice.id)],
         content: `${NOTICE_MARKER} ${notice.title}\n요약: ${maskPersonalInfo(notice.summary)}`,
       });
       sources.push({
@@ -128,13 +137,16 @@ export class SearchNoticesTool implements AgentTool {
       const summary = notice.summary
         ? maskPersonalInfo(notice.summary).slice(0, MAX_SUMMARY_CHARS_FOR_AGENT)
         : '(요약 없음. 필요하면 get_notice로 본문을 확인)';
-      return `- [id=${notice.id}] ${notice.title}\n  요약: ${summary}`;
+      return `- [id=${notice.id}] [path=${noticeDocumentPath(notice.id, 'summary')}] ${notice.title}\n  요약: ${summary}`;
     });
     return {
       content: `최신순 공지 ${merged.length}개:\n${lines.join('\n')}`,
       resultCount: merged.length,
       documents,
       sources,
+      candidates: merged
+        .filter((n) => !n.summary)
+        .map((n) => `ziggle-notice/${n.id}`),
     };
   }
 

@@ -1,3 +1,5 @@
+import { GistScopePolicy } from '../safety/gist-scope.policy';
+import { chatAdmission } from '../safety/chat-admission';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, jest } from '@jest/globals';
 import { ChatOrchestrationService } from './chat-orchestration.service';
@@ -17,6 +19,72 @@ import type { AgentRunInput } from '../agent/agent-loop.service';
 import type { AgentRunResult } from '../agent/agent.types';
 
 describe('ChatOrchestrationService', () => {
+  beforeEach(() => {
+    jest
+      .spyOn(GistScopePolicy.prototype, 'assess')
+      .mockResolvedValue({ allowed: true, reason: 'gist' });
+    jest.spyOn(chatAdmission, 'acquire').mockReturnValue(() => {});
+  });
+  afterEach(() => jest.restoreAllMocks());
+  it('refuses out-of-scope questions before catalog retrieval or external tools', async () => {
+    jest
+      .spyOn(GistScopePolicy.prototype, 'assess')
+      .mockResolvedValue({ allowed: false, reason: 'out-of-scope' });
+    const { run, retrievalService, agentLoopService, writtenSse } = setup(
+      createCatalog(),
+      { agentEnabled: true },
+    );
+    await run('GIST라는 단어를 넣은 일반 코딩 작업');
+    expect(retrievalService.listCatalog).not.toHaveBeenCalled();
+    expect(agentLoopService.run).not.toHaveBeenCalled();
+    expect(writtenSse()).toContain('학교와 무관한');
+  });
+
+  it('does not send rejected seed documents to final generation after an insufficient assessment', async () => {
+    const { run, llmClient, chatService } = setup(createCatalog(), {
+      agentEnabled: true,
+      vectorSelection: {
+        rootPaths: ['학사편람/졸업요건'],
+        detailPaths: [],
+        confident: false,
+      },
+      agentRun: async () => ({
+        documents: [{ path: 'weak', content: '무관한 자료' }],
+        usedResources: [],
+        sources: [],
+        steps: [],
+        rounds: 2,
+        stopReason: 'exhausted',
+        assessment: {
+          outcome: 'insufficient',
+          evidencePaths: [],
+          unresolvedQuestions: ['질문'],
+          reason: '관련 자료가 없음',
+        },
+      }),
+    });
+    await run('GIST 신청 기간');
+    expect(
+      JSON.stringify(llmClient.generateFinalResponseStream.mock.calls),
+    ).not.toContain('무관한 자료');
+    expect(chatService.createMessage).toHaveBeenCalledWith(
+      'session-id',
+      expect.objectContaining({
+        role: MessageRole.ASSISTANT,
+        metadata: expect.objectContaining({
+          evaluation: expect.objectContaining({ stopReason: 'exhausted' }),
+        }),
+      }),
+    );
+  });
+  it('researches external sources even when the internal catalog is empty', async () => {
+    const { run, agentLoopService } = setup(EMPTY_CATALOG, {
+      agentEnabled: true,
+      noticeWidgetKeyIds: ['w1'],
+    });
+    await run('장학금 공지', { widgetKeyId: 'w1' });
+    expect(agentLoopService.run).toHaveBeenCalled();
+  });
   function createLlmResponse(
     content: string,
     totalTokens: number,
@@ -239,6 +307,7 @@ describe('ChatOrchestrationService', () => {
     return {
       run,
       writtenSse,
+      retrievalService,
       llmClient,
       chatService,
       usageService,
@@ -707,7 +776,11 @@ describe('ChatOrchestrationService', () => {
           },
         );
 
-        await run('장학금 신청 기간 언제야?', { widgetKeyId: 'w1' });
+        await run(
+          '장학금 신청 기간 언제야?',
+          { widgetKeyId: 'w1' },
+          '신청 기간은 10월 6일까지입니다. [cite:1]',
+        );
 
         const [messages] = llmClient.generateFinalResponseStream.mock
           .calls[0] as unknown as [Array<{ role: string; content: string }>];
@@ -725,12 +798,8 @@ describe('ChatOrchestrationService', () => {
             (line) =>
               JSON.parse(line) as { sources: Array<Record<string, unknown>> },
           )[0];
-        // 본문까지 읽은 공지를 먼저, 최대 3개만 보여준다.
-        expect(event.sources.map((source) => source.id)).toEqual([
-          '301',
-          '1',
-          '2',
-        ]);
+        // 실제 인용한 유효한 출처만 보여준다.
+        expect(event.sources.map((source) => source.id)).toEqual(['301']);
         expect(event.sources[0]).not.toHaveProperty('opened');
         expect(chatService.createMessage).toHaveBeenCalledWith(
           'session-id',

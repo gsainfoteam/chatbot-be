@@ -79,10 +79,14 @@ describe('ZiggleNoticeClient', () => {
         { id: 2, title: '요약 없음', summary: null },
         { id: 3, title: '빈 요약', summary: null },
       ]);
-      expect(spy).toHaveBeenCalledWith('search_notices', {
-        query: '선발',
-        limit: 8,
-      });
+      expect(spy).toHaveBeenCalledWith(
+        'search_notices',
+        {
+          query: '선발',
+          limit: 8,
+        },
+        undefined,
+      );
       spy.mockRestore();
     });
 

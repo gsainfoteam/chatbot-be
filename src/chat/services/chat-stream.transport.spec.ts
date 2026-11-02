@@ -3,6 +3,48 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { ChatStreamTransport } from './chat-stream.transport';
 
 describe('ChatStreamTransport', () => {
+  it('cancels an idle provider stream without waiting for another token', async () => {
+    const transport = createTransport();
+    const stream = new PassThrough();
+    const c = new AbortController();
+    const promise = transport.consumeAndForward(
+      stream,
+      { raw: { write: jest.fn(), end: jest.fn() } } as never,
+      undefined,
+      c.signal,
+    );
+    c.abort();
+    await expect(promise).rejects.toThrow('cancelled');
+    expect(stream.destroyed).toBe(true);
+  });
+  it('cancels a pending refusal probe', async () => {
+    const transport = createTransport();
+    const stream = new PassThrough();
+    const c = new AbortController();
+    const promise = transport.detectLeadingText(
+      stream,
+      '현재 확인 가능한 정보가 없어',
+      c.signal,
+    );
+    c.abort();
+    await expect(promise).rejects.toThrow('cancelled');
+  });
+  it('preserves multibyte Korean characters across network byte boundaries', async () => {
+    const transport = createTransport();
+    const stream = new PassThrough();
+    const promise = transport.consumeAndForward(stream, {
+      raw: { write: jest.fn(), end: jest.fn() },
+    } as never);
+    const data = Buffer.from(
+      'data: ' +
+        JSON.stringify({ choices: [{ delta: { content: '안녕하세요' } }] }) +
+        '\n\n',
+    );
+    for (const byte of data) stream.write(Buffer.from([byte]));
+    stream.end();
+    expect((await promise).accumulatedContent).toBe('안녕하세요');
+  });
+
   function createTransport() {
     return new ChatStreamTransport({
       get: jest.fn((key: string) =>

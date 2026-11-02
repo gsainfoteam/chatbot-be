@@ -5,6 +5,7 @@ export type AgentConfig = {
   enabled: boolean;
   maxRounds: number;
   timeBudgetMs: number;
+  enforceTimeBudget: boolean;
   modelTier: LlmModelType;
 };
 
@@ -26,6 +27,9 @@ export function readAgentConfig(configService: ConfigService): AgentConfig {
       configService.get('AGENT_MAX_ROUNDS'),
       DEFAULT_AGENT_MAX_ROUNDS,
     ),
+    enforceTimeBudget:
+      String(configService.get('AGENT_ENFORCE_TIME_BUDGET')).toLowerCase() ===
+      'true',
     timeBudgetMs: positiveInt(
       configService.get('AGENT_TIME_BUDGET_MS'),
       DEFAULT_AGENT_TIME_BUDGET_MS,

@@ -69,16 +69,18 @@ describe('ChatOrchestrationService', () => {
     total: 0,
   };
 
-  function setup(listResult: ListResourcesResult) {
+  function setup(listResult: ListResourcesResult, chunkContent?: string) {
     const finalStream = new PassThrough();
     const retrievalService = {
       listCatalog: jest.fn(async () => listResult),
       getContentsByPaths: jest.fn(async (paths: string[]) =>
         paths.map((path) => ({
           path,
-          content: path.includes('졸업')
-            ? '졸업요건 문서 본문입니다.'
-            : '수강신청 문서 본문입니다.',
+          content:
+            chunkContent ??
+            (path.includes('졸업')
+              ? '졸업요건 문서 본문입니다.'
+              : '수강신청 문서 본문입니다.'),
         })),
       ),
     };
@@ -234,6 +236,50 @@ describe('ChatOrchestrationService', () => {
         }),
       }),
     );
+  });
+
+  describe('page images in the answer', () => {
+    const CHUNK =
+      '졸업하려면 총 130학점을 이수해야 합니다.\n\n![졸업 요건 표](IMAGE:page-5)';
+    const IMAGE_URL = `${encodeURIComponent('학사편람')}/images/page-5.jpg`;
+
+    it('sends the image of the page the answer draws on', async () => {
+      const { run, writtenSse, chatService } = setup(createCatalog(), CHUNK);
+
+      await run('졸업 요건 알려줘', undefined, '총 130학점을 이수해야 합니다.');
+
+      expect(writtenSse()).toContain(IMAGE_URL);
+      expect(writtenSse()).toContain('"formats":["jpg"]');
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        'session-id',
+        expect.objectContaining({
+          role: MessageRole.ASSISTANT,
+          metadata: expect.objectContaining({
+            resources: expect.arrayContaining([
+              expect.objectContaining({ url: IMAGE_URL }),
+            ]),
+          }),
+        }),
+      );
+    });
+
+    it('sends no image with an answer that declines', async () => {
+      const { run, writtenSse } = setup(createCatalog(), CHUNK);
+
+      await run('졸업 요건 알려줘', undefined, NO_ANSWER_MESSAGE);
+
+      expect(writtenSse()).not.toContain(IMAGE_URL);
+    });
+
+    it('keeps the reference syntax away from the answering LLM', async () => {
+      const { run, llmClient } = setup(createCatalog(), CHUNK);
+
+      await run('졸업 요건 알려줘', undefined, '총 130학점입니다.');
+
+      expect(
+        JSON.stringify(llmClient.generateFinalResponseStream.mock.calls),
+      ).not.toContain('IMAGE:page-5');
+    });
   });
 
   it('does not record an unanswered question when documents were referenced', async () => {

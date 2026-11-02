@@ -8,6 +8,11 @@ import { ResourceSelectionService } from './resource-selection.service';
 import { VectorChunkSelectionService } from './vector-chunk-selection.service';
 import type { LlmUsage } from '../types/llm.types';
 import { Trace } from '@gsainfoteam/nest-observability';
+import {
+  extractPageImages,
+  type PageImageCandidate,
+  stripPageImageReferences,
+} from './page-image-sources';
 
 /**
  * FE·SSE용 참조 리소스 정보
@@ -236,6 +241,7 @@ export class ResourceContentService {
   ): Promise<{
     content: string;
     usedResources: Array<{ path: string; formats: string[] }>;
+    pageImages: PageImageCandidate[];
   }> {
     this.logger.log(
       `[DEBUG] 1차 선별(description 기준) 입력: 상위 리소스 ${resources.length}개, chunk 총 ${resources.reduce((s, r) => s + (r.chunks?.length ?? 0), 0)}개 → LLM에 전달`,
@@ -270,7 +276,7 @@ export class ResourceContentService {
       ...chunkSelection.detailPaths,
     ];
     if (chunkPaths.length === 0) {
-      return { content: '', usedResources: [] };
+      return { content: '', usedResources: [], pageImages: [] };
     }
 
     t0 = Date.now();
@@ -294,7 +300,7 @@ export class ResourceContentService {
     );
 
     if (documentCandidates.length === 0) {
-      return { content: '', usedResources: [] };
+      return { content: '', usedResources: [], pageImages: [] };
     }
 
     this.logger.log(
@@ -305,7 +311,9 @@ export class ResourceContentService {
     const mdUsed: Array<{ path: string; formats: string[] }> = [];
 
     for (const doc of documentCandidates) {
-      contents.push(`\n\n## 관련 정보\n\n${doc.content}`);
+      contents.push(
+        `\n\n## 관련 정보\n\n${stripPageImageReferences(doc.content)}`,
+      );
       mdUsed.push({ path: doc.path, formats: ['md'] });
     }
 
@@ -338,6 +346,9 @@ export class ResourceContentService {
     return {
       content: contents.join('\n'),
       usedResources: finalUsedResources,
+      pageImages: documentCandidates.flatMap((doc) =>
+        extractPageImages(doc.content, doc.path),
+      ),
     };
   }
 
@@ -353,6 +364,7 @@ export class ResourceContentService {
   ): Promise<{
     content: string;
     usedResources: Array<{ path: string; formats: string[] }>;
+    pageImages: PageImageCandidate[];
   }> {
     const isNewFormat =
       listResult.resources &&
@@ -368,7 +380,7 @@ export class ResourceContentService {
         tokenUsage,
       );
     }
-    return { content: '', usedResources: [] };
+    return { content: '', usedResources: [], pageImages: [] };
   }
 
   private generateResourceUrl(resourcePath: string): string {

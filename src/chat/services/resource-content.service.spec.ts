@@ -113,6 +113,36 @@ describe('ResourceContentService', () => {
     );
   });
 
+  it('hides page image references from the answering LLM and returns them', async () => {
+    const service = new ResourceContentService(
+      {
+        getContentsByPaths: jest.fn(async (_paths: string[]) => [
+          {
+            path: '학사편람/졸업',
+            content: '졸업 130학점\n\n![졸업 표](IMAGE:page-5)',
+          },
+        ]),
+      } as never,
+      {} as never,
+      {
+        selectRelevantChunkPaths: jest
+          .fn<(...args: unknown[]) => Promise<RelevantChunkSelection | null>>()
+          .mockResolvedValue({ rootPaths: [], detailPaths: ['학사편람/졸업'] }),
+      } as never,
+    );
+
+    const result = await service.fetchRelevantResourceContents('졸업 요건', {
+      resources: [{ path: '학사편람', description: '학사', chunks: [] }],
+      chunks: [{ path: '학사편람/졸업', description: '졸업' }],
+    } as unknown as ListResourcesResult);
+
+    expect(result.content).toContain('졸업 표');
+    expect(result.content).not.toContain('IMAGE:page-5');
+    expect(result.pageImages.map((image) => image.objectPath)).toEqual([
+      '학사편람/images/page-5.jpg',
+    ]);
+  });
+
   it('uses vector selection when available and skips LLM selection', async () => {
     const retrievalService = {
       getContentsByPaths: jest.fn(async (_paths: string[]) => [

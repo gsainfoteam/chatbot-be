@@ -22,6 +22,10 @@ import {
   type ResourceInfo,
 } from './resource-content.service';
 import { ChatStreamTransport } from './chat-stream.transport';
+import {
+  type PageImageCandidate,
+  selectPageImageResources,
+} from './page-image-sources';
 import { RetrievalService } from '../../retrieval/retrieval.service';
 import { Trace } from '@gsainfoteam/nest-observability';
 import { UnansweredQuestionsRepository } from '../../unanswered-questions/unanswered-questions.repository';
@@ -119,6 +123,8 @@ export class ChatOrchestrationService {
   ): Promise<{
     stream: Readable;
     resources: ResourceInfo[];
+    /** 사용한 chunk가 참조하는 쪽 이미지. 답변이 끝난 뒤 내용을 보고 고른다. */
+    pageImages: PageImageCandidate[];
     /** 답변 근거로 사용한 문서(chunk) 수. FE 참조 목록 노출 여부와 무관하다. */
     referencedDocumentCount: number;
     usage: LlmUsage;
@@ -169,7 +175,13 @@ export class ChatOrchestrationService {
           this.llmClient.getModel('normal'),
           { temperature: 0 },
         );
-        return { stream, resources: [], referencedDocumentCount: 0, usage };
+        return {
+          stream,
+          resources: [],
+          pageImages: [],
+          referencedDocumentCount: 0,
+          usage,
+        };
       }
 
       t0 = Date.now();
@@ -199,7 +211,13 @@ export class ChatOrchestrationService {
           this.llmClient.getModel('normal'),
           { temperature: 0 },
         );
-        return { stream, resources: [], referencedDocumentCount: 0, usage };
+        return {
+          stream,
+          resources: [],
+          pageImages: [],
+          referencedDocumentCount: 0,
+          usage,
+        };
       }
 
       const resultText =
@@ -330,6 +348,7 @@ export class ChatOrchestrationService {
       return {
         stream,
         resources: allResources,
+        pageImages: relevantResult.pageImages,
         referencedDocumentCount: relevantResult.usedResources.length,
         usage,
       };
@@ -362,6 +381,7 @@ export class ChatOrchestrationService {
       const {
         stream,
         resources,
+        pageImages,
         referencedDocumentCount,
         usage: reasoningUsage,
       } = await this.processUserQuestionStream(sessionId, userQuestion, {
@@ -393,7 +413,16 @@ export class ChatOrchestrationService {
         const answered =
           referencedDocumentCount > 0 &&
           !isNoAnswerResponse(streamResult.accumulatedContent);
-        const answerResources = answered ? resources : [];
+        const answerResources = answered
+          ? [
+              ...resources,
+              ...selectPageImageResources(
+                streamResult.accumulatedContent,
+                userQuestion,
+                pageImages,
+              ),
+            ]
+          : [];
 
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {

@@ -119,9 +119,9 @@ export class PdfTextService {
       useWorkerFetch: false,
       disableFontFace: true,
     });
-    const pdf = await loadingTask.promise;
 
     try {
+      const pdf = await loadingTask.promise;
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
         const page = await pdf.getPage(pageNum);
         let content: PdfPageContent;

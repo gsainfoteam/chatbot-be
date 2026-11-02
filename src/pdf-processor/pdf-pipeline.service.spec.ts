@@ -2,6 +2,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 import type { ConfigService } from '@nestjs/config';
 import type { LlmClient } from '../chat/llm/llm-client.interface';
 import type { LlmRequestMessage, LlmResponse } from '../chat/types/llm.types';
+import { extractPageImages } from '../chat/services/page-image-sources';
+import { PAGE_START } from './page-image-reference';
 import { PdfPipelineService } from './pdf-pipeline.service';
 import type { PdfPageContent, PdfTextService } from './pdf-text.service';
 
@@ -512,6 +514,43 @@ describe('PdfPipelineService page images', () => {
         async () => undefined,
       );
     }
+
+    it('keeps the text of earlier pages from speaking for an image', async () => {
+      const { callLLM } = fakeLlm([
+        '수강신청 안내',
+        '캠퍼스 건물 배치\n\n![지도](IMAGE:page-2)',
+      ]);
+      const pipeline = createPipeline({
+        pages: [RICH_TEXT, { text: RICH_TEXT, image: IMAGE }],
+        callLLM,
+      });
+
+      const result = await pipeline.processPdf(
+        Buffer.from('%PDF'),
+        'doc.pdf',
+        imageSink(),
+      );
+
+      const [image] = extractPageImages(result.chunks[1].content, 'doc');
+      expect(image.context).toContain('캠퍼스 건물 배치');
+      expect(image.context).not.toContain('수강신청');
+    });
+
+    it('marks no page start at the very top of a document', async () => {
+      const { callLLM } = fakeLlm([`${SECTION}\n\n${REFERENCE}`]);
+      const pipeline = createPipeline({
+        pages: [{ text: RICH_TEXT, image: IMAGE }],
+        callLLM,
+      });
+
+      const result = await pipeline.processPdf(
+        Buffer.from('%PDF'),
+        'doc.pdf',
+        imageSink(),
+      );
+
+      expect(allContent(result)).not.toContain(PAGE_START);
+    });
 
     it('leaves references out of the root preview', async () => {
       const { callLLM } = fakeLlm([`${SECTION}\n\n${REFERENCE}`]);

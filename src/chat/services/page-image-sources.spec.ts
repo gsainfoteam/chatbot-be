@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
+import { PAGE_START } from '../../pdf-processor/page-image-reference';
 import {
   extractPageImages,
   selectPageImageResources,
@@ -10,6 +11,12 @@ describe('stripPageImageReferences', () => {
     expect(stripPageImageReferences('본문\n\n![절차도](IMAGE:page-2)')).toBe(
       '본문\n\n절차도',
     );
+  });
+
+  it('removes the marks where pages start', () => {
+    expect(
+      stripPageImageReferences(`앞 쪽\n\n${PAGE_START}\n이번 쪽`),
+    ).not.toContain(PAGE_START);
   });
 });
 
@@ -33,6 +40,17 @@ describe('extractPageImages', () => {
 
     expect(images[1].context).toContain('둘째 쪽');
     expect(images[1].context).not.toContain('첫째 쪽');
+  });
+
+  it('takes context only from the page of the reference', () => {
+    const [image] = extractPageImages(
+      `수강신청 안내\n\n${PAGE_START}\n캠퍼스 건물 배치\n\n![지도](IMAGE:page-5)`,
+      '문서',
+    );
+
+    expect(image.context).toContain('캠퍼스 건물 배치');
+    expect(image.context).not.toContain('수강신청');
+    expect(image.context).not.toContain(PAGE_START);
   });
 
   it('returns nothing for a chunk without references', () => {

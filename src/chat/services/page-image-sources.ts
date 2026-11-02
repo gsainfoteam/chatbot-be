@@ -1,4 +1,7 @@
-import { pageImageObjectPath } from '../../pdf-processor/page-image-reference';
+import {
+  PAGE_START,
+  pageImageObjectPath,
+} from '../../pdf-processor/page-image-reference';
 
 export type PageImageCandidate = {
   objectPath: string;
@@ -25,7 +28,7 @@ const MIN_SHARE_OF_BEST = 0.5;
 
 /** The answering LLM gets the description only, so it cannot echo the syntax. */
 export function stripPageImageReferences(content: string): string {
-  return content.replace(PAGE_IMAGE_REFERENCE, '$1');
+  return content.replace(PAGE_IMAGE_REFERENCE, '$1').replaceAll(PAGE_START, '');
 }
 
 export function extractPageImages(
@@ -42,6 +45,8 @@ export function extractPageImages(
       description: match[1],
       context: content
         .slice(contextStart, match.index)
+        .split(PAGE_START)
+        .pop()!
         .slice(-MAX_CONTEXT_CHARS),
     });
     contextStart = match.index + match[0].length;

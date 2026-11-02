@@ -5,6 +5,7 @@ import { PDF_CHUNKING_PROMPT } from '../chat/prompts/pdf-chunking-prompt';
 import { LLM_CLIENT, type LlmClient } from '../chat/llm/llm-client.interface';
 import type { LlmRequestMessage } from '../chat/types/llm.types';
 import {
+  PAGE_START,
   appendPageImageReference,
   hasNoTextLayer,
   hasPageImageReference,
@@ -139,7 +140,10 @@ export class PdfPipelineService {
     );
     this.assertPass1FailureWithinLimit(totalPages, failedPages);
 
-    const combinedMarkdown = pageMarkdowns.join('\n\n');
+    const combinedMarkdown = pageMarkdowns
+      .join('\n\n')
+      .trimStart()
+      .replace(new RegExp(`^${PAGE_START}`), '');
     this.logger.log(
       `Pass 2: Labeling server-split sections (${combinedMarkdown.length} chars)`,
     );
@@ -176,7 +180,7 @@ export class PdfPipelineService {
     try {
       if (onPageImage) {
         await onPageImage(page.pageNumber, page.storedImage);
-        return markdown;
+        return `${PAGE_START}\n${markdown}`;
       }
     } catch (error) {
       this.logger.warn(

@@ -1,4 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { createRequire } from 'node:module';
+import { dirname } from 'node:path';
 import { normalizeExtractedText, isLikelyMojibake } from './mojibake';
 import { Trace } from '@gsainfoteam/nest-observability';
 
@@ -18,6 +20,22 @@ export class PdfTextService {
   }
 
   /**
+   * pdf.js loads these on demand: CMaps for CJK fonts, standard fonts, and the
+   * JPX/JBIG2 decoders. Without them that text and those images are lost.
+   */
+  private pdfjsAssetOptions() {
+    const root = dirname(
+      createRequire(__filename).resolve('pdfjs-dist/package.json'),
+    );
+    return {
+      cMapUrl: `${root}/cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `${root}/standard_fonts/`,
+      wasmUrl: `${root}/wasm/`,
+    };
+  }
+
+  /**
    * Extract text per page from a PDF buffer (1-indexed page order in logs; array is 0-indexed).
    */
   async extractPageTexts(pdfBytes: Buffer): Promise<string[]> {
@@ -25,7 +43,8 @@ export class PdfTextService {
     const data = new Uint8Array(pdfBytes);
     const loadingTask = pdfjs.getDocument({
       data,
-      useSystemFonts: true,
+      ...this.pdfjsAssetOptions(),
+      useSystemFonts: false,
       useWorkerFetch: false,
       disableFontFace: true,
     });

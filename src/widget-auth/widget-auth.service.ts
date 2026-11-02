@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from 'node:crypto';
 import {
   Injectable,
   Inject,
@@ -5,7 +6,6 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
-import { createHash } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { DB_CONNECTION, type Database, widgetKeys, sessions } from '../db';
@@ -81,40 +81,33 @@ export class WidgetAuthService {
       pageUrlToStore = dto.pageUrl;
     }
 
-    // 3. 세션 생성 및 DB 저장
+    // 3. 세션 ID와 JWT 토큰 생성
     const expiresInSeconds = 1800; // 30분
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+    const sessionId = randomUUID();
 
-    const [newSession] = await this.db
-      .insert(sessions)
-      .values({
-        widgetKeyId: widgetKey.id,
-        sessionToken: '', // 임시값, 아래에서 JWT 생성 후 업데이트
-        pageUrl: pageUrlToStore,
-        // 질문 한도를 사용자 단위로 세기 위한 키. 원문 대신 위젯 키별 해시만 저장한다.
-        endUserKey: dto.clientId
-          ? createHash('sha256')
-              .update(`${widgetKey.id}:${dto.clientId}`)
-              .digest('hex')
-          : null,
-        expiresAt,
-      })
-      .returning();
-
-    // 4. JWT 토큰 생성
     const payload = {
-      sessionId: newSession.id,
+      sessionId,
       widgetKeyId: widgetKey.id,
     };
     const sessionToken = await this.jwtService.signAsync(payload);
 
-    // 5. 세션에 토큰 저장
-    await this.db
-      .update(sessions)
-      .set({ sessionToken })
-      .where(eq(sessions.id, newSession.id));
+    // 4. 세션 저장 (session_token은 UNIQUE라 임시값 없이 토큰과 함께 저장)
+    await this.db.insert(sessions).values({
+      id: sessionId,
+      widgetKeyId: widgetKey.id,
+      sessionToken,
+      pageUrl: pageUrlToStore,
+      // 질문 한도를 사용자 단위로 세기 위한 키. 원문 대신 위젯 키별 해시만 저장한다.
+      endUserKey: dto.clientId
+        ? createHash('sha256')
+            .update(`${widgetKey.id}:${dto.clientId}`)
+            .digest('hex')
+        : null,
+      expiresAt,
+    });
 
-    // 6. 응답 반환
+    // 5. 응답 반환
     return {
       sessionToken,
       expiresIn: expiresInSeconds,

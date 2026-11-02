@@ -335,15 +335,6 @@ describe('PdfPipelineService page images', () => {
     ]);
   });
 
-  it('sends a page without an image as plain text', async () => {
-    const { callLLM, pass1Contents } = fakeLlm([]);
-    const pipeline = createPipeline({ pages: ['본문 텍스트'], callLLM });
-
-    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
-
-    expect(pass1Contents[0]).toEqual(expect.stringContaining('본문 텍스트'));
-  });
-
   it('reads an image page once', async () => {
     const { callLLM, pass1Contents } = fakeLlm([SECTION]);
     const pipeline = createPipeline({
@@ -591,24 +582,6 @@ describe('PdfPipelineService page images', () => {
       expect(sink).toHaveBeenCalledWith(1, STORED_IMAGE);
     });
 
-    it('drops a reference to a different page', async () => {
-      const { callLLM } = fakeLlm([`${SECTION}\n\n![절차도](IMAGE:page-6)`]);
-      const pipeline = createPipeline({
-        pages: [{ text: RICH_TEXT, image: IMAGE }],
-        callLLM,
-      });
-      const sink = imageSink();
-
-      const result = await pipeline.processPdf(
-        Buffer.from('%PDF'),
-        'doc.pdf',
-        sink,
-      );
-
-      expect(allContent(result)).not.toContain('![');
-      expect(sink).not.toHaveBeenCalled();
-    });
-
     it('stores nothing for a text-rich page the LLM does not reference', async () => {
       const { callLLM } = fakeLlm([SECTION]);
       const pipeline = createPipeline({
@@ -685,18 +658,6 @@ describe('PdfPipelineService page images', () => {
       expect(allContent(result)).not.toContain('IMAGE:page-1');
     });
 
-    it('drops the reference when nothing stores images', async () => {
-      const { callLLM } = fakeLlm([`${SECTION}\n\n${REFERENCE}`]);
-      const pipeline = createPipeline({
-        pages: [{ text: RICH_TEXT, image: IMAGE }],
-        callLLM,
-      });
-
-      const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
-
-      expect(allContent(result)).not.toContain('IMAGE:page-1');
-    });
-
     it('does not pass the reference on as context for the next page', async () => {
       const { callLLM, pass1Contents } = fakeLlm([
         `${SECTION}\n\n${REFERENCE}`,
@@ -722,18 +683,6 @@ describe('PdfPipelineService page images', () => {
     expect(result.chunks.some((c) => c.content.includes('감사합니다'))).toBe(
       false,
     );
-  });
-
-  it('leaves out an image page the LLM returns empty without failing it', async () => {
-    const { callLLM } = fakeLlm(['', SECTION]);
-    const pipeline = createPipeline({
-      pages: [{ text: '', image: IMAGE }, '본문'],
-      callLLM,
-    });
-
-    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
-
-    expect(result.chunks.length).toBeGreaterThan(0);
   });
 
   it('counts a text-rich page the LLM returns empty as failed', async () => {

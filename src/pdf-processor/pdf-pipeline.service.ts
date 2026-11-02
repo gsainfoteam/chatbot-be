@@ -119,20 +119,15 @@ export class PdfPipelineService {
         currentPage: page.pageNumber,
         pageText: page.text,
         pageImage: page.image,
-        imageFailed: page.imageFailed,
         previousContext,
       });
-      if (usedFallback) failedPages.push(page.pageNumber);
+      if (usedFallback || page.imageFailed) failedPages.push(page.pageNumber);
       pageMarkdowns.push(
         await this.storeReferencedImage(markdown, page, onPageImage),
       );
-      const pageContext = normalizeImageReferences(markdown, null);
-      if (pageContext.trim()) {
-        previousContext =
-          pageContext.length > this.contextLength
-            ? pageContext.slice(-this.contextLength)
-            : pageContext;
-      }
+      const pageContext = normalizeImageReferences(markdown, null).trim();
+      previousContext =
+        pageContext.slice(-this.contextLength) || previousContext;
     });
 
     this.logger.log(
@@ -178,16 +173,14 @@ export class PdfPipelineService {
     }
 
     try {
-      if (onPageImage) {
-        await onPageImage(page.pageNumber, page.storedImage);
-        return `${PAGE_START}\n${markdown}`;
-      }
+      await onPageImage?.(page.pageNumber, page.storedImage);
+      return `${PAGE_START}\n${markdown}`;
     } catch (error) {
       this.logger.warn(
         `Failed to store image of page ${page.pageNumber}: ${error instanceof Error ? error.message : String(error)}`,
       );
+      return normalizeImageReferences(markdown, null);
     }
-    return normalizeImageReferences(markdown, null);
   }
 
   private assertPass1FailureWithinLimit(
@@ -221,7 +214,6 @@ export class PdfPipelineService {
     currentPage: number;
     pageText: string;
     pageImage: string | null;
-    imageFailed: boolean;
     previousContext: string;
   }): Promise<{ markdown: string; usedFallback: boolean }> {
     const {
@@ -230,12 +222,11 @@ export class PdfPipelineService {
       currentPage,
       pageText,
       pageImage,
-      imageFailed,
       previousContext,
     } = params;
 
     if (!pageText.trim() && !pageImage) {
-      return { markdown: '', usedFallback: imageFailed };
+      return { markdown: '', usedFallback: false };
     }
 
     // Given the previous page's body next to an image, the LLM repeats it as
@@ -297,7 +288,7 @@ export class PdfPipelineService {
           usedFallback: true,
         };
       }
-      return { markdown, usedFallback: imageFailed };
+      return { markdown, usedFallback: false };
     } catch (error) {
       this.logger.error(
         `Error calling LLM for page ${currentPage}: ${error instanceof Error ? error.message : String(error)}`,

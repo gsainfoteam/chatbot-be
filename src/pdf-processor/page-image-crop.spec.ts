@@ -1,5 +1,10 @@
 import { describe, expect, it } from '@jest/globals';
-import { drawnBounds, storedCrop, type Box } from './page-image-crop';
+import {
+  drawnBounds,
+  figureRegion,
+  storedCrop,
+  type Box,
+} from './page-image-crop';
 
 const WIDTH = 600;
 const HEIGHT = 800;
@@ -134,7 +139,8 @@ describe('drawnBounds', () => {
 });
 
 describe('storedCrop', () => {
-  const crop = (rgba: Uint8ClampedArray) => storedCrop(rgba, WIDTH, HEIGHT);
+  const crop = (rgba: Uint8ClampedArray, figures: Box | null = null) =>
+    storedCrop(rgba, WIDTH, HEIGHT, figures);
 
   it('keeps a blank page whole', () => {
     expect(crop(canvas())).toBeNull();
@@ -148,5 +154,159 @@ describe('storedCrop', () => {
     const body: Box = [100, 100, 500, 400];
 
     expect(crop(canvas(body))).toEqual(padded(body));
+  });
+
+  it('crops to the figures when they are much smaller than the page content', () => {
+    const figure: Box = [150, 300, 450, 500];
+    const rgba = canvas(figure, [100, 100, 500, 200], [100, 600, 500, 700]);
+
+    expect(crop(rgba, figure)).toEqual(figure);
+  });
+
+  it('trims the blank part of the figures', () => {
+    const rgba = canvas([200, 350, 400, 450], [100, 100, 500, 200]);
+
+    expect(crop(rgba, [150, 300, 450, 500])).toEqual(
+      padded([200, 350, 400, 450]),
+    );
+  });
+
+  it('keeps stray lines that belong to the figures', () => {
+    const figures: Box = [100, 200, 500, 600];
+    const rgba = canvas(
+      [100, 200, 500, 300],
+      [290, 570, 310, 580],
+      [100, 20, 500, 100],
+      [100, 650, 500, 760],
+    );
+
+    expect(crop(rgba, figures)).toEqual([100, 200, 500, 584]);
+  });
+
+  it('falls back to the page content when figures cover most of it', () => {
+    const body: Box = [100, 100, 500, 500];
+
+    expect(crop(canvas(body), [100, 100, 500, 450])).toEqual(padded(body));
+  });
+
+  it('falls back to the page content when the figures render blank', () => {
+    const body: Box = [100, 100, 500, 300];
+
+    expect(crop(canvas(body), [100, 600, 500, 700])).toEqual(padded(body));
+  });
+
+  it('leaves the page whole when the figures fill it', () => {
+    expect(
+      crop(canvas([0, 0, WIDTH, HEIGHT]), [0, 0, WIDTH, HEIGHT]),
+    ).toBeNull();
+  });
+});
+
+describe('figureRegion', () => {
+  const MAP: Box = [100, 200, 500, 500];
+  const region = (images: Box[], text: Box[] = [], width = 600, height = 800) =>
+    figureRegion(images, text, width, height);
+
+  it('finds the only figure on a page', () => {
+    expect(region([MAP])).toEqual(MAP);
+  });
+
+  it('has nothing to show on a page without images', () => {
+    expect(region([])).toBeNull();
+  });
+
+  it('keeps a wide page together, since it was composed as one screen', () => {
+    expect(region([[100, 100, 500, 400]], [], 800, 600)).toBeNull();
+    expect(region([[100, 100, 500, 400]], [], 660, 600)).toBeNull();
+  });
+
+  it('treats a nearly square page as a document', () => {
+    expect(region([[100, 100, 500, 400]], [], 640, 600)).toEqual([
+      100, 100, 500, 400,
+    ]);
+  });
+
+  it('does not treat small images alone as figures', () => {
+    expect(
+      region([
+        [0, 0, 100, 100],
+        [200, 0, 300, 100],
+        [400, 0, 500, 100],
+      ]),
+    ).toBeNull();
+  });
+
+  it('takes in every smaller image next to a real figure', () => {
+    const photo: Box = [100, 600, 200, 700];
+
+    expect(region([MAP, photo])).toEqual([100, 200, 500, 700]);
+  });
+
+  it('leaves logos out', () => {
+    expect(region([MAP, [540, 10, 590, 50]])).toEqual(MAP);
+  });
+
+  it('ignores a background or a scan', () => {
+    expect(region([[0, 0, 600, 800]])).toBeNull();
+    expect(region([[0, 0, 600, 800], MAP])).toEqual(MAP);
+  });
+
+  it('keeps the part of an image that is on the page', () => {
+    expect(region([[300, 300, 900, 900]])).toEqual([300, 300, 600, 800]);
+  });
+
+  it('ignores an image off the page', () => {
+    expect(region([[700, 900, 900, 1000]])).toBeNull();
+  });
+
+  it('rounds outward to whole pixels', () => {
+    expect(region([[100.4, 200.4, 499.6, 499.6]])).toEqual(MAP);
+  });
+
+  describe('text at its edges', () => {
+    it('takes in a whole line that the crop would cut', () => {
+      expect(region([MAP], [[50, 195, 300, 215]])).toEqual([50, 195, 500, 500]);
+    });
+
+    it('takes in the rest of a cut line', () => {
+      expect(
+        region(
+          [MAP],
+          [
+            [50, 195, 120, 215],
+            [130, 195, 200, 215],
+            [20, 195, 45, 215],
+          ],
+        ),
+      ).toEqual([20, 195, 500, 500]);
+    });
+
+    it('takes in a label right beside the figure', () => {
+      expect(region([MAP], [[510, 300, 590, 320]])).toEqual([
+        100, 200, 590, 500,
+      ]);
+    });
+
+    it('leaves out text that is clear of the figure', () => {
+      expect(
+        region(
+          [MAP],
+          [
+            [100, 150, 500, 170],
+            [100, 530, 500, 550],
+          ],
+        ),
+      ).toEqual(MAP);
+    });
+
+    it('leaves out a line just above the figure', () => {
+      expect(region([MAP], [[100, 180, 500, 200]])).toEqual(MAP);
+    });
+
+    it('leaves out text far beside the figure', () => {
+      expect(region([[100, 200, 400, 500]], [[500, 300, 590, 320]])).toEqual([
+        100, 200, 400, 500,
+      ]);
+    });
   });
 });

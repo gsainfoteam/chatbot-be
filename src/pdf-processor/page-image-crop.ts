@@ -1,6 +1,15 @@
 /** [left, top, right, bottom] in canvas pixels. */
 export type Box = readonly [number, number, number, number];
 
+/** A page this wide was composed as one screen, so its text and pictures stay together. */
+const SLIDE_RATIO = 1.1;
+/** A scan or a background rather than a figure. */
+const BACKGROUND_SHARE = 0.9;
+/** A page needs an image this large before its pictures are shown on their own. */
+const MAIN_FIGURE_SHARE = 0.1;
+/** Smaller images are logos and bullets. */
+const MIN_FIGURE_SHARE = 0.01;
+
 /** Lighter than this on every channel counts as blank paper. */
 const BLANK_ABOVE = 215;
 /** Rows and columns with fewer drawn pixels than this share are specks. */
@@ -15,11 +24,88 @@ const EDGE_ZONE = 0.12;
 const EDGE_LINE = 0.035;
 const EDGE_GAP = 0.05;
 
+/** Figures covering this share of the page content leave nothing worth losing it for. */
+const NO_BENEFIT_SHARE = 0.75;
 /** A crop keeping this share of the canvas is not worth encoding again. */
 const WORTH_CROPPING_SHARE = 0.9;
 
 function area([left, top, right, bottom]: Box): number {
   return Math.max(0, right - left) * Math.max(0, bottom - top);
+}
+
+function union(a: Box, b: Box): Box {
+  return [
+    Math.min(a[0], b[0]),
+    Math.min(a[1], b[1]),
+    Math.max(a[2], b[2]),
+    Math.max(a[3], b[3]),
+  ];
+}
+
+/** An edge through a line of text looks like a mistake, so a line it touches goes in whole. */
+function withWholeTextLines(region: Box, textBoxes: Box[]): Box {
+  let box = region;
+  const outside = [...textBoxes];
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (let i = outside.length - 1; i >= 0; i -= 1) {
+      const text = outside[i];
+      // A line often arrives as separate runs, a text height or less apart.
+      const reach = Math.min(text[2] - text[0], text[3] - text[1]);
+      if (
+        text[0] - reach < box[2] &&
+        box[0] < text[2] + reach &&
+        text[1] < box[3] &&
+        box[1] < text[3]
+      ) {
+        box = union(box, text);
+        outside.splice(i, 1);
+        grew = true;
+      }
+    }
+  }
+  return box;
+}
+
+/**
+ * Where a page's pictures are, when they can stand apart from the text around them.
+ * Null leaves the whole page content in the picture.
+ */
+export function figureRegion(
+  images: Box[],
+  textBoxes: Box[],
+  width: number,
+  height: number,
+): Box | null {
+  if (width / height >= SLIDE_RATIO) return null;
+
+  const clamp = ([left, top, right, bottom]: Box): Box => [
+    Math.max(0, left),
+    Math.max(0, top),
+    Math.min(width, right),
+    Math.min(height, bottom),
+  ];
+  const pageArea = width * height;
+  const figures = images
+    .map(clamp)
+    .filter(
+      (box) =>
+        area(box) >= pageArea * MIN_FIGURE_SHARE &&
+        area(box) < pageArea * BACKGROUND_SHARE,
+    );
+  if (!figures.some((box) => area(box) >= pageArea * MAIN_FIGURE_SHARE)) {
+    return null;
+  }
+
+  const [left, top, right, bottom] = clamp(
+    withWholeTextLines(figures.reduce(union), textBoxes),
+  );
+  return [
+    Math.floor(left),
+    Math.floor(top),
+    Math.ceil(right),
+    Math.ceil(bottom),
+  ];
 }
 
 function countDrawn(
@@ -127,8 +213,14 @@ export function storedCrop(
   rgba: Uint8ClampedArray,
   width: number,
   height: number,
+  figures: Box | null,
 ): Box | null {
   const content = drawnBounds(rgba, width, [0, 0, width, height], true);
   if (!content) return null;
-  return area(content) < width * height * WORTH_CROPPING_SHARE ? content : null;
+
+  const crop =
+    figures && area(figures) < area(content) * NO_BENEFIT_SHARE
+      ? (drawnBounds(rgba, width, figures, false) ?? content)
+      : content;
+  return area(crop) < width * height * WORTH_CROPPING_SHARE ? crop : null;
 }

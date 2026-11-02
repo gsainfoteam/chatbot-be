@@ -1,4 +1,4 @@
-import { storedCrop, type Box } from './page-image-crop';
+import { figureRegion, storedCrop, type Box } from './page-image-crop';
 
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 type PdfOps = PdfjsModule['OPS'];
@@ -7,6 +7,9 @@ export type PdfDocument = Awaited<
 >;
 export type PdfPage = Awaited<ReturnType<PdfDocument['getPage']>>;
 type PdfOperatorList = Awaited<ReturnType<PdfPage['getOperatorList']>>;
+export type PdfTextContent = Awaited<ReturnType<PdfPage['getTextContent']>>;
+type PdfTextItem = Extract<PdfTextContent['items'][number], { str: string }>;
+type Point = [number, number];
 
 type PageCanvas = {
   canvas: {
@@ -64,11 +67,23 @@ const JPEG_QUALITY = 80;
  */
 const CROP_MARGIN = 0.04;
 
+const UNIT_SQUARE: Point[] = [
+  [0, 0],
+  [1, 0],
+  [0, 1],
+  [1, 1],
+];
+
+function applyMatrix([a, b, c, d, e, f]: number[], [x, y]: Point): Point {
+  return [a * x + c * y + e, b * x + d * y + f];
+}
+
 function scanOperators(list: PdfOperatorList, ops: PdfOps) {
   const stack: number[][] = [];
-  let matrix = [1, 0, 0, 1];
+  let matrix = [1, 0, 0, 1, 0, 0];
   const scan = {
     imageArea: 0,
+    images: [] as Point[][],
     hasImage: false,
     hasUnmeasuredImage: false,
     paintedPaths: 0,
@@ -77,12 +92,14 @@ function scanOperators(list: PdfOperatorList, ops: PdfOps) {
   };
 
   const applyTransform = (t: number[]) => {
-    const [a, b, c, d] = matrix;
+    const [a, b, c, d, e, f] = matrix;
     matrix = [
       a * t[0] + c * t[1],
       b * t[0] + d * t[1],
       a * t[2] + c * t[3],
       b * t[2] + d * t[3],
+      a * t[4] + c * t[5] + e,
+      b * t[4] + d * t[5] + f,
     ];
   };
 
@@ -109,6 +126,9 @@ function scanOperators(list: PdfOperatorList, ops: PdfOps) {
         scan.hasImage = true;
         scan.imageArea += Math.abs(
           matrix[0] * matrix[3] - matrix[1] * matrix[2],
+        );
+        scan.images.push(
+          UNIT_SQUARE.map((corner) => applyMatrix(matrix, corner)),
         );
         break;
       // The optimizer folds per-image transforms into these ops.
@@ -199,6 +219,63 @@ export async function allImagesFailedToDecode(
   return images.every((image) => image === null);
 }
 
+function renderViewport(page: PdfPage) {
+  const { width, height } = page.getViewport({ scale: 1 });
+  const scale = Math.min(
+    RENDER_SCALE,
+    MAX_IMAGE_EDGE / Math.max(width, height),
+  );
+  return page.getViewport({ scale });
+}
+
+function boundsOf(points: Point[]): Box {
+  const xs = points.map(([x]) => x);
+  const ys = points.map(([, y]) => y);
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
+
+function textCorners({ transform, width, height }: PdfTextItem): Point[] {
+  const [a, b, , , x, y] = transform as number[];
+  const scale = Math.hypot(a, b) || 1;
+  const along: Point = [(a / scale) * width, (b / scale) * width];
+  const up: Point = [(-b / scale) * height, (a / scale) * height];
+  return [
+    [x, y],
+    [x + along[0], y + along[1]],
+    [x + up[0], y + up[1]],
+    [x + along[0] + up[0], y + along[1] + up[1]],
+  ];
+}
+
+/**
+ * Where the pictures of a page land on its rendered canvas, or null to keep all
+ * of its content together.
+ */
+export function pageFigureRegion(
+  page: PdfPage,
+  text: string,
+  textContent: PdfTextContent,
+  operatorList: PdfOperatorList,
+  ops: PdfOps,
+): Box | null {
+  // Nothing but its image may back a page with hardly any text.
+  if (isSparseText(text)) return null;
+  const { images, hasUnmeasuredImage } = scanOperators(operatorList, ops);
+  if (hasUnmeasuredImage) return null;
+
+  const viewport = renderViewport(page);
+  const onCanvas = (points: Point[]) =>
+    boundsOf(points.map((point) => applyMatrix(viewport.transform, point)));
+  return figureRegion(
+    images.map(onCanvas),
+    textContent.items.flatMap((item) =>
+      'str' in item && item.str.trim() ? [onCanvas(textCorners(item))] : [],
+    ),
+    Math.ceil(viewport.width),
+    Math.ceil(viewport.height),
+  );
+}
+
 async function encodeCrop(
   source: PageCanvas,
   canvasFactory: PageCanvasFactory,
@@ -235,15 +312,9 @@ async function encodeCrop(
 export async function renderPageImage(
   page: PdfPage,
   canvasFactory: PageCanvasFactory,
+  figures: Box | null,
 ): Promise<{ image: string; storedImage: Buffer }> {
-  const { width: pageWidth, height: pageHeight } = page.getViewport({
-    scale: 1,
-  });
-  const scale = Math.min(
-    RENDER_SCALE,
-    MAX_IMAGE_EDGE / Math.max(pageWidth, pageHeight),
-  );
-  const viewport = page.getViewport({ scale });
+  const viewport = renderViewport(page);
   const entry = canvasFactory.create(
     Math.ceil(viewport.width),
     Math.ceil(viewport.height),
@@ -262,6 +333,7 @@ export async function renderPageImage(
       entry.context.getImageData(0, 0, width, height).data,
       width,
       height,
+      figures,
     );
     return {
       image: `data:image/jpeg;base64,${jpeg.toString('base64')}`,

@@ -10,10 +10,12 @@ import {
   MAX_IMAGE_PIXELS,
   allImagesFailedToDecode,
   needsPageImage,
+  pageFigureRegion,
   renderPageImage,
   type PageCanvasFactory,
   type PdfDocument,
   type PdfPage,
+  type PdfTextContent,
 } from './pdf-page-image';
 import { Trace } from '@gsainfoteam/nest-observability';
 
@@ -63,6 +65,7 @@ export class PdfTextService {
     page: PdfPage,
     pdf: PdfDocument,
     text: string,
+    textContent: PdfTextContent,
     ops: PdfjsModule['OPS'],
   ): Promise<Pick<PdfPageContent, 'image' | 'storedImage' | 'imageFailed'>> {
     try {
@@ -74,6 +77,13 @@ export class PdfTextService {
       if (await allImagesFailedToDecode(page, operatorList, ops)) {
         throw new Error('every image on the page failed to decode');
       }
+      const figures = pageFigureRegion(
+        page,
+        text,
+        textContent,
+        operatorList,
+        ops,
+      );
 
       // render() decodes images again, so free the first copy before it starts.
       page.cleanup();
@@ -81,7 +91,7 @@ export class PdfTextService {
       await new Promise((resolve) => setImmediate(resolve));
       const canvasFactory = pdf.canvasFactory as PageCanvasFactory;
       return {
-        ...(await renderPageImage(page, canvasFactory)),
+        ...(await renderPageImage(page, canvasFactory, figures)),
         imageFailed: false,
       };
     } catch (error) {
@@ -141,7 +151,13 @@ export class PdfTextService {
           content = {
             pageNumber: pageNum,
             text,
-            ...(await this.loadPageImage(page, pdf, text, pdfjs.OPS)),
+            ...(await this.loadPageImage(
+              page,
+              pdf,
+              text,
+              textContent,
+              pdfjs.OPS,
+            )),
           };
         } finally {
           page.cleanup();

@@ -237,6 +237,7 @@ async function main() {
     broken,
     oversized,
     photoInMargins,
+    photoUnderText,
   ] = pages;
   if (korean.text.replace(/\s+/g, '') !== '가나') {
     throw new Error(`predefined CMap text extract failed: "${korean.text}"`);
@@ -275,18 +276,21 @@ async function main() {
   }
   console.log('OK page images');
 
-  // 7) stored images: 600px of photo, 4px of padding on each side, 4% margin
+  // 7) stored images: 600px of photo, 4px of padding unless a figure bounds it, 4% margin
   const widthOf = async (image: Buffer | null) =>
     image ? (await loadImage(image)).width : 0;
-  const croppedWidth = await widthOf(photoInMargins.storedImage);
-  if (croppedWidth !== 656) {
-    throw new Error(`stored image is wrong: ${croppedWidth}`);
+  const croppedWidths = [
+    await widthOf(photoInMargins.storedImage),
+    await widthOf(photoUnderText.storedImage),
+  ];
+  if (croppedWidths.join() !== '656,648') {
+    throw new Error(`stored images are wrong: ${croppedWidths.join()}`);
   }
   if (!photo.storedImage || (await widthOf(photo.storedImage)) !== 1224) {
     throw new Error('a page filled to its edges should be stored whole');
   }
   const pageSentToLlm = Buffer.from(
-    photoInMargins.image?.split(',')[1] ?? '',
+    photoUnderText.image?.split(',')[1] ?? '',
     'base64',
   );
   if ((await loadImage(pageSentToLlm)).width !== 1224) {

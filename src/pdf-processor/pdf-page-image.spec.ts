@@ -3,6 +3,7 @@ import { createCanvas, loadImage, type SKRSContext2D } from '@napi-rs/canvas';
 import {
   allImagesFailedToDecode,
   needsPageImage,
+  pageFigureRegion,
   renderPageImage,
   type PageCanvasFactory,
 } from './pdf-page-image';
@@ -246,6 +247,130 @@ describe('allImagesFailedToDecode', () => {
   });
 });
 
+describe('pageFigureRegion', () => {
+  function page(width = 612, height = 792) {
+    return {
+      getViewport: ({ scale }: { scale: number }) => ({
+        width: width * scale,
+        height: height * scale,
+        transform: [scale, 0, 0, -scale, 0, height * scale],
+      }),
+    };
+  }
+
+  function region(
+    ops: Op[],
+    items: unknown[] = [],
+    text = LONG_TEXT,
+    target = page(),
+  ) {
+    return pageFigureRegion(
+      target as never,
+      text,
+      { items } as never,
+      operatorList(...ops) as never,
+      OPS as never,
+    );
+  }
+
+  function imageAt(x: number, y: number, width: number, height: number): Op[] {
+    return [
+      [OPS.save],
+      [OPS.transform, [width, 0, 0, height, x, y]],
+      [OPS.paintImageXObject, ['img_p0_1', 2, 2]],
+      [OPS.restore],
+    ];
+  }
+
+  function textAt(x: number, y: number, width: number, str = '본문') {
+    return { str, width, height: 12, transform: [12, 0, 0, 12, x, y] };
+  }
+
+  // PDF y runs upward and the canvas is twice the size, so y 500 is row (792 - 500) * 2.
+  const FIGURE = imageAt(100, 200, 300, 300);
+  const FIGURE_ON_CANVAS = [200, 584, 800, 1184];
+
+  it('places an image on the rendered canvas', () => {
+    expect(region(FIGURE)).toEqual(FIGURE_ON_CANVAS);
+  });
+
+  it('follows a form XObject and the transforms inside it', () => {
+    expect(
+      region([
+        [
+          OPS.paintFormXObjectBegin,
+          [
+            [1, 0, 0, 1, 50, 50],
+            [0, 0, 612, 792],
+          ],
+        ],
+        ...imageAt(100, 100, 200, 300),
+        [OPS.paintFormXObjectEnd],
+      ]),
+    ).toEqual([300, 684, 700, 1284]);
+  });
+
+  it('forgets a transform once it is restored', () => {
+    expect(
+      region([
+        [OPS.save],
+        [OPS.transform, [1, 0, 0, 1, 200, 200]],
+        [OPS.restore],
+        ...FIGURE,
+      ]),
+    ).toEqual(FIGURE_ON_CANVAS);
+  });
+
+  it('bounds a rotated image', () => {
+    expect(
+      region([
+        [OPS.save],
+        [OPS.transform, [0, 300, -300, 0, 400, 200]],
+        [OPS.paintImageXObject, ['img_p0_1', 2, 2]],
+        [OPS.restore],
+      ]),
+    ).toEqual(FIGURE_ON_CANVAS);
+  });
+
+  it('keeps everything on a page with hardly any text', () => {
+    expect(region(FIGURE, [], '짧은 설명')).toBeNull();
+  });
+
+  it('keeps everything when an image cannot be placed', () => {
+    expect(
+      region([...FIGURE, [OPS.paintImageXObjectRepeat, ['img', 2, 2, []]]]),
+    ).toBeNull();
+  });
+
+  it('keeps everything on a wide page', () => {
+    expect(region(FIGURE, [], LONG_TEXT, page(792, 612))).toBeNull();
+  });
+
+  it('takes in a line of text the crop would cut', () => {
+    expect(region(FIGURE, [textAt(50, 495, 300)])).toEqual([
+      100, 570, 800, 1184,
+    ]);
+  });
+
+  it('places rotated text by its reading direction', () => {
+    const upward = {
+      str: '측면',
+      width: 100,
+      height: 12,
+      transform: [0, 12, -12, 0, 95, 300],
+    };
+
+    expect(region(FIGURE, [upward])).toEqual([166, 584, 800, 1184]);
+  });
+
+  it.each<[string, unknown]>([
+    ['whitespace', textAt(50, 495, 300, '  ')],
+    ['marked content', { type: 'beginMarkedContent', id: 'mc0' }],
+  ])('ignores %s among the text items', (_name, item) => {
+    expect(region(FIGURE, [item])).toEqual(FIGURE_ON_CANVAS);
+  });
+});
+
 describe('renderPageImage', () => {
   function setup(pageWidth: number, pageHeight: number) {
     const encode = jest.fn(async () => Buffer.from('jpeg-bytes'));
@@ -276,7 +401,7 @@ describe('renderPageImage', () => {
   it('renders a normal page at twice its size as a JPEG data URL', async () => {
     const { page, factory, create } = setup(612, 792);
 
-    const { image } = await renderPageImage(page, factory);
+    const { image } = await renderPageImage(page, factory, null);
 
     expect(create).toHaveBeenCalledWith(1224, 1584);
     expect(image).toBe(
@@ -287,7 +412,7 @@ describe('renderPageImage', () => {
   it('caps the long edge of oversized pages', async () => {
     const { page, factory, create } = setup(3000, 1500);
 
-    await renderPageImage(page, factory);
+    await renderPageImage(page, factory, null);
 
     expect(create).toHaveBeenCalledWith(2000, 1000);
   });
@@ -295,7 +420,7 @@ describe('renderPageImage', () => {
   it('releases the canvas after rendering', async () => {
     const { page, factory, destroy } = setup(612, 792);
 
-    await renderPageImage(page, factory);
+    await renderPageImage(page, factory, null);
 
     expect(destroy).toHaveBeenCalledTimes(1);
   });
@@ -304,7 +429,7 @@ describe('renderPageImage', () => {
     const { page, factory, destroy, task } = setup(612, 792);
     task.promise = Promise.reject(new Error('render failed'));
 
-    await expect(renderPageImage(page, factory)).rejects.toThrow(
+    await expect(renderPageImage(page, factory, null)).rejects.toThrow(
       'render failed',
     );
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -312,7 +437,7 @@ describe('renderPageImage', () => {
 
   it('returns to the event loop between render chunks', async () => {
     const { page, factory, task } = setup(612, 792);
-    await renderPageImage(page, factory);
+    await renderPageImage(page, factory, null);
     const resume = jest.fn();
 
     (task.onContinue as (resume: () => void) => void)(resume);
@@ -372,6 +497,7 @@ describe('renderPageImage', () => {
       const { image, storedImage } = await renderPageImage(
         paintedPage([200, 200, 600, 500]),
         factory,
+        null,
       );
 
       const whole = await pixels(
@@ -386,10 +512,45 @@ describe('renderPageImage', () => {
       expect(stored.red(220, 170)).toBeLessThan(15);
     });
 
+    it('keeps only the figures when told where they are', async () => {
+      const { storedImage } = await renderPageImage(
+        paintedPage(
+          [100, 100, 1100, 500],
+          [200, 600, 1000, 900],
+          [100, 1000, 1100, 1400],
+        ),
+        factory,
+        [200, 600, 1000, 900],
+      );
+
+      const stored = await pixels(storedImage);
+      expect([stored.width, stored.height]).toEqual([864, 364]);
+    });
+
+    it('fills the margin with white, not with what surrounds the crop', async () => {
+      const { storedImage } = await renderPageImage(
+        paintedPage(
+          [100, 100, 1100, 600],
+          [200, 600, 1000, 900],
+          [100, 900, 1100, 1400],
+        ),
+        factory,
+        [200, 600, 1000, 900],
+      );
+
+      const stored = await pixels(storedImage);
+      expect(stored.red(stored.width / 2, 5)).toBeGreaterThan(240);
+      expect(stored.red(stored.width / 2, stored.height - 5)).toBeGreaterThan(
+        240,
+      );
+      expect(stored.red(5, stored.height / 2)).toBeGreaterThan(240);
+    });
+
     it('stores the rendered page as it is when there is nothing to crop', async () => {
       const { image, storedImage } = await renderPageImage(
         paintedPage([0, 0, 1224, 1584]),
         factory,
+        null,
       );
 
       expect(storedImage.toString('base64')).toBe(
@@ -427,6 +588,7 @@ describe('renderPageImage', () => {
             render: () => ({ promise: Promise.resolve() }),
           } as never,
           failing,
+          null,
         ),
       ).rejects.toThrow('encode failed');
       expect(release).toHaveBeenCalledTimes(2);

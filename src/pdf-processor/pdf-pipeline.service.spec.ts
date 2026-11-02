@@ -513,6 +513,23 @@ describe('PdfPipelineService page images', () => {
       );
     }
 
+    it('leaves references out of the root preview', async () => {
+      const { callLLM } = fakeLlm([`${SECTION}\n\n${REFERENCE}`]);
+      const pipeline = createPipeline({
+        pages: [{ text: RICH_TEXT, image: IMAGE }],
+        callLLM,
+      });
+
+      const result = await pipeline.processPdf(
+        Buffer.from('%PDF'),
+        'doc.pdf',
+        imageSink(),
+      );
+
+      expect(result.chunks[0].content).not.toContain('IMAGE:page-1');
+      expect(result.chunks[1].content).toContain(REFERENCE);
+    });
+
     it('stores the image of a page the LLM references', async () => {
       const { callLLM } = fakeLlm([`${SECTION}\n\n${REFERENCE}`]);
       const pipeline = createPipeline({

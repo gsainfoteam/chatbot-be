@@ -156,6 +156,12 @@ describe('storedCrop', () => {
     expect(crop(canvas(body))).toEqual(padded(body));
   });
 
+  it('leaves a stray page number out of the page content', () => {
+    const body: Box = [100, 100, 500, 400];
+
+    expect(crop(canvas(body, [290, 760, 310, 775]))).toEqual(padded(body));
+  });
+
   it('crops to the figures when they are much smaller than the page content', () => {
     const figure: Box = [150, 300, 450, 500];
     const rgba = canvas(figure, [100, 100, 500, 200], [100, 600, 500, 700]);

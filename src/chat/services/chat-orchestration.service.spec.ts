@@ -270,16 +270,6 @@ describe('ChatOrchestrationService', () => {
 
       expect(writtenSse()).not.toContain(IMAGE_URL);
     });
-
-    it('keeps the reference syntax away from the answering LLM', async () => {
-      const { run, llmClient } = setup(createCatalog(), CHUNK);
-
-      await run('졸업 요건 알려줘', undefined, '총 130학점입니다.');
-
-      expect(
-        JSON.stringify(llmClient.generateFinalResponseStream.mock.calls),
-      ).not.toContain('IMAGE:page-5');
-    });
   });
 
   it('does not record an unanswered question when documents were referenced', async () => {

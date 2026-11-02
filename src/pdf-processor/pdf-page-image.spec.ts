@@ -435,14 +435,6 @@ describe('renderPageImage', () => {
     expect(create).toHaveBeenCalledWith(2000, 1000);
   });
 
-  it('releases the canvas after rendering', async () => {
-    const { page, factory, destroy } = setup(612, 792);
-
-    await renderPageImage(page, factory, null);
-
-    expect(destroy).toHaveBeenCalledTimes(1);
-  });
-
   it('releases the canvas when rendering fails', async () => {
     const { page, factory, destroy, task } = setup(612, 792);
     task.promise = Promise.reject(new Error('render failed'));

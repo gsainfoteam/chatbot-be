@@ -1,7 +1,9 @@
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 type PdfOps = PdfjsModule['OPS'];
-type PdfDocument = Awaited<ReturnType<PdfjsModule['getDocument']>['promise']>;
-type PdfPage = Awaited<ReturnType<PdfDocument['getPage']>>;
+export type PdfDocument = Awaited<
+  ReturnType<PdfjsModule['getDocument']>['promise']
+>;
+export type PdfPage = Awaited<ReturnType<PdfDocument['getPage']>>;
 type PdfOperatorList = Awaited<ReturnType<PdfPage['getOperatorList']>>;
 
 type PageCanvas = {

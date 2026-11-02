@@ -2,9 +2,26 @@ import { Injectable, Logger } from '@nestjs/common';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { normalizeExtractedText, isLikelyMojibake } from './mojibake';
+import {
+  allImagesFailedToDecode,
+  needsPageImage,
+  renderPageImage,
+  type PageCanvasFactory,
+  type PdfDocument,
+  type PdfPage,
+} from './pdf-page-image';
 import { Trace } from '@gsainfoteam/nest-observability';
 
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+
+export type PdfPageContent = {
+  pageNumber: number;
+  text: string;
+  /** JPEG data URL, set only when the text layer alone would lose content. */
+  image: string | null;
+  /** The page needed an image, but rendering or decoding it failed. */
+  imageFailed: boolean;
+};
 
 @Trace()
 @Injectable()
@@ -35,10 +52,42 @@ export class PdfTextService {
     };
   }
 
+  private async loadPageImage(
+    page: PdfPage,
+    pdf: PdfDocument,
+    text: string,
+    ops: PdfjsModule['OPS'],
+  ): Promise<Pick<PdfPageContent, 'image' | 'imageFailed'>> {
+    try {
+      const operatorList = await page.getOperatorList();
+      const [x1, y1, x2, y2] = page.view;
+      if (!needsPageImage(text, operatorList, ops, (x2 - x1) * (y2 - y1))) {
+        return { image: null, imageFailed: false };
+      }
+      if (await allImagesFailedToDecode(page, operatorList, ops)) {
+        throw new Error('every image on the page failed to decode');
+      }
+
+      // render() decodes images again, so free the first copy before it starts.
+      page.cleanup();
+      const canvasFactory = pdf.canvasFactory as PageCanvasFactory;
+      const image = await renderPageImage(page, canvasFactory);
+      return { image, imageFailed: false };
+    } catch (error) {
+      this.logger.warn(
+        `Page ${page.pageNumber}: Page image unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { image: null, imageFailed: true };
+    }
+  }
+
   /**
-   * Extract text per page from a PDF buffer (1-indexed page order in logs; array is 0-indexed).
+   * Visit each page in order, keeping only the current page image in memory.
    */
-  async extractPageTexts(pdfBytes: Buffer): Promise<string[]> {
+  async forEachPage(
+    pdfBytes: Buffer,
+    onPage: (page: PdfPageContent, totalPages: number) => Promise<void>,
+  ): Promise<void> {
     const pdfjs = await this.loadPdfjs();
     const data = new Uint8Array(pdfBytes);
     const loadingTask = pdfjs.getDocument({
@@ -49,17 +98,18 @@ export class PdfTextService {
       disableFontFace: true,
     });
     const pdf = await loadingTask.promise;
-    const pageTexts: string[] = [];
 
     try {
       for (let pageNum = 1; pageNum <= pdf.numPages; pageNum += 1) {
         const page = await pdf.getPage(pageNum);
+        let content: PdfPageContent;
         try {
           const textContent = await page.getTextContent();
           const raw = textContent.items
             .map((item) => ('str' in item ? String(item.str) : ''))
             .join(' ');
 
+          let text = raw;
           if (isLikelyMojibake(raw)) {
             const normalized = normalizeExtractedText(raw);
             if (!normalized) {
@@ -71,18 +121,22 @@ export class PdfTextService {
                 `Page ${pageNum}: Fixed mojibake in extracted text`,
               );
             }
-            pageTexts.push(normalized);
-          } else {
-            pageTexts.push(raw);
+            text = normalized;
           }
+
+          content = {
+            pageNumber: pageNum,
+            text,
+            ...(await this.loadPageImage(page, pdf, text, pdfjs.OPS)),
+          };
         } finally {
           page.cleanup();
         }
+        await onPage(content, pdf.numPages);
       }
-      return pageTexts;
     } finally {
-      // pdfjs-dist v6: document uses cleanup(); loadingTask.destroy() tears down the worker.
-      await pdf.cleanup();
+      // destroy() also cleans up; pdf.cleanup() would throw and hide the cause
+      // when an error interrupts a page that is still rendering.
       await loadingTask.destroy();
     }
   }

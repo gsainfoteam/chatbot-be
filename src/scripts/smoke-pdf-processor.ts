@@ -14,7 +14,11 @@ import {
   isLikelyMojibake,
   normalizeExtractedText,
 } from '../pdf-processor/mojibake';
-import { PdfTextService } from '../pdf-processor/pdf-text.service';
+import {
+  PdfTextService,
+  type PdfPageContent,
+} from '../pdf-processor/pdf-text.service';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 import iconv from 'iconv-lite';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
@@ -197,14 +201,55 @@ async function main() {
   }
 
   // 5) predefined CMap font (bytes are CP949 for 가나)
-  const pdfText = new PdfTextService();
-  const [koreanText] = await pdfText.extractPageTexts(
-    buildPdfWithPages(['BT /Korean 18 Tf 72 700 Td <B0A1B3AA> Tj ET']),
+  const latinText = `BT /Latin 12 Tf 14 TL 50 700 Td ${"(Plain text page with enough characters on each line) ' ".repeat(4)}ET`;
+  const fullPage = (image: string) => `q 612 0 0 792 0 0 cm /${image} Do Q`;
+  const pages: PdfPageContent[] = [];
+  await new PdfTextService().forEachPage(
+    buildPdfWithPages([
+      'BT /Korean 18 Tf 72 700 Td <B0A1B3AA> Tj ET',
+      latinText,
+      fullPage('Photo'),
+      `${latinText}\nq 60 0 0 60 500 700 cm /Photo Do Q`,
+      'q Q',
+      fullPage('Broken'),
+    ]),
+    async (page) => {
+      pages.push(page);
+    },
   );
-  if (koreanText.replace(/\s+/g, '') !== '가나') {
-    throw new Error(`predefined CMap text extract failed: "${koreanText}"`);
+  const [korean, textOnly, photo, smallLogo, blank, broken] = pages;
+  if (korean.text.replace(/\s+/g, '') !== '가나') {
+    throw new Error(`predefined CMap text extract failed: "${korean.text}"`);
   }
   console.log('OK predefined CMap text extract');
+
+  // 6) page images
+  if (!textOnly.text.includes('Plain text page') || textOnly.image) {
+    throw new Error('text-only page should keep its text and get no image');
+  }
+  if (!photo.image?.startsWith('data:image/jpeg;base64,')) {
+    throw new Error('image-only page was not rendered');
+  }
+  // The photo's top-left pixel is red, so a blank white render would fail this.
+  const jpeg = Buffer.from(photo.image.split(',')[1], 'base64');
+  const decoded = await loadImage(jpeg);
+  const canvas = createCanvas(decoded.width, decoded.height);
+  const context = canvas.getContext('2d');
+  context.drawImage(decoded, 0, 0);
+  const [red, green, blue] = context.getImageData(1, 1, 1, 1).data;
+  if (red < 200 || green > 80 || blue > 80) {
+    throw new Error(`rendered image is wrong: rgb(${red},${green},${blue})`);
+  }
+  if (smallLogo.image) {
+    throw new Error('small logo on a text page should not send an image');
+  }
+  if (blank.image || blank.imageFailed) {
+    throw new Error('blank page should be neither rendered nor failed');
+  }
+  if (broken.image || !broken.imageFailed) {
+    throw new Error('undecodable image should be reported as failed');
+  }
+  console.log('OK page images');
 
   console.log('=== smoke passed ===');
 }

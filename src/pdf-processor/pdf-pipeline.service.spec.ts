@@ -1,9 +1,9 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import type { ConfigService } from '@nestjs/config';
 import type { LlmClient } from '../chat/llm/llm-client.interface';
-import type { LlmResponse } from '../chat/types/llm.types';
+import type { LlmRequestMessage, LlmResponse } from '../chat/types/llm.types';
 import { PdfPipelineService } from './pdf-pipeline.service';
-import type { PdfTextService } from './pdf-text.service';
+import type { PdfPageContent, PdfTextService } from './pdf-text.service';
 
 function llmResponse(
   content: string,
@@ -23,11 +23,29 @@ function llmResponse(
 }
 
 function createPipeline(options: {
-  pages: string[];
+  pages: Array<string | Partial<PdfPageContent>>;
   callLLM: jest.Mock<(...args: unknown[]) => Promise<LlmResponse>>;
 }) {
   const pdfTextService = {
-    extractPageTexts: jest.fn(async () => options.pages),
+    forEachPage: jest.fn(
+      async (
+        _pdfBytes: Buffer,
+        onPage: (page: PdfPageContent, totalPages: number) => Promise<void>,
+      ) => {
+        for (const [index, page] of options.pages.entries()) {
+          await onPage(
+            {
+              pageNumber: index + 1,
+              text: '',
+              image: null,
+              imageFailed: false,
+              ...(typeof page === 'string' ? { text: page } : page),
+            },
+            options.pages.length,
+          );
+        }
+      },
+    ),
   };
   const config = {
     get: jest.fn(() => undefined),
@@ -258,6 +276,184 @@ describe('PdfPipelineService metadata pass', () => {
     await expect(
       pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
     ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold/);
+  });
+});
+
+describe('PdfPipelineService page images', () => {
+  const IMAGE = 'data:image/jpeg;base64,QUJD';
+  const SECTION = `## 제목\n\n${'본문 '.repeat(700)}`;
+
+  /** Pass 1 answers in order; Pass 2 answers are generated from the request. */
+  function fakeLlm(pass1Outputs: Array<string | Error>) {
+    const pass1Contents: LlmRequestMessage['content'][] = [];
+    const callLLM = jest.fn<(...args: unknown[]) => Promise<LlmResponse>>(
+      async (...args) => {
+        const { content } = (args[0] as LlmRequestMessage[])[0];
+        if (typeof content === 'string' && /^index:\s*\d+/m.test(content)) {
+          const indexes = [...content.matchAll(/^index:\s*(\d+)\s*$/gm)].map(
+            (m) => Number(m[1]),
+          );
+          return llmResponse(
+            JSON.stringify({
+              summary: '요약',
+              chunks: indexes.map((index) => ({
+                index,
+                path: `sec-${index}`,
+                description: `desc-${index}`,
+              })),
+            }),
+          );
+        }
+
+        const output = pass1Outputs[pass1Contents.length] ?? SECTION;
+        pass1Contents.push(content);
+        if (output instanceof Error) throw output;
+        return llmResponse(output);
+      },
+    );
+    return { callLLM, pass1Contents };
+  }
+
+  it('sends a page with an image as text and image parts', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([]);
+    const pipeline = createPipeline({
+      pages: [{ text: '그림 설명', image: IMAGE }],
+      callLLM,
+    });
+
+    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(pass1Contents[0]).toEqual([
+      { type: 'text', text: expect.stringContaining('그림 설명') },
+      { type: 'image_url', image_url: { url: IMAGE } },
+    ]);
+  });
+
+  it('sends a page without an image as plain text', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([]);
+    const pipeline = createPipeline({ pages: ['본문 텍스트'], callLLM });
+
+    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(pass1Contents[0]).toEqual(expect.stringContaining('본문 텍스트'));
+  });
+
+  it('sends a page with only an image without any page text', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([]);
+    const pipeline = createPipeline({
+      pages: [{ text: '', image: IMAGE }],
+      callLLM,
+    });
+
+    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(pass1Contents[0]).toEqual([
+      { type: 'text', text: expect.not.stringContaining('페이지 텍스트:\n') },
+      { type: 'image_url', image_url: { url: IMAGE } },
+    ]);
+  });
+
+  it('skips the LLM for a page with neither text nor image', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([]);
+    const pipeline = createPipeline({ pages: ['', '본문'], callLLM });
+
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(pass1Contents).toHaveLength(1);
+    expect(result.chunks.length).toBeGreaterThan(0);
+  });
+
+  it('never asks the LLM to convert a document with nothing to read', async () => {
+    const { callLLM } = fakeLlm([]);
+    const pipeline = createPipeline({ pages: ['', ''], callLLM });
+
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow('produced 0 sections');
+    expect(callLLM).not.toHaveBeenCalled();
+  });
+
+  it('counts a failed image on a page without text and skips the LLM', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([]);
+    const pipeline = createPipeline({
+      pages: [{ imageFailed: true }, '본문'],
+      callLLM,
+    });
+
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold.*pages=\[1\]/);
+    expect(pass1Contents).toHaveLength(1);
+  });
+
+  it('counts a failed image on a page with text but still converts the text', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([]);
+    const pipeline = createPipeline({
+      pages: [{ text: '남은 본문', imageFailed: true }, '본문'],
+      callLLM,
+    });
+
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold.*pages=\[1\]/);
+    expect(pass1Contents[0]).toEqual(expect.stringContaining('남은 본문'));
+  });
+
+  it('adds no heading-only section when the LLM fails on an image page', async () => {
+    const { callLLM } = fakeLlm([new Error('timeout')]);
+    const pipeline = createPipeline({
+      pages: [
+        { text: '', image: IMAGE },
+        ...Array.from({ length: 10 }, (_, i) => `본문 ${i}`),
+      ],
+      callLLM,
+    });
+
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(result.chunks.some((c) => c.content.includes('## Page 1'))).toBe(
+      false,
+    );
+  });
+
+  it('keeps the extracted text when the LLM fails on a page with text', async () => {
+    const { callLLM } = fakeLlm([new Error('timeout')]);
+    const pipeline = createPipeline({
+      pages: [
+        '원문 보존',
+        ...Array.from({ length: 10 }, (_, i) => `본문 ${i}`),
+      ],
+      callLLM,
+    });
+
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(
+      result.chunks.some((c) => c.content.includes('## Page 1\n\n원문 보존')),
+    ).toBe(true);
+  });
+
+  it('keeps the previous page context across a blank page', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([`## 앞 장\n\n앞 장의 끝부분`]);
+    const pipeline = createPipeline({
+      pages: ['첫 페이지', '', '셋째 페이지'],
+      callLLM,
+    });
+
+    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(pass1Contents[1]).toEqual(expect.stringContaining('앞 장의 끝부분'));
+    expect(pass1Contents[1]).toEqual(expect.stringContaining('현재 페이지: 3'));
+    expect(pass1Contents[1]).toEqual(expect.stringContaining('총 페이지: 3'));
+  });
+
+  it('fails a document with no pages', async () => {
+    const { callLLM } = fakeLlm([]);
+    const pipeline = createPipeline({ pages: [], callLLM });
+
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow('Pass 1 produced 0 pages');
   });
 });
 

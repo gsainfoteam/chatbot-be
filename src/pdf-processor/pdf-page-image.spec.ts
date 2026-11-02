@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { createCanvas, loadImage, type SKRSContext2D } from '@napi-rs/canvas';
 import {
   allImagesFailedToDecode,
+  exceedsImageBudget,
   needsPageImage,
   pageFigureRegion,
   renderPageImage,
@@ -175,6 +176,33 @@ describe('needsPageImage', () => {
       expect(decide('', [fn, []])).toBe(true);
     },
   );
+});
+
+describe('exceedsImageBudget', () => {
+  const exceeds = (...ops: Op[]) =>
+    exceedsImageBudget(operatorList(...ops) as never, OPS as never);
+  const photo = (id: string, megapixels: number): Op => [
+    OPS.paintImageXObject,
+    [id, megapixels * 1_000_000, 1],
+  ];
+
+  it('adds up the images of a page', () => {
+    expect(exceeds(photo('a', 12), photo('b', 12), photo('c', 6))).toBe(false);
+    expect(exceeds(photo('a', 12), photo('b', 12), photo('c', 7))).toBe(true);
+  });
+
+  it('counts an image painted repeatedly once', () => {
+    expect(exceeds(photo('a', 12), photo('a', 12), photo('a', 12))).toBe(false);
+  });
+
+  it('ignores ops that hold no decoded image', () => {
+    expect(
+      exceeds(
+        [OPS.showText],
+        [OPS.paintImageMaskXObject, [{ width: 9000, height: 9000 }]],
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('allImagesFailedToDecode', () => {

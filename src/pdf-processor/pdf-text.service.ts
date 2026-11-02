@@ -9,6 +9,7 @@ import {
 import {
   MAX_IMAGE_PIXELS,
   allImagesFailedToDecode,
+  exceedsImageBudget,
   needsPageImage,
   pageFigureRegion,
   renderPageImage,
@@ -73,6 +74,9 @@ export class PdfTextService {
       const [x1, y1, x2, y2] = page.view;
       if (!needsPageImage(text, operatorList, ops, (x2 - x1) * (y2 - y1))) {
         return { image: null, storedImage: null, imageFailed: false };
+      }
+      if (exceedsImageBudget(operatorList, ops)) {
+        throw new Error('the images on the page are too large to render');
       }
       if (await allImagesFailedToDecode(page, operatorList, ops)) {
         throw new Error('every image on the page failed to decode');

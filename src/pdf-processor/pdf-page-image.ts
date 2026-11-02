@@ -51,6 +51,11 @@ export type PageCanvasFactory = {
  * a pod shared with chat traffic cannot afford.
  */
 export const MAX_IMAGE_PIXELS = 20_000_000;
+/**
+ * render() holds every image of a page at once. Four 12MP photos took about 330MB
+ * and got the 512MB pod killed, so a page beyond this is left to its text.
+ */
+const MAX_PAGE_IMAGE_PIXELS = 30_000_000;
 
 const SPARSE_TEXT_CHARS = 100;
 const BROKEN_TEXT_RATIO = 0.05;
@@ -178,6 +183,21 @@ export function needsPageImage(
   if (scan.paintedPaths >= MIN_PAINTED_PATHS || scan.hasShading) return true;
 
   return hasGraphics && isSparseText(text);
+}
+
+export function exceedsImageBudget(
+  operatorList: PdfOperatorList,
+  ops: PdfOps,
+): boolean {
+  const pixels = new Map<string, number>();
+  operatorList.fnArray.forEach((fn, i) => {
+    if (fn === ops.paintImageXObject) {
+      const [id, width, height] = operatorList.argsArray[i];
+      pixels.set(id, width * height);
+    }
+  });
+  const total = [...pixels.values()].reduce((sum, count) => sum + count, 0);
+  return total > MAX_PAGE_IMAGE_PIXELS;
 }
 
 /**

@@ -53,7 +53,8 @@ function buildMinimalPdf(text: string): Buffer {
 /**
  * Multi-page PDF sharing one resource set: /Latin (Helvetica), /Korean (non-embedded
  * font that needs the KSCms-UHC-H CMap), /Photo (2x2 raw image), /Broken (undecodable JPX),
- * /Oversized (undecodable JPX that declares too many pixels to be decoded at all).
+ * /Oversized (undecodable JPX that declares too many pixels to be decoded at all),
+ * /Large and /Large2 (20MP each, 1 bit per pixel so they cost next to nothing to decode).
  */
 function buildPdfWithPages(contents: string[]): Buffer {
   const parts: Buffer[] = [];
@@ -77,7 +78,7 @@ function buildPdfWithPages(contents: string[]): Buffer {
       Buffer.from('\nendstream'),
     ]);
 
-  const firstPageId = 8;
+  const firstPageId = 10;
   const pageIds = contents.map((_, i) => firstPageId + i * 2);
   push('%PDF-1.4\n');
   addObject(1, '<< /Type /Catalog /Pages 2 0 R >>');
@@ -111,10 +112,19 @@ function buildPdfWithPages(contents: string[]): Buffer {
       Buffer.from('not a jpeg2000 stream'),
     ),
   );
+  for (const id of [8, 9]) {
+    addObject(
+      id,
+      stream(
+        '/Type /XObject /Subtype /Image /Width 5000 /Height 4000 /ColorSpace /DeviceGray /BitsPerComponent 1',
+        Buffer.alloc(625 * 4000),
+      ),
+    );
+  }
   contents.forEach((content, i) => {
     addObject(
       pageIds[i],
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Latin 3 0 R /Korean 4 0 R >> /XObject << /Photo 5 0 R /Broken 6 0 R /Oversized 7 0 R >> >> /Contents ${pageIds[i] + 1} 0 R >>`,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Latin 3 0 R /Korean 4 0 R >> /XObject << /Photo 5 0 R /Broken 6 0 R /Oversized 7 0 R /Large 8 0 R /Large2 9 0 R >> >> /Contents ${pageIds[i] + 1} 0 R >>`,
     );
     addObject(pageIds[i] + 1, stream('', Buffer.from(content, 'latin1')));
   });
@@ -223,6 +233,8 @@ async function main() {
       fullPage('Oversized'),
       'q 300 0 0 300 150 200 cm /Photo Do Q',
       `${latinText}\nq 300 0 0 300 150 100 cm /Photo Do Q`,
+      `${fullPage('Large')}\n${fullPage('Large2')}`,
+      `${fullPage('Large')}\n${fullPage('Large')}`,
     ]),
     async (page) => {
       pages.push(page);
@@ -238,6 +250,8 @@ async function main() {
     oversized,
     photoInMargins,
     photoUnderText,
+    tooManyPixels,
+    repeatedImage,
   ] = pages;
   if (korean.text.replace(/\s+/g, '') !== '가나') {
     throw new Error(`predefined CMap text extract failed: "${korean.text}"`);
@@ -273,6 +287,12 @@ async function main() {
   // Dropped before decoding: an attempt to decode this stream would report a failure.
   if (oversized.image || oversized.imageFailed) {
     throw new Error('oversized image should be dropped without decoding');
+  }
+  if (tooManyPixels.image || !tooManyPixels.imageFailed) {
+    throw new Error('a page over the pixel budget should not be rendered');
+  }
+  if (!repeatedImage.image || repeatedImage.imageFailed) {
+    throw new Error('an image painted twice should count once');
   }
   console.log('OK page images');
 

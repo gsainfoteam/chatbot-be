@@ -1,3 +1,6 @@
+import { AnswerOutputFilter } from '../safety/answer-output';
+import { maskPersonalInfo } from '../agent/tools/ziggle/notice-text';
+import { StringDecoder } from 'node:string_decoder';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassThrough, type Readable } from 'stream';
@@ -74,12 +77,30 @@ export class ChatStreamTransport {
   detectLeadingText(
     stream: Readable,
     lead: string,
+    signal?: AbortSignal,
   ): Promise<{ matched: boolean; stream: Readable }> {
     const target = compactForLeadMatch(lead);
-    return new Promise((resolve) => {
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
       const out = new PassThrough();
+      const abort = () => {
+        stream.destroy(new Error('Request cancelled'));
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      stream.once('close', () => {
+        signal?.removeEventListener('abort', abort);
+        if (!decided) {
+          decided = true;
+          out.destroy();
+          reject(new Error('Stream closed before answer'));
+        }
+      });
+      out.once('close', () => {
+        if (!stream.destroyed) stream.destroy();
+      });
       const buffered: Buffer[] = [];
       let lineBuffer = '';
+      const decoder = new StringDecoder('utf8');
       let content = '';
       let decided = false;
 
@@ -96,7 +117,7 @@ export class ChatStreamTransport {
           return;
         }
         buffered.push(chunk);
-        lineBuffer += chunk.toString();
+        lineBuffer += decoder.write(chunk);
         const lines = lineBuffer.split('\n');
         lineBuffer = lines.pop() || '';
         for (const line of lines) {
@@ -121,8 +142,11 @@ export class ChatStreamTransport {
         out.end();
       });
       stream.on('error', (error: Error) => {
-        if (!decided) passThrough();
-        out.destroy(error);
+        if (!decided) {
+          decided = true;
+          out.destroy();
+          reject(error instanceof Error ? error : new Error(String(error)));
+        } else out.destroy(error);
       });
     });
   }
@@ -130,18 +154,38 @@ export class ChatStreamTransport {
   consumeAndForward(
     stream: Readable,
     reply: FastifyReply,
+    output?: AnswerOutputFilter,
+    signal?: AbortSignal,
+    onFirstContent?: () => void,
   ): Promise<StreamConsumeResult> {
     return new Promise((resolve, reject) => {
       let accumulatedContent = '';
       let model = '';
       let usage: LlmUsage | null = null;
       let buffer = '';
+      const decoder = new StringDecoder('utf8');
       let settled = false;
+      const cleanup = () => signal?.removeEventListener('abort', abort);
+      const abort = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        stream.destroy();
+        reject(new Error('Request cancelled'));
+      };
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+      signal?.addEventListener('abort', abort, { once: true });
+      stream.once('close', () => {
+        if (!stream.readableEnded) abort();
+      });
 
       stream.on('data', (chunk: Buffer) => {
         if (settled) return;
 
-        buffer += chunk.toString();
+        buffer += decoder.write(chunk);
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
@@ -163,8 +207,10 @@ export class ChatStreamTransport {
             continue;
           }
 
-          const content = parsed.choices?.[0]?.delta?.content;
+          const delta = parsed.choices?.[0]?.delta?.content;
+          const content = delta ? (output ? output.push(delta) : delta) : '';
           if (content) {
+            onFirstContent?.();
             accumulatedContent += content;
             try {
               reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
@@ -197,10 +243,11 @@ export class ChatStreamTransport {
       stream.on('error', (error: Error) => {
         if (settled) return;
         settled = true;
+        cleanup();
         this.logger.error('Stream error:', error);
         try {
           reply.raw.write(
-            `data: ${JSON.stringify({ error: error.message || 'Stream error' })}\n\n`,
+            `data: ${JSON.stringify({ error: '답변 생성 중 오류가 발생했습니다.' })}\n\n`,
           );
         } catch {
           // Socket may already be unavailable.
@@ -218,7 +265,18 @@ export class ChatStreamTransport {
       stream.on('end', () => {
         if (settled) return;
         settled = true;
-        resolve({ accumulatedContent, model, usage });
+        cleanup();
+        try {
+          const content = output?.push('', true) ?? '';
+          if (content) {
+            onFirstContent?.();
+            accumulatedContent += content;
+            reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
+          }
+          resolve({ accumulatedContent, model, usage });
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
       });
     });
   }
@@ -233,9 +291,9 @@ export class ChatStreamTransport {
       type: 'step',
       id: step.id,
       kind: step.kind,
-      label: step.label,
+      label: maskPersonalInfo(step.label),
       status: step.status,
-      ...(step.thought ? { thought: step.thought } : {}),
+      ...(step.thought ? { thought: maskPersonalInfo(step.thought) } : {}),
       ...(step.resultCount != null ? { resultCount: step.resultCount } : {}),
     };
     try {
@@ -303,7 +361,9 @@ export class ChatStreamTransport {
   }
 
   writeError(reply: FastifyReply, errorMessage: string): void {
-    reply.raw.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
+    reply.raw.write(
+      `data: ${JSON.stringify({ error: maskPersonalInfo(errorMessage) })}\n\n`,
+    );
     reply.raw.end();
   }
 }

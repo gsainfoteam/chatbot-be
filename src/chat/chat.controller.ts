@@ -120,7 +120,7 @@ export class ChatController {
       const userMessageCount = await this.chatService.getUserMessageCount(
         session.sessionId,
       );
-      if (userMessageCount > MAX_QUESTIONS_PER_SESSION) {
+      if (userMessageCount >= MAX_QUESTIONS_PER_SESSION) {
         throw new HttpException(
           {
             statusCode: HttpStatus.TOO_MANY_REQUESTS,
@@ -296,7 +296,7 @@ export class ChatController {
     const userMessageCount = await this.chatService.getUserMessageCount(
       session.sessionId,
     );
-    if (userMessageCount > MAX_QUESTIONS_PER_SESSION) {
+    if (userMessageCount >= MAX_QUESTIONS_PER_SESSION) {
       throw new HttpException(
         {
           statusCode: HttpStatus.TOO_MANY_REQUESTS,

@@ -16,6 +16,7 @@ export type LlmCallOptions = {
   max_tokens?: number;
   /** axios request timeout in milliseconds (default 15000) */
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** function calling에 노출할 도구. 비어 있으면 요청에 싣지 않는다. */
   tools?: LlmTool[];
   tool_choice?: LlmRequest['tool_choice'];
@@ -40,7 +41,7 @@ export interface LlmClient {
     messages: LlmMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: { temperature?: number },
+    options?: Pick<LlmCallOptions, 'temperature' | 'signal'>,
   ): Promise<Readable>;
 
   /**
@@ -50,6 +51,9 @@ export interface LlmClient {
   searchWithGoogle(
     messages: LlmMessage[],
     model: string,
-    options?: Pick<LlmCallOptions, 'temperature' | 'max_tokens' | 'timeoutMs'>,
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'max_tokens' | 'timeoutMs' | 'signal'
+    >,
   ): Promise<GroundedSearchResponse>;
 }

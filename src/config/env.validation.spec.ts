@@ -163,6 +163,7 @@ describe('agent configuration', () => {
       readAgentConfig({ get: (key: string) => config[key] } as never),
     ).toEqual({
       enabled: false,
+      enforceTimeBudget: false,
       maxRounds: 3,
       timeBudgetMs: 20000,
       webTimeBudgetMs: 35000,

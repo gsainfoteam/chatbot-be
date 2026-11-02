@@ -117,7 +117,8 @@ function setup(
       ),
     ),
     getNoticeBody: jest.fn(
-      async (id: number) => options.noticeBodies?.[id] ?? null,
+      async (id: number, _signal?: AbortSignal) =>
+        options.noticeBodies?.[id] ?? null,
     ),
     noticeUrl: (id: number) => `https://ziggle.example/notice/${id}`,
   };
@@ -190,7 +191,7 @@ describe('AgentLoopService', () => {
 
     expect(execute).toHaveBeenCalledTimes(2);
     expect(callLLM).toHaveBeenCalledTimes(2);
-    expect(result.stopReason).toBe('ready');
+    expect(result.stopReason).toBe('unassessed');
     expect(result.rounds).toBe(2);
     expect(result.documents.map((doc) => doc.path)).toEqual([
       '문서/졸업 요건',
@@ -205,6 +206,7 @@ describe('AgentLoopService', () => {
     expect(model).toBe('normal-model');
     expect(options.tools.map((tool) => tool.function.name)).toEqual([
       'search_documents',
+      'finish_research',
     ]);
     expect(options.tool_choice).toBe('auto');
   });
@@ -394,8 +396,8 @@ describe('AgentLoopService', () => {
 
     const result = await run();
 
-    expect(callLLM).toHaveBeenCalledTimes(2);
-    expect(result.stopReason).toBe('no-progress');
+    expect(callLLM).toHaveBeenCalledTimes(3);
+    expect(result.stopReason).toBe('max-rounds');
   });
 
   it('keeps rephrasing while nothing has been found yet', async () => {
@@ -459,7 +461,10 @@ describe('AgentLoopService', () => {
 
       await run();
 
-      expect(toolNames(callLLM)).toEqual(['search_documents']);
+      expect(toolNames(callLLM)).toEqual([
+        'search_documents',
+        'finish_research',
+      ]);
       const system = (callLLM.mock.calls[0][0] as LlmMessage[])[0].content;
       expect(system).not.toContain('search_notices');
     });
@@ -475,6 +480,7 @@ describe('AgentLoopService', () => {
         'search_documents',
         'search_notices',
         'get_notice',
+        'finish_research',
       ]);
       const system = (callLLM.mock.calls[0][0] as LlmMessage[])[0].content;
       expect(system).toContain('## Ziggle 공지');
@@ -519,7 +525,7 @@ describe('AgentLoopService', () => {
       const result = await run({ enabledTools });
 
       expect(ziggle.searchNotices).toHaveBeenCalledTimes(2);
-      expect(ziggle.getNoticeBody).toHaveBeenCalledWith(288);
+      expect(ziggle.getNoticeBody).toHaveBeenCalledWith(288, undefined);
       expect(result.documents.map((doc) => doc.path)).toEqual([
         'ziggle-notice/301/summary',
         'ziggle-notice/288',
@@ -568,6 +574,63 @@ describe('AgentLoopService', () => {
       },
     });
 
+    it('defers parallel web requests until internal and notice searches finish without consuming the query', async () => {
+      const { run, webSearch } = setup([
+        response([
+          toolCall('doc', '규정'),
+          noticeCall('notice', ['공지']),
+          webCall('early', 'GIST 규정'),
+        ]),
+        response([webCall('retry', 'GIST 규정')]),
+      ]);
+      await run({
+        enabledTools: ['search_documents', 'search_notices', 'search_web'],
+      });
+      expect(webSearch.search).toHaveBeenCalledTimes(1);
+    });
+
+    it('enforces one web call per round and two per investigation even with different queries', async () => {
+      const { run, webSearch } = setup(
+        [
+          response([webCall('a', 'GIST A'), webCall('b', 'GIST B')]),
+          response([webCall('c', 'GIST C')]),
+          response([webCall('d', 'GIST D')]),
+        ],
+        {
+          webFindings: [
+            {
+              text: '확인된 사실',
+              sources: [
+                {
+                  url: 'https://gist.ac.kr/a',
+                  domain: 'gist.ac.kr',
+                  official: true,
+                  resolved: true,
+                },
+              ],
+            },
+          ],
+        },
+      );
+      await run({
+        enabledTools: ['search_documents', 'search_web'],
+        seed: { documents: [], usedResources: [] },
+      });
+      expect(webSearch.search).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not repeat the network search after an ungrounded result', async () => {
+      const { run, webSearch } = setup([
+        response([webCall('a', 'GIST A')]),
+        response([webCall('b', 'GIST B')]),
+      ]);
+      await run({
+        enabledTools: ['search_documents', 'search_web'],
+        seed: { documents: [], usedResources: [] },
+      });
+      expect(webSearch.search).toHaveBeenCalledTimes(1);
+    });
+
     it('adds web rules only when the web tool is enabled', async () => {
       const { run, callLLM } = setup([]);
 
@@ -577,7 +640,7 @@ describe('AgentLoopService', () => {
       expect(system).toContain('## 웹 검색 (search_web)');
     });
 
-    it('uses the longer web time budget when the web tool is enabled', async () => {
+    it('uses a provider timeout without imposing an elapsed research budget by default', async () => {
       const { run, callLLM } = setup([], {
         config: {
           AGENT_TIME_BUDGET_MS: 20000,
@@ -588,7 +651,7 @@ describe('AgentLoopService', () => {
       await run({ enabledTools: ['search_documents', 'search_web'] });
 
       const options = callLLM.mock.calls[0][2] as { timeoutMs: number };
-      expect(options.timeoutMs).toBeGreaterThan(20000);
+      expect(options.timeoutMs).toBe(15000);
       expect(options.timeoutMs).toBeLessThanOrEqual(35000);
     });
 
@@ -625,6 +688,7 @@ describe('AgentLoopService', () => {
 
       const result = await run({
         enabledTools: ['search_documents', 'search_web'],
+        seed: { documents: [], usedResources: [] },
       });
 
       expect(result.documents.at(-1)?.content).toContain('[웹 검색]');
@@ -637,4 +701,52 @@ describe('AgentLoopService', () => {
       ]);
     });
   });
+});
+
+it('finishes only with a structured assessment referencing collected evidence', async () => {
+  const { run } = setup([
+    response([toolCall('search', '규정')]),
+    response([
+      {
+        id: 'finish',
+        type: 'function',
+        function: {
+          name: 'finish_research',
+          arguments: JSON.stringify({
+            outcome: 'partial',
+            evidencePaths: ['문서/규정'],
+            unresolvedQuestions: ['마감일'],
+            reason: '다른 자료를 찾지 못함',
+          }),
+        },
+      },
+    ]),
+  ]);
+  const result = await run();
+  expect(result.stopReason).toBe('exhausted');
+  expect(result.assessment?.unresolvedQuestions).toEqual(['마감일']);
+});
+
+it('continues from a weak seed through a summaryless notice to its body', async () => {
+  const { run, ziggle } = setup(
+    [
+      response([noticeCall('find', ['장학금'])]),
+      response([readNoticeCall('read', 42)]),
+    ],
+    {
+      notices: [{ id: 42, title: '장학금', summary: null }],
+      noticeBodies: { 42: '신청 기간은 11월 5일까지' },
+    },
+  );
+  const result = await run({
+    seed: {
+      documents: [{ path: 'weak', content: '무관한 문서' }],
+      usedResources: [],
+    },
+    enabledTools: ['search_documents', 'search_notices', 'get_notice'],
+  });
+  expect(ziggle.getNoticeBody).toHaveBeenCalledWith(42, undefined);
+  expect(result.documents.some((d) => d.path === 'ziggle-notice/42')).toBe(
+    true,
+  );
 });

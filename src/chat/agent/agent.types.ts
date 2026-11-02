@@ -1,7 +1,12 @@
+import type { ResearchAssessment } from './research-decision';
 import type { ListResourcesResult } from '../../retrieval/retrieval.types';
 import type { LlmTool, LlmUsage } from '../types/llm.types';
 
-export type AgentDocument = { path: string; content: string };
+export type AgentDocument = {
+  path: string;
+  content: string;
+  sourceUrls?: string[];
+};
 
 export type UsedResource = { path: string; formats: string[] };
 
@@ -20,6 +25,7 @@ export type ExternalSource = {
 /** 한 턴 동안 모든 도구가 공유하는 맥락 */
 export type AgentToolContext = {
   catalog: ListResourcesResult;
+  signal?: AbortSignal;
   /** 검색 단계에서 LLM을 쓰면 토큰을 여기에 더한다. */
   usage: LlmUsage;
   /** 이미 에이전트에게 보여준 문서 경로. 같은 본문을 다시 넘기지 않으려고 쓴다. */
@@ -37,6 +43,8 @@ export type AgentToolResult = {
   documents?: AgentDocument[];
   usedResources?: UsedResource[];
   sources?: ExternalSource[];
+  candidates?: string[];
+  resolvedCandidates?: string[];
 };
 
 export type AgentStepStatus = 'running' | 'done' | 'failed';
@@ -48,6 +56,9 @@ export type AgentStepOutcome =
 
 export interface AgentTool {
   readonly definition: LlmTool;
+  /** 서버가 강제하는 질문당/라운드당 실행 상한 */
+  readonly maxCalls?: number;
+  readonly maxCallsPerRound?: number;
   execute(
     args: Record<string, unknown>,
     context: AgentToolContext,
@@ -78,7 +89,8 @@ export type AgentStep = {
 
 export type AgentStopReason =
   | 'ready'
-  | 'no-progress'
+  | 'unassessed'
+  | 'exhausted'
   | 'max-rounds'
   | 'time-budget'
   | 'llm-error';
@@ -92,4 +104,9 @@ export type AgentRunResult = {
   steps: AgentStep[];
   rounds: number;
   stopReason: AgentStopReason;
+  assessment?: ResearchAssessment;
+  elapsedMs?: number;
+  model?: string;
+  maxRounds?: number;
+  timeBudgetEnforced?: boolean;
 };

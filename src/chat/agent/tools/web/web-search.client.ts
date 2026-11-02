@@ -88,7 +88,12 @@ export class WebSearchClient {
     return widgetKeyId != null && this.widgetKeyIds.has(widgetKeyId);
   }
 
-  async search(query: string, usage: LlmUsage): Promise<WebSearchResult> {
+  async search(
+    query: string,
+    usage: LlmUsage,
+    signal?: AbortSignal,
+  ): Promise<WebSearchResult> {
+    signal?.throwIfAborted();
     const startedAt = Date.now();
     const response = await this.llmClient.searchWithGoogle(
       [
@@ -99,7 +104,7 @@ export class WebSearchClient {
         { role: 'user', content: query },
       ],
       this.model,
-      { temperature: 0, max_tokens: 1500, timeoutMs: this.timeoutMs },
+      { temperature: 0, max_tokens: 1500, timeoutMs: this.timeoutMs, signal },
     );
     if (response.usage) {
       usage.prompt_tokens += response.usage.prompt_tokens ?? 0;
@@ -122,10 +127,11 @@ export class WebSearchClient {
     const resolved = await Promise.all(
       grounding.chunks.map((chunk, index) =>
         usedIndices.has(index)
-          ? resolveGroundingUrl(chunk.uri, RESOLVE_TIMEOUT_MS)
+          ? resolveGroundingUrl(chunk.uri, RESOLVE_TIMEOUT_MS, fetch, signal)
           : Promise.resolve(null),
       ),
     );
+    signal?.throwIfAborted();
     const findings = extractFindings(grounding, resolved, this.policy);
     this.logger.log(
       `[PERF] web search: ${Date.now() - startedAt}ms, queries=${grounding.queries.length}, ` +

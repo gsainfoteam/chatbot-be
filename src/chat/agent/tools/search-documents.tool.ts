@@ -66,6 +66,7 @@ export class SearchDocumentsTool implements AgentTool {
         query,
         context.catalog,
         context.usage,
+        context.signal,
       );
 
     return {

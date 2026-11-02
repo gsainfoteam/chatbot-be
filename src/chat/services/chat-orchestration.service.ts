@@ -1,4 +1,17 @@
 import {
+  GistScopePolicy,
+  SCOPE_REFUSAL,
+  SCOPE_UNAVAILABLE,
+} from '../safety/gist-scope.policy';
+import { chatAdmission } from '../safety/chat-admission';
+import type { TurnDiagnostics } from '../safety/turn-diagnostics';
+import {
+  AnswerOutputFilter,
+  citationInstructions,
+  safeSources,
+} from '../safety/answer-output';
+import { maskPersonalInfo } from '../agent/tools/ziggle/notice-text';
+import {
   Inject,
   Injectable,
   Logger,
@@ -9,7 +22,7 @@ import { UsageService } from '../../usage/usage.service';
 import { LLM_CLIENT, type LlmClient } from '../llm/llm-client.interface';
 import type { LlmMessage, LlmUsage } from '../types/llm.types';
 import { MessageRole } from '../../common/dto/chat-message-input.dto';
-import type { Readable } from 'stream';
+import { Readable } from 'stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   FINAL_RESPONSE_SYSTEM_PROMPT,
@@ -49,6 +62,8 @@ import { WebSearchClient } from '../agent/tools/web/web-search.client';
 export type { ResourceInfo };
 
 interface ProcessUserQuestionStreamOptions {
+  signal?: AbortSignal;
+  diagnostics?: TurnDiagnostics;
   persistUserMessage?: boolean;
   historyBefore?: Date;
   /** 에이전트 재탐색 진행 단계를 받는다. 빠른 경로에서는 호출되지 않는다. */
@@ -157,16 +172,20 @@ export class ChatOrchestrationService {
   private streamNoRelevantMaterials(
     historyMessages: LlmMessage[],
     userQuestion: string,
+    signal?: AbortSignal,
   ): Promise<Readable> {
     return this.llmClient.generateFinalResponseStream(
       [
         { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
-        ...historyMessages,
-        { role: 'user', content: userQuestion },
+        ...historyMessages.map((m) => ({
+          ...m,
+          content: m.content ? maskPersonalInfo(m.content) : m.content,
+        })),
+        { role: 'user', content: maskPersonalInfo(userQuestion) },
       ],
       [],
       this.llmClient.getModel('normal'),
-      { temperature: 0 },
+      { temperature: 0, signal },
     );
   }
 
@@ -179,18 +198,23 @@ export class ChatOrchestrationService {
     historyMessages: LlmMessage[],
     listResult: Awaited<ReturnType<RetrievalService['listCatalog']>>,
     usage: LlmUsage,
-    options: Pick<ProcessUserQuestionStreamOptions, 'onStep' | 'widgetKeyId'>,
+    options: Pick<
+      ProcessUserQuestionStreamOptions,
+      'onStep' | 'widgetKeyId' | 'signal' | 'diagnostics'
+    >,
     /** 빠른 경로 답변이 답변 불가로 시작해 다시 찾을 때: 첫 검색 결과를 재사용하고 에이전트로 간다. */
     retry?: { initial: RelevantResourceContents },
   ): Promise<GatheredContent> {
     const { onStep } = options;
     let t0 = Date.now();
+    options.signal?.throwIfAborted();
     const initial =
       retry?.initial ??
       (await this.resourceContentService.fetchRelevantResourceContents(
         userQuestion,
         listResult,
         usage,
+        options.signal,
       ));
     if (!retry) {
       this.logger.log(
@@ -214,6 +238,14 @@ export class ChatOrchestrationService {
     this.logger.log(
       `[DEBUG] answer route: ${route} (${reason}), notices=${noticesEnabled}, web=${webEnabled}`,
     );
+    options.signal?.throwIfAborted();
+    if (options.diagnostics)
+      Object.assign(options.diagnostics, {
+        route,
+        routeReason: reason,
+        noticesEnabled,
+        webEnabled,
+      });
     if (route === 'direct') {
       return { ...initial, sources: [], steps: [], route, initial };
     }
@@ -227,6 +259,7 @@ export class ChatOrchestrationService {
     try {
       const agentResult = await this.agentLoopService.run({
         question: userQuestion,
+        signal: options.signal,
         history: historyMessages,
         catalog: listResult,
         usage,
@@ -243,18 +276,66 @@ export class ChatOrchestrationService {
         ],
         onStep: recordStep,
       });
+      if (options.diagnostics)
+        Object.assign(options.diagnostics, {
+          rounds: agentResult.rounds,
+          stopReason: agentResult.stopReason,
+          assessment: agentResult.assessment
+            ? JSON.parse(
+                maskPersonalInfo(JSON.stringify(agentResult.assessment)),
+              )
+            : undefined,
+          researchMs: agentResult.elapsedMs,
+          researchModel: agentResult.model,
+          maxRounds: agentResult.maxRounds,
+          timeBudgetEnforced: agentResult.timeBudgetEnforced,
+          toolCalls: agentResult.steps
+            .filter((s) => s.kind !== 'research')
+            .reduce(
+              (counts, s) => ({
+                ...counts,
+                [s.kind]: (counts[s.kind] ?? 0) + 1,
+              }),
+              {} as Record<string, number>,
+            ),
+          toolFailures: agentResult.steps.filter((s) => s.status === 'failed')
+            .length,
+        });
       this.logger.log(`[PERF] agent research: ${Date.now() - t0}ms`);
+      const selected = agentResult.assessment
+        ? agentResult.documents.filter((d) =>
+            agentResult.assessment!.evidencePaths.includes(d.path),
+          )
+        : agentResult.documents;
+      const selectedUrls = new Set(selected.flatMap((d) => d.sourceUrls ?? []));
       return {
-        content: agentResult.documents
-          .map((doc) => formatRelevantDocument(doc.content))
-          .join('\n'),
-        usedResources: agentResult.usedResources,
-        sources: agentResult.sources,
+        content:
+          selected
+            .map((doc) => formatRelevantDocument(doc.content))
+            .join('\n') +
+          (selected.length && agentResult.assessment?.outcome === 'partial'
+            ? '\n[조사에서 확인하지 못한 항목 — 답변에서도 확인 불가를 명시하고 추정하지 말 것]\n' +
+              agentResult.assessment.unresolvedQuestions
+                .map((q) => `- ${maskPersonalInfo(q)}`)
+                .join('\n')
+            : ''),
+        usedResources: agentResult.usedResources.filter((r) =>
+          selected.some(
+            (d) => d.path === r.path || d.path.startsWith(r.path + '/'),
+          ),
+        ),
+        sources: safeSources(
+          agentResult.assessment
+            ? agentResult.sources.filter((s) => selectedUrls.has(s.url))
+            : agentResult.sources,
+        ),
         steps: agentResult.steps,
         route,
         initial,
       };
     } catch (error) {
+      options.signal?.throwIfAborted();
+      if (options.diagnostics) options.diagnostics.stopReason = 'agent-error';
       this.logger.warn(
         `Agent research failed; answering with the first search: ${
           error instanceof Error ? error.message : String(error)
@@ -282,11 +363,13 @@ export class ChatOrchestrationService {
     userQuestion: string,
     usage: LlmUsage,
     steps: AgentStep[],
+    signal?: AbortSignal,
   ) {
     this.logger.warn('No reference documents available.');
     const stream = await this.streamNoRelevantMaterials(
       historyMessages,
       userQuestion,
+      signal,
     );
     return {
       stream,
@@ -304,6 +387,7 @@ export class ChatOrchestrationService {
     listResult: Awaited<ReturnType<RetrievalService['listCatalog']>>,
     historyMessages: LlmMessage[],
     userQuestion: string,
+    signal?: AbortSignal,
   ): Promise<{ stream: Readable; resources: ResourceInfo[] }> {
     const resultText =
       listResult.texts.join('\n') || JSON.stringify(listResult.raw, null, 2);
@@ -355,7 +439,10 @@ export class ChatOrchestrationService {
         name: 'list_resources',
         // 시스템 프롬프트의 금지 규칙만으로는 자료에 없는 항목을 덧붙이는 경우가 많아,
         // 자료 바로 뒤에 규칙을 한 번 더 둔다.
-        content: fullContent + ANSWER_GROUNDING_REMINDER,
+        content:
+          maskPersonalInfo(fullContent) +
+          ANSWER_GROUNDING_REMINDER +
+          citationInstructions(relevantResult.sources),
       },
     ];
 
@@ -388,8 +475,11 @@ export class ChatOrchestrationService {
             ? buildWebAnswerRules()
             : ''),
       },
-      ...historyMessages,
-      { role: 'user', content: userQuestion },
+      ...historyMessages.map((m) => ({
+        ...m,
+        content: m.content ? maskPersonalInfo(m.content) : m.content,
+      })),
+      { role: 'user', content: maskPersonalInfo(userQuestion) },
       {
         role: 'assistant',
         content: null,
@@ -429,6 +519,7 @@ export class ChatOrchestrationService {
       messages,
       toolResults,
       this.llmClient.getModel('heavy'),
+      { signal },
     );
     this.logger.log(
       `[PERF] generateFinalResponseStream(시작까지): ${Date.now() - t0}ms`,
@@ -457,6 +548,10 @@ export class ChatOrchestrationService {
   }> {
     const perfTurnStart = Date.now();
     const usage = this.createEmptyUsage();
+    if (options.diagnostics) {
+      options.diagnostics.observedUsage = usage;
+      options.diagnostics.scopeModel = this.llmClient.getModel('light');
+    }
 
     try {
       let t0 = Date.now();
@@ -478,9 +573,36 @@ export class ChatOrchestrationService {
         this.logger.log(`[PERF] createMessage(user): ${Date.now() - t0}ms`);
       }
 
+      options.signal?.throwIfAborted();
+      if (this.agentLoopService.isEnabled()) {
+        const scope = await new GistScopePolicy(this.llmClient).assess(
+          userQuestion,
+          historyMessages,
+          usage,
+          options.signal,
+        );
+        if (options.diagnostics) options.diagnostics.scope = scope.reason;
+        if (!scope.allowed) {
+          const content =
+            scope.reason === 'unavailable' ? SCOPE_UNAVAILABLE : SCOPE_REFUSAL;
+          const stream = Readable.from([
+            `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`,
+          ]);
+          return {
+            stream,
+            resources: [],
+            referencedDocumentCount: 0,
+            usage,
+            steps: [],
+            sources: [],
+          };
+        }
+      }
       t0 = Date.now();
+      options.signal?.throwIfAborted();
       this.logger.debug('Loading document catalog from DB...');
       const listResult = await this.retrievalService.listCatalog();
+      options.signal?.throwIfAborted();
       this.logger.log(`[PERF] listCatalog: ${Date.now() - t0}ms`);
 
       const chunkCount = listResult.chunks?.length ?? 0;
@@ -489,11 +611,12 @@ export class ChatOrchestrationService {
       );
 
       const hasResources = chunkCount > 0;
-      if (!hasResources) {
+      if (!hasResources && !this.agentLoopService.isEnabled()) {
         this.logger.warn('No resources from document catalog');
         const stream = await this.streamNoRelevantMaterials(
           historyMessages,
           userQuestion,
+          options.signal,
         );
         return {
           stream,
@@ -518,6 +641,7 @@ export class ChatOrchestrationService {
           userQuestion,
           usage,
           relevantResult.steps,
+          options.signal,
         );
       }
       let answer = await this.startAnswerStream(
@@ -525,6 +649,7 @@ export class ChatOrchestrationService {
         listResult,
         historyMessages,
         userQuestion,
+        options.signal,
       );
 
       // 빠른 경로는 첫 검색의 거리만 보고 고르므로, 문서가 비슷해 보여도 답이 없을 수 있다.
@@ -536,8 +661,14 @@ export class ChatOrchestrationService {
         const probe = await this.chatStreamTransport.detectLeadingText(
           answer.stream,
           NO_ANSWER_LEAD,
+          options.signal,
         );
         if (probe.matched) {
+          if (options.diagnostics) {
+            options.diagnostics.discardedAnswers =
+              (options.diagnostics.discardedAnswers ?? 0) + 1;
+            options.diagnostics.usageIncomplete = true;
+          }
           this.logger.log(
             '[DEBUG] direct answer was a no-answer reply; retrying with agent research',
           );
@@ -555,6 +686,7 @@ export class ChatOrchestrationService {
               userQuestion,
               usage,
               relevantResult.steps,
+              options.signal,
             );
           }
           answer = await this.startAnswerStream(
@@ -562,6 +694,7 @@ export class ChatOrchestrationService {
             listResult,
             historyMessages,
             userQuestion,
+            options.signal,
           );
         } else {
           answer = { ...answer, stream: probe.stream };
@@ -581,6 +714,7 @@ export class ChatOrchestrationService {
         sources: relevantResult.sources,
       };
     } catch (error) {
+      options.signal?.throwIfAborted();
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(
@@ -603,9 +737,21 @@ export class ChatOrchestrationService {
     req: FastifyRequest,
     options: StreamingResponseOptions = {},
   ): Promise<void> {
-    this.chatStreamTransport.prepareSse(reply, req);
+    const release = chatAdmission.acquire(
+      sessionId,
+      req.ip ?? req.raw?.socket?.remoteAddress ?? 'unknown',
+    );
+    const controller = new AbortController();
+    const disconnect = () => {
+      if (!reply.raw.writableEnded) controller.abort();
+    };
+    reply.raw.once?.('close', disconnect);
+    const diagnostics: TurnDiagnostics = { version: 1 };
+    const startedAt = Date.now();
+    let usageRecordAttempted = false;
 
     try {
+      this.chatStreamTransport.prepareSse(reply, req);
       const {
         stream,
         resources,
@@ -614,12 +760,15 @@ export class ChatOrchestrationService {
         steps,
         sources,
       } = await this.processUserQuestionStream(sessionId, userQuestion, {
+        signal: controller.signal,
+        diagnostics,
         persistUserMessage: options.persistUserMessage,
         historyBefore: options.historyBefore,
         widgetKeyId: options.widgetKeyId,
         onStep: (step) => this.chatStreamTransport.writeStep(reply, step),
       });
 
+      const answerOutput = new AnswerOutputFilter(sources);
       let streamResult: {
         accumulatedContent: string;
         model: string;
@@ -629,33 +778,59 @@ export class ChatOrchestrationService {
         streamResult = await this.chatStreamTransport.consumeAndForward(
           stream,
           reply,
+          answerOutput,
+          controller.signal,
+          () => {
+            diagnostics.firstContentMs ??= Date.now() - startedAt;
+          },
         );
       } catch {
         // 스트림 에러 시 transport가 이미 응답을 종료함
+        diagnostics.usageIncomplete = true;
         return;
       }
 
       try {
         const totalUsage = { ...reasoningUsage };
         this.addTokenUsage(totalUsage, streamResult.usage);
+        diagnostics.observedUsage = totalUsage;
+        diagnostics.answerModel = streamResult.model || undefined;
+        if (
+          !streamResult.usage &&
+          ['gist', 'followup'].includes(diagnostics.scope ?? '')
+        )
+          diagnostics.usageIncomplete = true;
         const usage = this.hasTokenUsage(totalUsage) ? totalUsage : undefined;
 
         // 검색에 걸린 문서가 있어도 최종 답변이 답변 불가면 참조 문서를 숨기고 미답변으로 본다.
         const answered =
           referencedDocumentCount > 0 &&
           !isNoAnswerResponse(streamResult.accumulatedContent);
+        const refusalScope =
+          diagnostics.scope &&
+          !['gist', 'followup'].includes(diagnostics.scope);
+        diagnostics.totalMs = Date.now() - startedAt;
+        diagnostics.outcomeBasis = diagnostics.assessment
+          ? 'research-assessment'
+          : 'response-heuristic';
+        diagnostics.outcome = refusalScope
+          ? 'scope-refused'
+          : !answered
+            ? 'unanswered'
+            : /세부 내용.{0,20}원문|본문.{0,15}이미지/.test(
+                  streamResult.accumulatedContent,
+                )
+              ? 'source-only'
+              : diagnostics.assessment?.outcome === 'partial' ||
+                  /그 외 내용은 현재 확인 가능한 정보에 없습니다/.test(
+                    streamResult.accumulatedContent,
+                  )
+                ? 'partial'
+                : 'answered';
         const answerResources = answered ? resources : [];
-        // 공지와 웹 검색 결과는 따로 보낸다. 한 목록으로 자르면 먼저 모인 공지에 웹 출처가 밀린다.
-        const answerSources = answered
-          ? selectDisplayedSources(
-              sources.filter((source) => source.kind === 'notice'),
-            )
-          : [];
-        const answerWebSources = answered
-          ? selectDisplayedWebSources(
-              sources.filter((source) => source.kind === 'web'),
-            )
-          : [];
+        const usedSources = answered ? answerOutput.usedSources() : [];
+        const answerSources = usedSources.filter((s) => s.kind === 'notice');
+        const answerWebSources = usedSources.filter((s) => s.kind === 'web');
 
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
@@ -664,6 +839,7 @@ export class ChatOrchestrationService {
             content: streamResult.accumulatedContent,
             metadata: {
               ...(options.assistantMetadata ?? {}),
+              evaluation: diagnostics,
               model: streamResult.model || undefined,
               usage,
               resources:
@@ -679,6 +855,7 @@ export class ChatOrchestrationService {
         }
 
         if (usage?.total_tokens != null) {
+          usageRecordAttempted = true;
           try {
             await this.usageService.recordUsage(sessionId, {
               totalTokens: usage.total_tokens,
@@ -697,7 +874,7 @@ export class ChatOrchestrationService {
         this.chatStreamTransport.writeDone(reply);
 
         // 응답 종료 후 기록해 SSE 완료 시점을 늦추지 않는다.
-        if (!answered) {
+        if (!answered && !refusalScope) {
           await this.recordUnansweredQuestion(
             sessionId,
             userQuestion,
@@ -710,29 +887,34 @@ export class ChatOrchestrationService {
         this.chatStreamTransport.writeError(reply, 'Failed to save message');
       }
     } catch (error) {
+      if (controller.signal.aborted) return;
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error('Error in chat stream:', errorMessage);
       this.chatStreamTransport.writeError(reply, errorMessage);
+    } finally {
+      reply.raw.off?.('close', disconnect);
+      if (controller.signal.aborted) diagnostics.usageIncomplete = true;
+      if (
+        !usageRecordAttempted &&
+        (diagnostics.observedUsage?.total_tokens ?? 0) > 0
+      ) {
+        try {
+          await this.usageService.recordUsage(sessionId, {
+            totalTokens: diagnostics.observedUsage!.total_tokens,
+          });
+        } catch {
+          this.logger.warn(
+            'Failed to record observed usage for interrupted turn',
+          );
+        }
+      }
+      diagnostics.totalMs ??= Date.now() - startedAt;
+      this.logger.log(
+        `[CHAT_EVALUATION] ${JSON.stringify({ sessionId, ...diagnostics })}`,
+      );
+      controller.abort();
+      release();
     }
   }
-}
-
-/** 화면에 보여줄 외부 출처 수. 요약만 본 공지까지 모두 보여주면 관련 없는 링크가 섞인다. */
-const MAX_DISPLAYED_SOURCES = 3;
-
-/** 본문까지 읽은 출처를 먼저, 같은 조건이면 수집 순서대로 */
-function selectDisplayedSources(sources: ExternalSource[]): ExternalSource[] {
-  return [...sources]
-    .sort((a, b) => Number(b.opened) - Number(a.opened))
-    .slice(0, MAX_DISPLAYED_SOURCES);
-}
-
-/** 공식 도메인 출처를 먼저, 같은 조건이면 수집 순서대로 */
-function selectDisplayedWebSources(
-  sources: ExternalSource[],
-): ExternalSource[] {
-  return [...sources]
-    .sort((a, b) => Number(b.official ?? false) - Number(a.official ?? false))
-    .slice(0, MAX_DISPLAYED_SOURCES);
 }

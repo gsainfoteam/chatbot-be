@@ -105,6 +105,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
           .post<LlmResponse>(`${this.baseUrl}/chat/completions`, request, {
             headers: this.buildHeaders(),
             timeout: options?.timeoutMs ?? 15000,
+            signal: options?.signal,
           })
           .pipe(
             catchError((error: AxiosError) => {
@@ -127,7 +128,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
     messages: LlmMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: { temperature?: number },
+    options?: Pick<LlmCallOptions, 'temperature' | 'signal'>,
   ): Promise<Readable> {
     const toolMessages: LlmMessage[] = toolResults.map((result) => ({
       role: 'tool',
@@ -167,6 +168,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
             headers: this.buildHeaders(),
             responseType: 'stream',
             timeout: 15000,
+            signal: options?.signal,
           })
           .pipe(
             catchError((error: AxiosError) => {
@@ -188,7 +190,10 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   async searchWithGoogle(
     messages: LlmMessage[],
     model: string,
-    options?: Pick<LlmCallOptions, 'temperature' | 'max_tokens' | 'timeoutMs'>,
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'max_tokens' | 'timeoutMs' | 'signal'
+    >,
   ): Promise<GroundedSearchResponse> {
     const request = {
       model,

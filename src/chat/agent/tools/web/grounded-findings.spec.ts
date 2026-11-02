@@ -109,14 +109,21 @@ describe('extractFindings', () => {
         official: true,
         resolved: true,
       },
-      // 주소를 못 풀면 리다이렉트 링크와 그라운딩 제목(도메인)을 쓴다.
-      {
-        url: REDIRECT('2'),
-        domain: 'gistnews.co.kr',
-        official: false,
-        resolved: false,
-      },
     ]);
+  });
+
+  it('never trusts an unresolved redirect title for an allowed domain', () => {
+    expect(
+      extractFindings(
+        {
+          queries: [],
+          chunks: [{ uri: REDIRECT('fake'), title: 'gist.ac.kr' }],
+          supports: [{ text: '잘못된 근거', chunkIndices: [0] }],
+        },
+        [null],
+        { allowedDomains: ['gist.ac.kr'], officialDomains: ['gist.ac.kr'] },
+      ),
+    ).toEqual([]);
   });
 
   it('drops sentences whose sources are all outside the allowed domains', () => {

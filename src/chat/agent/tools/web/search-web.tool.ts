@@ -23,6 +23,8 @@ const MAX_QUERY_CHARS_IN_LABEL = 30;
 /** 내부 문서·공지로 부족할 때만 쓰는 웹 검색 */
 @Injectable()
 export class SearchWebTool implements AgentTool {
+  readonly maxCalls = 2;
+  readonly maxCallsPerRound = 1;
   readonly definition = {
     type: 'function' as const,
     function: {
@@ -57,8 +59,36 @@ export class SearchWebTool implements AgentTool {
     const query = readQuery(args);
     if (!query) return { content: 'query가 비어 있습니다.', resultCount: 0 };
 
-    const { findings } = await this.webSearch.search(query, context.usage);
+    const enabled = context.state.get('agent.enabledTools') as
+      | Set<string>
+      | undefined;
+    const completed = context.state.get('agent.completedTools') as
+      | Set<string>
+      | undefined;
+    if (
+      enabled &&
+      (!completed?.has('search_documents') ||
+        (enabled.has('search_notices') && !completed.has('search_notices')))
+    ) {
+      return {
+        content:
+          '먼저 내부 문서와 활성화된 공지 검색 결과를 확인하세요. 다음 라운드에 웹 검색을 사용할 수 있습니다.',
+        resultCount: 0,
+      };
+    }
+    if (context.state.get('web.exhausted'))
+      return {
+        content:
+          '이 질문의 웹 검색에서 근거를 찾지 못했습니다. 반복하지 말고 확보한 자료로 조사를 종료하세요.',
+        resultCount: 0,
+      };
+    const { findings } = await this.webSearch.search(
+      query,
+      context.usage,
+      context.signal,
+    );
     if (findings.length === 0) {
+      context.state.set('web.exhausted', true);
       return {
         content:
           '웹 검색 결과에서 근거가 있는 관련 내용을 찾지 못했습니다. 웹 검색을 반복하지 말고 조사를 마치세요.',
@@ -71,11 +101,12 @@ export class SearchWebTool implements AgentTool {
       formatFinding(finding, true),
     );
     return {
-      content: `웹 검색 결과(근거 출처가 있는 문장만, 공식 출처가 아니면 신뢰도가 낮음):\n${agentLines.join('\n')}`,
+      content: `[path=web-search/${normalizeForMatch(query)}] 웹 검색 결과(근거 출처가 있는 문장만, 공식 출처가 아니면 신뢰도가 낮음):\n${agentLines.join('\n')}`,
       resultCount: findings.length,
       documents: [
         {
           path: `web-search/${normalizeForMatch(query)}`,
+          sourceUrls: toSources(findings).map((s) => s.url),
           content: `${WEB_MARKER} '${query}' 검색 결과\n${documentLines.join('\n')}`,
         },
       ],

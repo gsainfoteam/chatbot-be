@@ -24,6 +24,7 @@ const MAX_BODY_CHARS_FOR_AGENT = 3_000;
 /** 검색에서 본 공지의 본문을 평문으로 읽는다. */
 @Injectable()
 export class GetNoticeTool implements AgentTool {
+  readonly maxCalls = 4;
   readonly definition = {
     type: 'function' as const,
     function: {
@@ -62,12 +63,17 @@ export class GetNoticeTool implements AgentTool {
       return {
         content: 'search_notices 결과에 나온 공지 id만 읽을 수 있습니다.',
         resultCount: 0,
+        resolvedCandidates: [`ziggle-notice/${id}`],
       };
     }
 
-    const html = await this.ziggle.getNoticeBody(id);
+    const html = await this.ziggle.getNoticeBody(id, context.signal);
     if (html == null) {
-      return { content: '해당 공지를 찾을 수 없습니다.', resultCount: 0 };
+      return {
+        content: '해당 공지를 찾을 수 없습니다.',
+        resultCount: 0,
+        resolvedCandidates: [`ziggle-notice/${id}`],
+      };
     }
 
     const source = {
@@ -89,14 +95,17 @@ export class GetNoticeTool implements AgentTool {
         return {
           content: `${reason} 읽을 수 없습니다. 검색 결과의 요약을 참고하세요.`,
           resultCount: 0,
+          resolvedCandidates: [`ziggle-notice/${id}`],
         };
       }
       return {
-        content: `${reason} 읽을 수 없고 요약도 없습니다. 제목과 원문 링크만 답변 자료로 남깁니다.`,
+        content: `[path=${noticeDocumentPath(id, 'body')}] ${reason} 읽을 수 없고 요약도 없습니다. 제목과 원문 링크만 답변 자료로 남깁니다.`,
         resultCount: 0,
+        resolvedCandidates: [`ziggle-notice/${id}`],
         documents: [
           {
             path: noticeDocumentPath(id, 'body'),
+            sourceUrls: [source.url],
             content: `${NOTICE_MARKER} ${known.title}\n원문 링크: ${source.url}\n\n(${reason} 내용을 확인할 수 없는 공지입니다. 세부 내용은 공지 원문에서 확인해야 합니다.)`,
           },
         ],
@@ -109,11 +118,13 @@ export class GetNoticeTool implements AgentTool {
         ? `${text.slice(0, MAX_BODY_CHARS)}\n[이하 생략]`
         : text;
     return {
-      content: `### [id=${id}] ${known.title}\n${body.slice(0, MAX_BODY_CHARS_FOR_AGENT)}`,
+      content: `### [path=ziggle-notice/${id}] ${known.title}\n${body.slice(0, MAX_BODY_CHARS_FOR_AGENT)}`,
       resultCount: 1,
+      resolvedCandidates: [`ziggle-notice/${id}`],
       documents: [
         {
           path: noticeDocumentPath(id, 'body'),
+          sourceUrls: [source.url],
           content: `${NOTICE_MARKER} ${known.title}\n원문 링크: ${source.url}\n\n${body}`,
         },
       ],

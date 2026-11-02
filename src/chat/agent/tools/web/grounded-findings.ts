@@ -56,6 +56,7 @@ export async function resolveGroundingUrl(
   uri: string,
   timeoutMs: number,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   let parsed: URL;
   try {
@@ -63,12 +64,21 @@ export async function resolveGroundingUrl(
   } catch {
     return null;
   }
+  if (
+    !['http:', 'https:'].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password
+  )
+    return null;
+  signal?.throwIfAborted();
   if (parsed.hostname !== GROUNDING_REDIRECT_HOST) return uri;
   try {
     const response = await fetchImpl(uri, {
       method: 'HEAD',
       redirect: 'manual',
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal
+        ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
+        : AbortSignal.timeout(timeoutMs),
     });
     const location = response.headers.get('location');
     return location && /^https?:\/\//i.test(location) ? location : null;
@@ -101,7 +111,21 @@ export function extractFindings(
   policy: DomainPolicy,
 ): WebFinding[] {
   const refs = grounding.chunks.map((chunk, index): WebSourceRef | null => {
-    const url = resolvedUrls[index] ?? chunk.uri;
+    // Unresolved redirect titles are not proof of a domain; exclude them from citations and evidence.
+    const url = resolvedUrls[index];
+    if (!url) return null;
+    try {
+      const parsed = new URL(url);
+      if (
+        !['http:', 'https:'].includes(parsed.protocol) ||
+        parsed.username ||
+        parsed.password ||
+        parsed.hostname === GROUNDING_REDIRECT_HOST
+      )
+        return null;
+    } catch {
+      return null;
+    }
     const domain = domainOf(resolvedUrls[index] ?? null, chunk.title);
     if (!url || !domain) return null;
     if (

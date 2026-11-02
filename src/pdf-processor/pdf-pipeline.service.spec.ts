@@ -342,6 +342,18 @@ describe('PdfPipelineService page images', () => {
     expect(pass1Contents[0]).toEqual(expect.stringContaining('본문 텍스트'));
   });
 
+  it('reads an image page once', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([SECTION]);
+    const pipeline = createPipeline({
+      pages: [{ text: '', image: IMAGE }],
+      callLLM,
+    });
+
+    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(pass1Contents).toHaveLength(1);
+  });
+
   it('sends a page with only an image without any page text', async () => {
     const { callLLM, pass1Contents } = fakeLlm([]);
     const pipeline = createPipeline({
@@ -551,7 +563,7 @@ describe('PdfPipelineService page images', () => {
     });
 
     it('references an image-only page even when the LLM does not', async () => {
-      const { callLLM } = fakeLlm([SECTION, SECTION]);
+      const { callLLM } = fakeLlm([SECTION]);
       const pipeline = createPipeline({
         pages: [{ text: '', image: IMAGE }],
         callLLM,
@@ -569,7 +581,7 @@ describe('PdfPipelineService page images', () => {
     });
 
     it('adds no reference to a cover that has a little text of its own', async () => {
-      const { callLLM } = fakeLlm([SECTION, SECTION]);
+      const { callLLM } = fakeLlm([SECTION]);
       const pipeline = createPipeline({
         pages: [{ text: '공유기 네트워크 설정방법 정보보안팀', image: IMAGE }],
         callLLM,
@@ -638,126 +650,6 @@ describe('PdfPipelineService page images', () => {
       await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf', imageSink());
 
       expect(pass1Contents[1]).not.toContain('IMAGE:page-1');
-    });
-  });
-
-  describe('reading an image-only page', () => {
-    const allContent = (result: { chunks: Array<{ content: string }> }) =>
-      result.chunks.map((chunk) => chunk.content).join('\n');
-    const RICH_TEXT = '본문 '.repeat(60);
-
-    it('keeps the text when two readings agree', async () => {
-      const reading = `${SECTION}\n\n보증금 150,000원`;
-      const { callLLM, pass1Contents } = fakeLlm([reading, reading]);
-      const pipeline = createPipeline({
-        pages: [{ text: '', image: IMAGE }],
-        callLLM,
-      });
-
-      const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
-
-      expect(pass1Contents).toHaveLength(2);
-      expect(allContent(result)).toContain('보증금 150,000원');
-    });
-
-    const FIRST_READING =
-      '학생회관 도서관 기숙사 연구개발관 전자공학관 생명과학관 예술관 정보통신관 인공지능관 창업관 기계공학부 전자공학부 한국사무소 바이오디자인센터 융합연구센터 창의융합센터 연구개발센터 창업지원센터 카페테리아 학생식당 헬스장 세미나실 강의실 연구실 실험실 회의실 휴게실 자습실 안내소'
-        .split(' ')
-        .map((name) => `- ${name}`)
-        .join('\n');
-    const SECOND_READING =
-      '오룡관 국제관 대학원기숙사 기혼자아파트 어린이집 교수사택 내빈관 시설관리동 창업진흥동 중앙창고 크리에이티브공간 기계로봇동 행정동 금호동 신소재동 환경에너지동 다산빌딩 중앙기기소 폐수처리장 동물자원소 산학협력관 고등광기술원 자연과학동 플랜트 어린이회관 수영장 테니스코트 축구장 야구장'
-        .split(' ')
-        .map((name) => `- ${name}`)
-        .join('\n');
-
-    it('keeps a short description even when two readings differ', async () => {
-      const { callLLM } = fakeLlm([
-        '## 유의사항\n\n잘못된 성적표 제출 예시입니다.',
-        '## 유의사항\n\n공식 증명서를 내야 합니다.',
-        SECTION,
-      ]);
-      const pipeline = createPipeline({
-        pages: [{ text: '', image: IMAGE }, RICH_TEXT],
-        callLLM,
-      });
-
-      const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
-
-      expect(allContent(result)).toContain('잘못된 성적표 제출 예시입니다.');
-    });
-
-    it('keeps only the image when two readings disagree', async () => {
-      const { callLLM } = fakeLlm([
-        `## 지도\n\n${FIRST_READING}\n${FIRST_READING}`,
-        `## 캠퍼스\n\n${SECOND_READING}\n${SECOND_READING}`,
-        SECTION,
-      ]);
-      const pipeline = createPipeline({
-        pages: [{ text: '', image: IMAGE }, RICH_TEXT],
-        callLLM,
-      });
-      const sink = jest.fn<(page: number, jpeg: Buffer) => Promise<void>>(
-        async () => undefined,
-      );
-
-      const result = await pipeline.processPdf(
-        Buffer.from('%PDF'),
-        'doc.pdf',
-        sink,
-      );
-
-      expect(allContent(result)).not.toContain('학생회관');
-      expect(allContent(result)).not.toContain('오룡관');
-      expect(allContent(result)).toContain('![doc 1쪽](IMAGE:page-1)');
-      expect(sink).toHaveBeenCalledWith(1, STORED_IMAGE);
-    });
-
-    it('keeps the LLM description of the image when two readings disagree', async () => {
-      const { callLLM } = fakeLlm([
-        `## 지도\n\n${FIRST_READING}\n${FIRST_READING}\n\n![캠퍼스 지도](IMAGE:page-1)`,
-        `## 캠퍼스\n\n${SECOND_READING}\n${SECOND_READING}`,
-        SECTION,
-      ]);
-      const pipeline = createPipeline({
-        pages: [{ text: '', image: IMAGE }, RICH_TEXT],
-        callLLM,
-      });
-
-      const result = await pipeline.processPdf(
-        Buffer.from('%PDF'),
-        'doc.pdf',
-        jest.fn<(page: number, jpeg: Buffer) => Promise<void>>(
-          async () => undefined,
-        ),
-      );
-
-      expect(allContent(result)).toContain('![캠퍼스 지도](IMAGE:page-1)');
-      expect(allContent(result)).not.toContain('학생회관');
-    });
-
-    it('reads a page with a text layer only once', async () => {
-      const { callLLM, pass1Contents } = fakeLlm([SECTION]);
-      const pipeline = createPipeline({
-        pages: [{ text: RICH_TEXT, image: IMAGE }],
-        callLLM,
-      });
-
-      await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
-
-      expect(pass1Contents).toHaveLength(1);
-    });
-
-    it('does not read a page again after the LLM returns it empty', async () => {
-      const { callLLM, pass1Contents } = fakeLlm(['', SECTION]);
-      const pipeline = createPipeline({
-        pages: [{ text: '', image: IMAGE }, RICH_TEXT],
-        callLLM,
-      });
-
-      await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
-
-      expect(pass1Contents).toHaveLength(2);
     });
   });
 

@@ -9,9 +9,6 @@ import {
   hasNoTextLayer,
   hasPageImageReference,
   normalizeImageReferences,
-  pageImageReferenceOnly,
-  readingAgreement,
-  readingsDisagree,
 } from './page-image-reference';
 import { isSparseText } from './pdf-page-image';
 import { type PdfPageContent, PdfTextService } from './pdf-text.service';
@@ -260,43 +257,24 @@ export class PdfPipelineService {
 
     try {
       const model = this.llm.getModel('normal');
-      const readPage = async () => {
-        const response = await this.llm.callLLM(
-          [{ role: 'user', content }],
-          model,
-          {
-            temperature: 0.2,
-            max_tokens: 8000,
-            timeoutMs: this.llmTimeoutMs,
-          },
-        );
-        return response.choices?.[0]?.message?.content ?? '';
-      };
-
-      let markdown = await readPage();
-      // Nothing but the LLM's reading backs a page with hardly any text, and text
-      // too small to read comes out different each time. The image can still be
-      // read by a person, so it stays and the text goes.
-      const secondReading =
-        pageImage && isSparseText(pageText) && markdown.trim()
-          ? await readPage()
-          : markdown;
-      const unreadable = readingsDisagree(markdown, secondReading);
-      if (unreadable) {
-        this.logger.warn(
-          `Readings of page ${currentPage} disagree (${readingAgreement(markdown, secondReading).toFixed(2)}); keeping only its image`,
-        );
-        markdown = pageImageReferenceOnly(markdown, currentPage);
-      }
-
-      markdown = normalizeImageReferences(
-        markdown,
+      const response = await this.llm.callLLM(
+        [{ role: 'user', content }],
+        model,
+        {
+          temperature: 0.2,
+          max_tokens: 8000,
+          timeoutMs: this.llmTimeoutMs,
+        },
+      );
+      let markdown = normalizeImageReferences(
+        response.choices?.[0]?.message?.content ?? '',
         pageImage ? currentPage : null,
       );
       // Everything on a page without a text layer came from its image.
       if (
         pageImage &&
-        (unreadable || (hasNoTextLayer(pageText) && markdown.trim())) &&
+        hasNoTextLayer(pageText) &&
+        markdown.trim() &&
         !hasPageImageReference(markdown, currentPage)
       ) {
         markdown = appendPageImageReference(markdown, filename, currentPage);

@@ -2,6 +2,7 @@ import type { Readable } from 'stream';
 import type {
   LlmMessage,
   LlmModelType,
+  LlmRequestMessage,
   LlmResponse,
   LlmToolResult,
 } from '../types/llm.types';
@@ -23,7 +24,7 @@ export interface LlmClient {
   getModel(type: LlmModelType): string;
 
   callLLM(
-    messages: LlmMessage[],
+    messages: LlmRequestMessage[],
     model?: string,
     options?: LlmCallOptions,
   ): Promise<LlmResponse>;

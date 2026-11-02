@@ -196,10 +196,16 @@ export class PdfPipelineService {
       return { markdown: '', usedFallback: imageFailed };
     }
 
+    // Given the previous page's body next to an image, the LLM repeats it as
+    // content of this page. Headings are enough to keep the hierarchy consistent.
+    const context = pageImage
+      ? (previousContext.match(/^#{1,6} .+$/gm) ?? []).join('\n')
+      : previousContext;
+
     const prompt = PDF_PROCESSOR_PROMPT.replaceAll('{filename}', filename)
       .replaceAll('{total_pages}', String(totalPages))
       .replaceAll('{current_page}', String(currentPage))
-      .replaceAll('{previous_context}', previousContext || '없음 (첫 페이지)');
+      .replaceAll('{previous_context}', context || '없음 (첫 페이지)');
 
     const userText = pageText.trim()
       ? `${prompt}\n\n페이지 텍스트:\n${pageText}`

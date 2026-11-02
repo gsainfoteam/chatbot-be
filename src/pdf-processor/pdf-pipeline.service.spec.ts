@@ -447,6 +447,32 @@ describe('PdfPipelineService page images', () => {
     expect(pass1Contents[1]).toEqual(expect.stringContaining('총 페이지: 3'));
   });
 
+  it('gives an image page only the headings of the previous page', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([`## 앞 장\n\n앞 장의 본문`]);
+    const pipeline = createPipeline({
+      pages: ['첫 페이지', { text: '', image: IMAGE }],
+      callLLM,
+    });
+
+    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    const [{ text }] = pass1Contents[1] as Array<{ text: string }>;
+    expect(text).toContain('## 앞 장');
+    expect(text).not.toContain('앞 장의 본문');
+  });
+
+  it('keeps the previous page body as context for a text page', async () => {
+    const { callLLM, pass1Contents } = fakeLlm([`## 앞 장\n\n앞 장의 본문`]);
+    const pipeline = createPipeline({
+      pages: ['첫 페이지', '둘째 페이지'],
+      callLLM,
+    });
+
+    await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(pass1Contents[1]).toEqual(expect.stringContaining('앞 장의 본문'));
+  });
+
   it('leaves out a sparse page the LLM returns empty without failing it', async () => {
     const { callLLM } = fakeLlm(['', SECTION]);
     const pipeline = createPipeline({ pages: ['감사합니다', '본문'], callLLM });

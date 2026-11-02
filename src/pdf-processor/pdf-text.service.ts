@@ -1,7 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
-import { normalizeExtractedText, isLikelyMojibake } from './mojibake';
+import {
+  normalizeExtractedText,
+  isLikelyMojibake,
+  removeLoneSurrogates,
+} from './mojibake';
 import {
   MAX_IMAGE_PIXELS,
   allImagesFailedToDecode,
@@ -109,9 +113,11 @@ export class PdfTextService {
         let content: PdfPageContent;
         try {
           const textContent = await page.getTextContent();
-          const raw = textContent.items
-            .map((item) => ('str' in item ? String(item.str) : ''))
-            .join(' ');
+          const raw = removeLoneSurrogates(
+            textContent.items
+              .map((item) => ('str' in item ? String(item.str) : ''))
+              .join(' '),
+          );
 
           let text = raw;
           if (isLikelyMojibake(raw)) {

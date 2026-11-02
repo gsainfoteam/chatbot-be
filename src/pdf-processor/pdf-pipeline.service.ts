@@ -247,7 +247,10 @@ export class PdfPipelineService {
     const prompt = PDF_PROCESSOR_PROMPT.replaceAll('{filename}', filename)
       .replaceAll('{total_pages}', String(totalPages))
       .replaceAll('{current_page}', String(currentPage))
-      .replaceAll('{previous_context}', context || '없음 (첫 페이지)');
+      .replaceAll(
+        '{previous_context}',
+        context || (currentPage === 1 ? '없음 (첫 페이지)' : '없음'),
+      );
 
     const userText = pageText.trim()
       ? `${prompt}\n\n페이지 텍스트:\n${pageText}`

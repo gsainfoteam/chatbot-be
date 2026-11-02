@@ -479,16 +479,20 @@ describe('PdfPipelineService page images', () => {
     expect(text).not.toContain('앞 장의 본문');
   });
 
-  it('keeps the previous page body as context for a text page', async () => {
-    const { callLLM, pass1Contents } = fakeLlm([`## 앞 장\n\n앞 장의 본문`]);
+  it('calls only the first page the first page', async () => {
+    const { callLLM, pass1Contents } = fakeLlm(['제목 없는 본문']);
     const pipeline = createPipeline({
-      pages: ['첫 페이지', '둘째 페이지'],
+      pages: ['첫 쪽', { text: '', image: IMAGE }],
       callLLM,
     });
 
     await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
 
-    expect(pass1Contents[1]).toEqual(expect.stringContaining('앞 장의 본문'));
+    expect(pass1Contents[0]).toEqual(
+      expect.stringContaining('없음 (첫 페이지)'),
+    );
+    const [{ text }] = pass1Contents[1] as Array<{ text: string }>;
+    expect(text).not.toContain('없음 (첫 페이지)');
   });
 
   it('keeps only the description of image syntax the LLM emits', async () => {

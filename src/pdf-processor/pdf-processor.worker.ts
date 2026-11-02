@@ -154,6 +154,15 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     let generatedArtifactsMayExist = false;
     try {
       const result = await this.runPipeline(doc, async (pageNumber, jpeg) => {
+        // A deleted document would otherwise get images nothing cleans up.
+        if (
+          !(await this.documentsRepo.heartbeatProcessing(
+            doc.id,
+            processingToken,
+          ))
+        ) {
+          throw new Error('Processing ownership lost');
+        }
         generatedArtifactsMayExist = true;
         await this.gcs.uploadPageImage(resourceName, pageNumber, jpeg);
       });

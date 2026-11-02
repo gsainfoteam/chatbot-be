@@ -168,6 +168,31 @@ describe('PdfProcessorWorker page images', () => {
     expect(gcs.uploadPageImage).toHaveBeenCalledWith('test', 3, jpeg);
   });
 
+  it('stores nothing once the document is no longer ours', async () => {
+    let storing: Promise<void> | undefined;
+    const { worker, gcs } = createWorker({
+      completeProcessing: true,
+      heartbeatOwned: false,
+      processPdfImpl: async (...args) => {
+        storing = (args[2] as ImageSink)(3, Buffer.from('jpeg'));
+        await storing.catch(() => undefined);
+        return {
+          documents: {},
+          metadata: { description: '', chunks: [] },
+          summary: '',
+          chunks: [
+            { path: 'test', description: '', content: '# t', sortOrder: 0 },
+          ],
+        };
+      },
+    });
+
+    await callable(worker).processDocument(processingDocument());
+
+    await expect(storing).rejects.toThrow('ownership');
+    expect(gcs.uploadPageImage).not.toHaveBeenCalled();
+  });
+
   it('cleans up stored images when the pipeline fails afterwards', async () => {
     const { worker, gcs } = createWorker({
       completeProcessing: true,

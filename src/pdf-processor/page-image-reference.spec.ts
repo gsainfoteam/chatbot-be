@@ -26,10 +26,22 @@ describe('normalizeImageReferences', () => {
     );
   });
 
-  it('keeps only the first of repeated references', () => {
+  it('rewrites a description with brackets so readers can parse it', () => {
     expect(
-      normalizeImageReferences('![가](IMAGE:page-3)\n![나](IMAGE:page-3)', 3),
-    ).toBe('![가](IMAGE:page-3)\n나');
+      normalizeImageReferences('![[붙임1] 공고 지도](IMAGE:page-3)', 3),
+    ).toBe('![붙임1 공고 지도](IMAGE:page-3)');
+  });
+
+  it('rewrites a target with spaces so readers can parse it', () => {
+    expect(normalizeImageReferences('![지도]( IMAGE:page-3 )', 3)).toBe(
+      '![지도](IMAGE:page-3)',
+    );
+  });
+
+  it('leaves brackets and parentheses in the text alone', () => {
+    const markdown = '[붙임1] 공고 (참고)\n\n![지도](IMAGE:page-3)';
+
+    expect(normalizeImageReferences(markdown, 3)).toBe(markdown);
   });
 
   it('keeps only the description of other image syntax', () => {

@@ -1,6 +1,6 @@
 const NO_TEXT_LAYER_CHARS = 10;
 
-const IMAGE_REFERENCE = /!\[([^\]]*)\]\(([^)]*)\)/g;
+const IMAGE_REFERENCE = /!\[(.*?)\]\(([^)]*)\)/gs;
 
 export function pageImageObjectPath(
   resourceName: string,
@@ -18,29 +18,27 @@ function referenceTarget(pageNumber: number): string {
   return `IMAGE:page-${pageNumber}`;
 }
 
+/** Brackets in the description would end the syntax early for readers. */
+function reference(description: string, pageNumber: number): string {
+  const label = description.replace(/[[\]]/g, '');
+  return `![${label}](${referenceTarget(pageNumber)})`;
+}
+
 /**
- * Keeps the one reference that points at this page's stored image. Any other
- * reference would point nowhere, so only its description stays.
+ * Keeps references to this page's stored image, in the one form readers parse. Any
+ * other reference would point nowhere, so only its description stays.
  * @param pageNumber null for a page without a stored image
  */
 export function normalizeImageReferences(
   markdown: string,
   pageNumber: number | null,
 ): string {
-  let kept = false;
   return markdown.replace(
     IMAGE_REFERENCE,
-    (reference, description: string, target: string) => {
-      if (
-        pageNumber !== null &&
-        !kept &&
-        target.trim() === referenceTarget(pageNumber)
-      ) {
-        kept = true;
-        return reference;
-      }
-      return description;
-    },
+    (_match, description: string, target: string) =>
+      pageNumber !== null && target.trim() === referenceTarget(pageNumber)
+        ? reference(description, pageNumber)
+        : description,
   );
 }
 
@@ -56,6 +54,6 @@ export function appendPageImageReference(
   filename: string,
   pageNumber: number,
 ): string {
-  const name = filename.replace(/\.pdf$/i, '').replace(/[[\]]/g, '');
-  return `${markdown}\n\n![${name} ${pageNumber}쪽](${referenceTarget(pageNumber)})`;
+  const name = filename.replace(/\.pdf$/i, '');
+  return `${markdown}\n\n${reference(`${name} ${pageNumber}쪽`, pageNumber)}`;
 }

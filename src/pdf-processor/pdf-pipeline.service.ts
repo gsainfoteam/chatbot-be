@@ -49,6 +49,8 @@ const SNIPPET_CHARS = 1_500;
 const OVERVIEW_CHARS = 2_500;
 /** Fail the whole job when Pass 1 LLM fallbacks exceed this fraction of pages. */
 const DEFAULT_PASS1_MAX_FAILURE_RATIO = 0.1;
+/** Images are not stored, so a reference would point nowhere; keep its description. */
+const MARKDOWN_IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
 
 @Trace()
 @Injectable()
@@ -228,7 +230,10 @@ export class PdfPipelineService {
           timeoutMs: this.llmTimeoutMs,
         },
       );
-      const markdown = response.choices?.[0]?.message?.content ?? '';
+      const markdown = (response.choices?.[0]?.message?.content ?? '').replace(
+        MARKDOWN_IMAGE,
+        '$1',
+      );
       // The prompt tells the LLM to drop pages without information.
       if (!markdown.trim() && !isSparseText(pageText)) {
         this.logger.warn(

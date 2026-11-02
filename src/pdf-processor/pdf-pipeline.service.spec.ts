@@ -473,6 +473,18 @@ describe('PdfPipelineService page images', () => {
     expect(pass1Contents[1]).toEqual(expect.stringContaining('앞 장의 본문'));
   });
 
+  it('keeps only the description of image syntax the LLM emits', async () => {
+    const { callLLM } = fakeLlm([`${SECTION}\n\n![절차도](IMAGE:page-6)`]);
+    const pipeline = createPipeline({ pages: ['본문'], callLLM });
+
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    const content = result.chunks[1].content;
+    expect(content).toContain('절차도');
+    expect(content).not.toContain('IMAGE:page-6');
+    expect(content).not.toContain('![');
+  });
+
   it('leaves out a sparse page the LLM returns empty without failing it', async () => {
     const { callLLM } = fakeLlm(['', SECTION]);
     const pipeline = createPipeline({ pages: ['감사합니다', '본문'], callLLM });

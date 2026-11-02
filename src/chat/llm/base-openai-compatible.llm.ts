@@ -240,7 +240,6 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
     let toolRoleHasNameField = 0;
     let contentNullCount = 0;
     let contentCharsSum = 0;
-    let imagePartCount = 0;
 
     for (const m of messages) {
       roleCounts[m.role] = (roleCounts[m.role] ?? 0) + 1;
@@ -255,12 +254,6 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       }
       if (m.content === null) contentNullCount += 1;
       if (typeof m.content === 'string') contentCharsSum += m.content.length;
-      if (Array.isArray(m.content)) {
-        for (const part of m.content) {
-          if (part.type === 'text') contentCharsSum += part.text.length;
-          else imagePartCount += 1;
-        }
-      }
     }
 
     return {
@@ -271,7 +264,6 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       toolRoleHasNameField,
       contentNullCount,
       contentCharsSum,
-      imagePartCount,
     };
   }
 }

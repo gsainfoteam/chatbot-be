@@ -12,7 +12,7 @@ export interface LlmMessage {
 /**
  * 멀티모달 요청의 content 파트
  */
-export type LlmContentPart =
+type LlmContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
 

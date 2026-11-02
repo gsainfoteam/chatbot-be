@@ -14,6 +14,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   FINAL_RESPONSE_SYSTEM_PROMPT,
   buildNoticeAnswerRules,
+  buildWebAnswerRules,
   formatSeoulDate,
   NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
   ANSWER_GROUNDING_REMINDER,
@@ -39,6 +40,11 @@ import { SEARCH_NOTICES_TOOL_NAME } from '../agent/tools/ziggle/search-notices.t
 import { GET_NOTICE_TOOL_NAME } from '../agent/tools/ziggle/get-notice.tool';
 import { ZiggleNoticeClient } from '../agent/tools/ziggle/ziggle-notice.client';
 import { NOTICE_MARKER } from '../agent/tools/ziggle/notice-registry';
+import {
+  SEARCH_WEB_TOOL_NAME,
+  WEB_MARKER,
+} from '../agent/tools/web/search-web.tool';
+import { WebSearchClient } from '../agent/tools/web/web-search.client';
 
 export type { ResourceInfo };
 
@@ -91,6 +97,7 @@ export class ChatOrchestrationService {
     private readonly unansweredQuestionsRepository: UnansweredQuestionsRepository,
     private readonly agentLoopService: AgentLoopService,
     private readonly ziggleNoticeClient: ZiggleNoticeClient,
+    private readonly webSearchClient: WebSearchClient,
   ) {}
 
   private createEmptyUsage(): LlmUsage {
@@ -194,6 +201,8 @@ export class ChatOrchestrationService {
     const agentEnabled = this.agentLoopService.isEnabled();
     const noticesEnabled =
       agentEnabled && this.ziggleNoticeClient.isEnabledFor(options.widgetKeyId);
+    const webEnabled =
+      agentEnabled && this.webSearchClient.isEnabledFor(options.widgetKeyId);
     const { route, reason } = retry
       ? { route: 'agent' as const, reason: 'no-answer-retry' }
       : decideAnswerRoute({
@@ -203,7 +212,7 @@ export class ChatOrchestrationService {
           noticeIntent: noticesEnabled && hasNoticeIntent(userQuestion),
         });
     this.logger.log(
-      `[DEBUG] answer route: ${route} (${reason}), notices=${noticesEnabled}`,
+      `[DEBUG] answer route: ${route} (${reason}), notices=${noticesEnabled}, web=${webEnabled}`,
     );
     if (route === 'direct') {
       return { ...initial, sources: [], steps: [], route, initial };
@@ -225,13 +234,13 @@ export class ChatOrchestrationService {
           documents: initial.documents,
           usedResources: initial.usedResources,
         },
-        enabledTools: noticesEnabled
-          ? [
-              SEARCH_DOCUMENTS_TOOL_NAME,
-              SEARCH_NOTICES_TOOL_NAME,
-              GET_NOTICE_TOOL_NAME,
-            ]
-          : [SEARCH_DOCUMENTS_TOOL_NAME],
+        enabledTools: [
+          SEARCH_DOCUMENTS_TOOL_NAME,
+          ...(noticesEnabled
+            ? [SEARCH_NOTICES_TOOL_NAME, GET_NOTICE_TOOL_NAME]
+            : []),
+          ...(webEnabled ? [SEARCH_WEB_TOOL_NAME] : []),
+        ],
         onStep: recordStep,
       });
       this.logger.log(`[PERF] agent research: ${Date.now() - t0}ms`);
@@ -370,10 +379,14 @@ export class ChatOrchestrationService {
     const messages: LlmMessage[] = [
       {
         role: 'system',
-        content: relevantResult.content.includes(NOTICE_MARKER)
-          ? FINAL_RESPONSE_SYSTEM_PROMPT +
-            buildNoticeAnswerRules(formatSeoulDate(new Date()))
-          : FINAL_RESPONSE_SYSTEM_PROMPT,
+        content:
+          FINAL_RESPONSE_SYSTEM_PROMPT +
+          (relevantResult.content.includes(NOTICE_MARKER)
+            ? buildNoticeAnswerRules(formatSeoulDate(new Date()))
+            : '') +
+          (relevantResult.content.includes(WEB_MARKER)
+            ? buildWebAnswerRules()
+            : ''),
       },
       ...historyMessages,
       { role: 'user', content: userQuestion },
@@ -632,7 +645,17 @@ export class ChatOrchestrationService {
           referencedDocumentCount > 0 &&
           !isNoAnswerResponse(streamResult.accumulatedContent);
         const answerResources = answered ? resources : [];
-        const answerSources = answered ? selectDisplayedSources(sources) : [];
+        // 공지와 웹 검색 결과는 따로 보낸다. 한 목록으로 자르면 먼저 모인 공지에 웹 출처가 밀린다.
+        const answerSources = answered
+          ? selectDisplayedSources(
+              sources.filter((source) => source.kind === 'notice'),
+            )
+          : [];
+        const answerWebSources = answered
+          ? selectDisplayedWebSources(
+              sources.filter((source) => source.kind === 'web'),
+            )
+          : [];
 
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
@@ -646,6 +669,8 @@ export class ChatOrchestrationService {
               resources:
                 answerResources.length > 0 ? answerResources : undefined,
               sources: answerSources.length > 0 ? answerSources : undefined,
+              webSources:
+                answerWebSources.length > 0 ? answerWebSources : undefined,
               // 히스토리에서도 진행 과정을 다시 보여줄 수 있게 최종 상태를 남긴다.
               steps: steps.length > 0 ? steps : undefined,
             },
@@ -668,6 +693,7 @@ export class ChatOrchestrationService {
 
         this.chatStreamTransport.writeResources(reply, answerResources);
         this.chatStreamTransport.writeSources(reply, answerSources);
+        this.chatStreamTransport.writeWebSources(reply, answerWebSources);
         this.chatStreamTransport.writeDone(reply);
 
         // 응답 종료 후 기록해 SSE 완료 시점을 늦추지 않는다.
@@ -699,5 +725,14 @@ const MAX_DISPLAYED_SOURCES = 3;
 function selectDisplayedSources(sources: ExternalSource[]): ExternalSource[] {
   return [...sources]
     .sort((a, b) => Number(b.opened) - Number(a.opened))
+    .slice(0, MAX_DISPLAYED_SOURCES);
+}
+
+/** 공식 도메인 출처를 먼저, 같은 조건이면 수집 순서대로 */
+function selectDisplayedWebSources(
+  sources: ExternalSource[],
+): ExternalSource[] {
+  return [...sources]
+    .sort((a, b) => Number(b.official ?? false) - Number(a.official ?? false))
     .slice(0, MAX_DISPLAYED_SOURCES);
 }

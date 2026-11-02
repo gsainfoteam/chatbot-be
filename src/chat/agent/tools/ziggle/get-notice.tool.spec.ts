@@ -47,7 +47,7 @@ describe('GetNoticeTool', () => {
       {
         path: 'ziggle-notice/7',
         content:
-          '[Ziggle 공지] 장학생 선발\n\n신청 기간: 10.1.~10.6.\n문의 [휴대전화 번호 가림]',
+          '[Ziggle 공지] 장학생 선발\n원문 링크: https://ziggle.example/notice/7\n\n신청 기간: 10.1.~10.6.\n문의 [휴대전화 번호 가림]',
       },
     ]);
     expect(result.sources).toEqual([
@@ -80,7 +80,7 @@ describe('GetNoticeTool', () => {
 
     expect(result.resultCount).toBe(0);
     expect(result.documents?.[0].content).toBe(
-      '[Ziggle 공지] 인재림 장학생 모집\n\n(본문이 이미지로만 되어 있어 내용을 확인할 수 없는 공지입니다. 세부 내용은 공지 원문에서 확인해야 합니다.)',
+      '[Ziggle 공지] 인재림 장학생 모집\n원문 링크: https://ziggle.example/notice/7\n\n(본문이 이미지로만 되어 있어 내용을 확인할 수 없는 공지입니다. 세부 내용은 공지 원문에서 확인해야 합니다.)',
     );
     expect(result.sources).toEqual([
       expect.objectContaining({ id: '7', opened: true }),

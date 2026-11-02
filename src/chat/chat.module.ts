@@ -20,6 +20,8 @@ import { SearchDocumentsTool } from './agent/tools/search-documents.tool';
 import { ZiggleNoticeClient } from './agent/tools/ziggle/ziggle-notice.client';
 import { SearchNoticesTool } from './agent/tools/ziggle/search-notices.tool';
 import { GetNoticeTool } from './agent/tools/ziggle/get-notice.tool';
+import { WebSearchClient } from './agent/tools/web/web-search.client';
+import { SearchWebTool } from './agent/tools/web/search-web.tool';
 
 @Module({
   imports: [
@@ -43,6 +45,8 @@ import { GetNoticeTool } from './agent/tools/ziggle/get-notice.tool';
     ZiggleNoticeClient,
     SearchNoticesTool,
     GetNoticeTool,
+    WebSearchClient,
+    SearchWebTool,
     AgentLoopService,
     ChatOrchestrationService,
   ],

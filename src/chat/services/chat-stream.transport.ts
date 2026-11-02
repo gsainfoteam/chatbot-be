@@ -277,6 +277,26 @@ export class ChatStreamTransport {
     );
   }
 
+  /**
+   * 웹 검색 결과 출처. 공지(`sources`)와 같은 형식에 공식 도메인 여부(`official`)를 더해 따로 보낸다.
+   * `title`은 도메인이다. content·error 키는 넣지 않는다.
+   */
+  writeWebSources(reply: FastifyReply, sources: ExternalSource[]): void {
+    if (sources.length === 0) return;
+    reply.raw.write(
+      `data: ${JSON.stringify({
+        type: 'web_sources',
+        sources: sources.map(({ kind, id, title, url, official }) => ({
+          kind,
+          id,
+          title,
+          url,
+          official: official ?? false,
+        })),
+      })}\n\n`,
+    );
+  }
+
   writeDone(reply: FastifyReply): void {
     reply.raw.write('data: [DONE]\n\n');
     reply.raw.end();

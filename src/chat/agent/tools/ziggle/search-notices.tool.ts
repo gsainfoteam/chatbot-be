@@ -113,7 +113,7 @@ export class SearchNoticesTool implements AgentTool {
       }
       documents.push({
         path: noticeDocumentPath(notice.id, 'summary'),
-        content: `${NOTICE_MARKER} ${notice.title}\n요약: ${maskPersonalInfo(notice.summary)}`,
+        content: `${NOTICE_MARKER} ${notice.title}\n원문 링크: ${this.ziggle.noticeUrl(notice.id)}\n요약: ${maskPersonalInfo(notice.summary)}`,
       });
       sources.push({
         kind: 'notice',

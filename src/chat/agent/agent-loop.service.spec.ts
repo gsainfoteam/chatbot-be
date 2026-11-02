@@ -8,6 +8,8 @@ import { SearchNoticesTool } from './tools/ziggle/search-notices.tool';
 import { GetNoticeTool } from './tools/ziggle/get-notice.tool';
 import type { ZiggleNoticeSummary } from './tools/ziggle/ziggle-notice.client';
 import { shortTitle } from './tools/ziggle/notice-registry';
+import { SearchWebTool } from './tools/web/search-web.tool';
+import type { WebFinding } from './tools/web/grounded-findings';
 
 const CATALOG: ListResourcesResult = {
   raw: {},
@@ -59,6 +61,7 @@ function setup(
     search?: (query: string) => Promise<AgentToolResult>;
     notices?: ZiggleNoticeSummary[];
     noticeBodies?: Record<number, string>;
+    webFindings?: WebFinding[];
   } = {},
 ) {
   const callLLM = jest.fn<(...args: unknown[]) => Promise<LlmResponse>>();
@@ -119,12 +122,20 @@ function setup(
     noticeUrl: (id: number) => `https://ziggle.example/notice/${id}`,
   };
 
+  const webSearch = {
+    search: jest.fn(async () => ({
+      findings: options.webFindings ?? [],
+      queries: [],
+    })),
+  };
+
   const service = new AgentLoopService(
     llmClient as never,
     configService as never,
     searchTool as never,
     new SearchNoticesTool(ziggle as never),
     new GetNoticeTool(ziggle as never),
+    new SearchWebTool(webSearch as never),
   );
 
   const run = (input: Partial<AgentRunInput> = {}) =>
@@ -136,7 +147,7 @@ function setup(
       ...input,
     });
 
-  return { service, run, callLLM, execute, ziggle };
+  return { service, run, callLLM, execute, ziggle, webSearch };
 }
 
 function noticeCall(id: string, keywords: string[]): LlmToolCall {
@@ -543,6 +554,86 @@ describe('AgentLoopService', () => {
       expect(done.map((step) => step.label)).toEqual([
         'Ziggle 공지 2개를 불러왔어요',
         `'${shortTitle(notices[0].title)}' 공지를 확인했어요`,
+      ]);
+    });
+  });
+
+  describe('web search', () => {
+    const webCall = (id: string, query: string): LlmToolCall => ({
+      id,
+      type: 'function',
+      function: {
+        name: 'search_web',
+        arguments: JSON.stringify({ query, reason: '웹에서 찾아볼게요' }),
+      },
+    });
+
+    it('adds web rules only when the web tool is enabled', async () => {
+      const { run, callLLM } = setup([]);
+
+      await run({ enabledTools: ['search_documents', 'search_web'] });
+
+      const system = (callLLM.mock.calls[0][0] as LlmMessage[])[0].content;
+      expect(system).toContain('## 웹 검색 (search_web)');
+    });
+
+    it('uses the longer web time budget when the web tool is enabled', async () => {
+      const { run, callLLM } = setup([], {
+        config: {
+          AGENT_TIME_BUDGET_MS: 20000,
+          AGENT_WEB_TIME_BUDGET_MS: 35000,
+        },
+      });
+
+      await run({ enabledTools: ['search_documents', 'search_web'] });
+
+      const options = callLLM.mock.calls[0][2] as { timeoutMs: number };
+      expect(options.timeoutMs).toBeGreaterThan(20000);
+      expect(options.timeoutMs).toBeLessThanOrEqual(35000);
+    });
+
+    it('keeps the normal budget without the web tool', async () => {
+      const { run, callLLM } = setup([], {
+        config: {
+          AGENT_TIME_BUDGET_MS: 20000,
+          AGENT_WEB_TIME_BUDGET_MS: 35000,
+        },
+      });
+
+      await run();
+
+      const options = callLLM.mock.calls[0][2] as { timeoutMs: number };
+      expect(options.timeoutMs).toBeLessThanOrEqual(20000);
+    });
+
+    it('collects web findings as a document with web sources', async () => {
+      const { run } = setup([response([webCall('a', 'GIST 기숙사 외박')])], {
+        webFindings: [
+          {
+            text: '외박은 생활관 시스템에서 신청한다.',
+            sources: [
+              {
+                url: 'https://dorm.gist.ac.kr/guide',
+                domain: 'dorm.gist.ac.kr',
+                official: true,
+                resolved: true,
+              },
+            ],
+          },
+        ],
+      });
+
+      const result = await run({
+        enabledTools: ['search_documents', 'search_web'],
+      });
+
+      expect(result.documents.at(-1)?.content).toContain('[웹 검색]');
+      expect(result.sources).toEqual([
+        expect.objectContaining({
+          kind: 'web',
+          url: 'https://dorm.gist.ac.kr/guide',
+          title: 'dorm.gist.ac.kr',
+        }),
       ]);
     });
   });

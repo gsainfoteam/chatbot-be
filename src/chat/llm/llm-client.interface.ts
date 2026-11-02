@@ -1,5 +1,6 @@
 import type { Readable } from 'stream';
 import type {
+  GroundedSearchResponse,
   LlmMessage,
   LlmModelType,
   LlmRequest,
@@ -41,4 +42,14 @@ export interface LlmClient {
     model?: string,
     options?: { temperature?: number },
   ): Promise<Readable>;
+
+  /**
+   * 구글 검색 그라운딩을 켜고 호출한다(Gemini 전용). Letsur 게이트웨이(LiteLLM → Vertex AI)는
+   * `vertex_ai_grounding_metadata`로 근거를 돌려준다.
+   */
+  searchWithGoogle(
+    messages: LlmMessage[],
+    model: string,
+    options?: Pick<LlmCallOptions, 'temperature' | 'max_tokens' | 'timeoutMs'>,
+  ): Promise<GroundedSearchResponse>;
 }

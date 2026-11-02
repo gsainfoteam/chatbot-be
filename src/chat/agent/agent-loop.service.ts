@@ -24,6 +24,10 @@ import {
 } from './tools/search-documents.tool';
 import { SearchNoticesTool } from './tools/ziggle/search-notices.tool';
 import { GetNoticeTool } from './tools/ziggle/get-notice.tool';
+import {
+  SEARCH_WEB_TOOL_NAME,
+  SearchWebTool,
+} from './tools/web/search-web.tool';
 
 /** 한 라운드에서 실행할 도구 호출 상한. 넘는 호출은 실행하지 않고 그 사실만 돌려준다. */
 const MAX_TOOL_CALLS_PER_ROUND = 4;
@@ -63,12 +67,14 @@ export class AgentLoopService {
     searchDocumentsTool: SearchDocumentsTool,
     searchNoticesTool: SearchNoticesTool,
     getNoticeTool: GetNoticeTool,
+    searchWebTool: SearchWebTool,
   ) {
     this.config = readAgentConfig(configService);
     const tools: AgentTool[] = [
       searchDocumentsTool,
       searchNoticesTool,
       getNoticeTool,
+      searchWebTool,
     ];
     this.tools = new Map(
       tools.map((tool) => [tool.definition.function.name, tool]),
@@ -88,6 +94,9 @@ export class AgentLoopService {
       [...this.tools].filter(([name]) => enabledNames.has(name)),
     );
     const state = new Map<string, unknown>();
+    const timeBudgetMs = tools.has(SEARCH_WEB_TOOL_NAME)
+      ? Math.max(this.config.timeBudgetMs, this.config.webTimeBudgetMs)
+      : this.config.timeBudgetMs;
     const collected = new DocumentCollector();
     const steps = new Map<string, AgentStep>();
     const executedCalls = new Set<string>();
@@ -153,7 +162,7 @@ export class AgentLoopService {
     let stopReason: AgentStopReason = 'max-rounds';
 
     while (rounds < this.config.maxRounds) {
-      const remainingMs = this.config.timeBudgetMs - (Date.now() - startedAt);
+      const remainingMs = timeBudgetMs - (Date.now() - startedAt);
       if (remainingMs <= 0) {
         stopReason = 'time-budget';
         break;

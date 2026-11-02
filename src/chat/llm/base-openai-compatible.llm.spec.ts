@@ -1,5 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { LetsurLlmService } from './letsur-llm.service';
 import { parseGoogleSearchGrounding } from './base-openai-compatible.llm';
 import type { LlmRequest, LlmTool } from '../types/llm.types';
@@ -33,6 +33,16 @@ const TOOL: LlmTool = {
 };
 
 describe('BaseOpenAiCompatibleLlm.callLLM', () => {
+  it('preserves the provider timeout cause for bounded retries', async () => {
+    const { service, post } = createService();
+    const timeout = Object.assign(new Error('timeout'), {
+      code: 'ECONNABORTED',
+    });
+    post.mockReturnValueOnce(throwError(() => timeout));
+    await expect(
+      service.callLLM([{ role: 'user', content: '장학금 신청' }]),
+    ).rejects.toMatchObject({ cause: timeout });
+  });
   it('does not send tool fields for a plain completion', async () => {
     const { service, post } = createService();
 

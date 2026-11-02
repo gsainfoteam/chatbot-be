@@ -112,6 +112,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
               this.logApiError(error, requestLogSummary);
               throw new InternalServerErrorException(
                 `Failed to call ${this.providerLabel} API: ${error.message}`,
+                { cause: error },
               );
             }),
           ),

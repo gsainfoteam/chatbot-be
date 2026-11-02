@@ -86,6 +86,7 @@ WEB_SEARCH_OFFICIAL_DOMAINS=gist.ac.kr
 ## 평가 기록 읽기
 
 - `route`, `routeReason`, `scope`: 최초 경로와 범위 판단.
+- `scopeAttempts`, `scopeMs`, `scopeFailure`: 범위 판정 시도 횟수·소요 시간·오류 원인. 일시적인 타임아웃 뒤 재시도가 성공해도 첫 오류 원인은 남긴다. 범위 판정은 호출당 30초, 타임아웃일 때만 1회 재시도한다(최대 약 60초).
 - `stopReason`: `ready`는 유효한 complete 종료, `exhausted`는 partial/insufficient 종료. `max-rounds`, `llm-error`, `unassessed`는 근거가 충분하다는 뜻이 아니다.
 - `assessment`: 실제 근거 경로, 남은 질문, 종료 이유, 제외한 후보.
 - `rounds`, `toolCalls`, `toolFailures`, `researchMs`, `firstContentMs`, `totalMs`: 탐색 과정과 지연.

@@ -9,6 +9,9 @@ export type TurnDiagnostics = {
   scopeModel?: string;
   answerModel?: string;
   scope?: string;
+  scopeAttempts?: number;
+  scopeMs?: number;
+  scopeFailure?: string;
   route?: string;
   routeReason?: string;
   rounds?: number;

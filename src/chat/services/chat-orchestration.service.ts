@@ -1,5 +1,6 @@
 import {
   GistScopePolicy,
+  type ScopeDiagnostics,
   SCOPE_REFUSAL,
   SCOPE_UNAVAILABLE,
 } from '../safety/gist-scope.policy';
@@ -575,13 +576,22 @@ export class ChatOrchestrationService {
 
       options.signal?.throwIfAborted();
       if (this.agentLoopService.isEnabled()) {
+        const scopeDiagnostics: ScopeDiagnostics = {};
         const scope = await new GistScopePolicy(this.llmClient).assess(
           userQuestion,
           historyMessages,
           usage,
           options.signal,
+          scopeDiagnostics,
         );
-        if (options.diagnostics) options.diagnostics.scope = scope.reason;
+        if (options.diagnostics) {
+          options.diagnostics.scope = scope.reason;
+          options.diagnostics.scopeAttempts = scopeDiagnostics.attempts;
+          options.diagnostics.scopeMs = scopeDiagnostics.elapsedMs;
+          options.diagnostics.scopeFailure = scopeDiagnostics.failure;
+          if (scopeDiagnostics.usageIncomplete)
+            options.diagnostics.usageIncomplete = true;
+        }
         if (!scope.allowed) {
           const content =
             scope.reason === 'unavailable' ? SCOPE_UNAVAILABLE : SCOPE_REFUSAL;

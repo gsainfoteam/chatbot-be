@@ -238,6 +238,24 @@ describe('allImagesFailedToDecode', () => {
     await expect(check(operatorList([OPS.showText]), {})).resolves.toBe(false);
   });
 
+  it('is false when a vector chart stands without the broken image', async () => {
+    const list = operatorList(
+      [OPS.paintImageXObject, ['img_1', 2, 2]],
+      ...paths(20),
+    );
+
+    await expect(check(list, { img_1: null })).resolves.toBe(false);
+  });
+
+  it('is true when only a few ruled lines stand without the broken image', async () => {
+    const list = operatorList(
+      [OPS.paintImageXObject, ['img_1', 2, 2]],
+      ...paths(3),
+    );
+
+    await expect(check(list, { img_1: null })).resolves.toBe(true);
+  });
+
   it('reads globally cached images from the document store', async () => {
     const list = operatorList([OPS.paintImageXObject, ['g_d0_img_1', 2, 2]]);
 

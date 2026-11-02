@@ -199,6 +199,10 @@ export async function allImagesFailedToDecode(
   operatorList: PdfOperatorList,
   ops: PdfOps,
 ): Promise<boolean> {
+  // A vector chart still renders without a broken logo.
+  const { paintedPaths, hasShading } = scanOperators(operatorList, ops);
+  if (paintedPaths >= MIN_PAINTED_PATHS || hasShading) return false;
+
   const imageIds: string[] = [];
   operatorList.fnArray.forEach((fn, i) => {
     if (fn === ops.paintImageXObject || fn === ops.paintImageXObjectRepeat) {

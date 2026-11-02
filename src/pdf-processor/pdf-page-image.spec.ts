@@ -91,13 +91,13 @@ describe('needsPageImage', () => {
     ['a text-only page', LONG_TEXT, [[OPS.showText]], false],
     [
       'a text layer with many private-use characters',
-      `${'가'.repeat(90)}${''.repeat(10)}`,
+      `${'가'.repeat(90)}${'\uE000'.repeat(10)}`,
       [[OPS.showText]],
       true,
     ],
     [
       'a text layer with many replacement characters',
-      `${'가'.repeat(90)}${'�'.repeat(10)}`,
+      `${'가'.repeat(90)}${'\uFFFD'.repeat(10)}`,
       [[OPS.showText]],
       true,
     ],

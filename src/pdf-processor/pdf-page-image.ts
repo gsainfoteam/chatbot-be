@@ -56,7 +56,7 @@ const SPARSE_TEXT_CHARS = 100;
 const BROKEN_TEXT_RATIO = 0.05;
 const MIN_IMAGE_COVERAGE = 0.03;
 const MIN_PAINTED_PATHS = 20;
-const BROKEN_CHARS = /[-�]/g;
+const BROKEN_CHARS = /[\uE000-\uF8FF\uFFFD]/g;
 
 const RENDER_SCALE = 2;
 const MAX_IMAGE_EDGE = 2000;

@@ -15,6 +15,13 @@ export type PageCanvasFactory = {
   destroy(canvasAndContext: PageCanvas): void;
 };
 
+/**
+ * pdf.js drops larger images with a warning instead of decoding them. A single
+ * 25MP image already costs about 270MB and freezes the event loop for 5s, which
+ * a pod shared with chat traffic cannot afford.
+ */
+export const MAX_IMAGE_PIXELS = 20_000_000;
+
 const SPARSE_TEXT_CHARS = 100;
 const BROKEN_TEXT_RATIO = 0.05;
 const MIN_IMAGE_COVERAGE = 0.03;

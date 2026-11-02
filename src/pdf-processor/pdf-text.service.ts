@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { normalizeExtractedText, isLikelyMojibake } from './mojibake';
 import {
+  MAX_IMAGE_PIXELS,
   allImagesFailedToDecode,
   needsPageImage,
   renderPageImage,
@@ -70,6 +71,8 @@ export class PdfTextService {
 
       // render() decodes images again, so free the first copy before it starts.
       page.cleanup();
+      // pdf.js runs on this thread; let waiting HTTP traffic through between decodes.
+      await new Promise((resolve) => setImmediate(resolve));
       const canvasFactory = pdf.canvasFactory as PageCanvasFactory;
       const image = await renderPageImage(page, canvasFactory);
       return { image, imageFailed: false };
@@ -93,6 +96,7 @@ export class PdfTextService {
     const loadingTask = pdfjs.getDocument({
       data,
       ...this.pdfjsAssetOptions(),
+      maxImageSize: MAX_IMAGE_PIXELS,
       useSystemFonts: false,
       useWorkerFetch: false,
       disableFontFace: true,

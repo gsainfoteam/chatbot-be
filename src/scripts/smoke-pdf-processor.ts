@@ -52,7 +52,8 @@ function buildMinimalPdf(text: string): Buffer {
 
 /**
  * Multi-page PDF sharing one resource set: /Latin (Helvetica), /Korean (non-embedded
- * font that needs the KSCms-UHC-H CMap), /Photo (2x2 raw image), /Broken (undecodable JPX).
+ * font that needs the KSCms-UHC-H CMap), /Photo (2x2 raw image), /Broken (undecodable JPX),
+ * /Oversized (undecodable JPX that declares too many pixels to be decoded at all).
  */
 function buildPdfWithPages(contents: string[]): Buffer {
   const parts: Buffer[] = [];
@@ -76,7 +77,7 @@ function buildPdfWithPages(contents: string[]): Buffer {
       Buffer.from('\nendstream'),
     ]);
 
-  const firstPageId = 7;
+  const firstPageId = 8;
   const pageIds = contents.map((_, i) => firstPageId + i * 2);
   push('%PDF-1.4\n');
   addObject(1, '<< /Type /Catalog /Pages 2 0 R >>');
@@ -103,10 +104,17 @@ function buildPdfWithPages(contents: string[]): Buffer {
       Buffer.from('not a jpeg2000 stream'),
     ),
   );
+  addObject(
+    7,
+    stream(
+      '/Type /XObject /Subtype /Image /Width 5000 /Height 5000 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /JPXDecode',
+      Buffer.from('not a jpeg2000 stream'),
+    ),
+  );
   contents.forEach((content, i) => {
     addObject(
       pageIds[i],
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Latin 3 0 R /Korean 4 0 R >> /XObject << /Photo 5 0 R /Broken 6 0 R >> >> /Contents ${pageIds[i] + 1} 0 R >>`,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /Latin 3 0 R /Korean 4 0 R >> /XObject << /Photo 5 0 R /Broken 6 0 R /Oversized 7 0 R >> >> /Contents ${pageIds[i] + 1} 0 R >>`,
     );
     addObject(pageIds[i] + 1, stream('', Buffer.from(content, 'latin1')));
   });
@@ -212,12 +220,13 @@ async function main() {
       `${latinText}\nq 60 0 0 60 500 700 cm /Photo Do Q`,
       'q Q',
       fullPage('Broken'),
+      fullPage('Oversized'),
     ]),
     async (page) => {
       pages.push(page);
     },
   );
-  const [korean, textOnly, photo, smallLogo, blank, broken] = pages;
+  const [korean, textOnly, photo, smallLogo, blank, broken, oversized] = pages;
   if (korean.text.replace(/\s+/g, '') !== '가나') {
     throw new Error(`predefined CMap text extract failed: "${korean.text}"`);
   }
@@ -248,6 +257,10 @@ async function main() {
   }
   if (broken.image || !broken.imageFailed) {
     throw new Error('undecodable image should be reported as failed');
+  }
+  // Dropped before decoding: an attempt to decode this stream would report a failure.
+  if (oversized.image || oversized.imageFailed) {
+    throw new Error('oversized image should be dropped without decoding');
   }
   console.log('OK page images');
 

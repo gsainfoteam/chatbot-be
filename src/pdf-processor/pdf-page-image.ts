@@ -85,7 +85,6 @@ function scanOperators(list: PdfOperatorList, ops: PdfOps) {
     imageArea: 0,
     images: [] as Point[][],
     hasImage: false,
-    hasUnmeasuredImage: false,
     paintedPaths: 0,
     hasShading: false,
     hasText: false,
@@ -131,14 +130,6 @@ function scanOperators(list: PdfOperatorList, ops: PdfOps) {
           UNIT_SQUARE.map((corner) => applyMatrix(matrix, corner)),
         );
         break;
-      // The optimizer folds per-image transforms into these ops.
-      case ops.paintImageXObjectRepeat:
-      case ops.paintInlineImageXObjectGroup:
-      case ops.paintImageMaskXObjectGroup:
-      case ops.paintImageMaskXObjectRepeat:
-        scan.hasImage = true;
-        scan.hasUnmeasuredImage = true;
-        break;
       case ops.constructPath:
         if (args[0] !== ops.endPath) scan.paintedPaths += 1;
         break;
@@ -183,7 +174,6 @@ export function needsPageImage(
   const brokenChars = chars.match(BROKEN_CHARS)?.length ?? 0;
   if (brokenChars / chars.length >= BROKEN_TEXT_RATIO) return true;
 
-  if (scan.hasUnmeasuredImage) return true;
   if (scan.imageArea / pageArea >= MIN_IMAGE_COVERAGE) return true;
   if (scan.paintedPaths >= MIN_PAINTED_PATHS || scan.hasShading) return true;
 
@@ -205,7 +195,7 @@ export async function allImagesFailedToDecode(
 
   const imageIds: string[] = [];
   operatorList.fnArray.forEach((fn, i) => {
-    if (fn === ops.paintImageXObject || fn === ops.paintImageXObjectRepeat) {
+    if (fn === ops.paintImageXObject) {
       imageIds.push(operatorList.argsArray[i][0]);
     }
   });
@@ -264,8 +254,7 @@ export function pageFigureRegion(
 ): Box | null {
   // Nothing but its image may back a page with hardly any text.
   if (isSparseText(text)) return null;
-  const { images, hasUnmeasuredImage } = scanOperators(operatorList, ops);
-  if (hasUnmeasuredImage) return null;
+  const { images } = scanOperators(operatorList, ops);
 
   const viewport = renderViewport(page);
   const onCanvas = (points: Point[]) =>

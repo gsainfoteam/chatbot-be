@@ -23,12 +23,8 @@ const OPS = {
   paintFormXObjectBegin: 74,
   paintFormXObjectEnd: 75,
   paintImageMaskXObject: 83,
-  paintImageMaskXObjectGroup: 84,
   paintImageXObject: 85,
   paintInlineImageXObject: 86,
-  paintInlineImageXObjectGroup: 87,
-  paintImageXObjectRepeat: 88,
-  paintImageMaskXObjectRepeat: 89,
   constructPath: 91,
 };
 
@@ -70,12 +66,6 @@ function decide(text: string, ...ops: Op[]) {
 }
 
 describe('needsPageImage', () => {
-  const unmeasuredImageOps = [
-    OPS.paintImageMaskXObjectGroup,
-    OPS.paintInlineImageXObjectGroup,
-    OPS.paintImageXObjectRepeat,
-    OPS.paintImageMaskXObjectRepeat,
-  ];
   const textOps = [
     OPS.showText,
     OPS.showSpacedText,
@@ -179,13 +169,6 @@ describe('needsPageImage', () => {
     expect(decide(text, ...ops)).toBe(expected);
   });
 
-  it.each(unmeasuredImageOps)(
-    'sends the page when image op %i cannot be measured',
-    (fn) => {
-      expect(decide(LONG_TEXT, [fn, []])).toBe(true);
-    },
-  );
-
   it.each(textOps)(
     'sends the page when text op %i draws glyphs the text layer lacks',
     (fn) => {
@@ -219,7 +202,7 @@ describe('allImagesFailedToDecode', () => {
   it('is true when every drawn image failed', async () => {
     const list = operatorList(
       [OPS.paintImageXObject, ['img_1', 2, 2]],
-      [OPS.paintImageXObjectRepeat, ['img_2', 2, 2, []]],
+      [OPS.paintImageXObject, ['img_2', 2, 2]],
     );
 
     await expect(check(list, { img_1: null, img_2: null })).resolves.toBe(true);
@@ -352,12 +335,6 @@ describe('pageFigureRegion', () => {
 
   it('keeps everything on a page with hardly any text', () => {
     expect(region(FIGURE, [], '짧은 설명')).toBeNull();
-  });
-
-  it('keeps everything when an image cannot be placed', () => {
-    expect(
-      region([...FIGURE, [OPS.paintImageXObjectRepeat, ['img', 2, 2, []]]]),
-    ).toBeNull();
   });
 
   it('keeps everything on a wide page', () => {

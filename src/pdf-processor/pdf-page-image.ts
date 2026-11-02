@@ -98,6 +98,11 @@ function scanOperators(list: PdfOperatorList, ops: PdfOps) {
   return scan;
 }
 
+/** Covers, thank-you slides and the like: too little text to lose if dropped. */
+export function isSparseText(text: string): boolean {
+  return text.replace(/\s+/g, '').length < SPARSE_TEXT_CHARS;
+}
+
 /**
  * Decide whether the text layer alone would lose page content.
  * A missed page silently loses content while an extra one only costs an LLM call,
@@ -123,7 +128,7 @@ export function needsPageImage(
   if (scan.imageArea / pageArea >= MIN_IMAGE_COVERAGE) return true;
   if (scan.paintedPaths >= MIN_PAINTED_PATHS || scan.hasShading) return true;
 
-  return hasGraphics && chars.length < SPARSE_TEXT_CHARS;
+  return hasGraphics && isSparseText(text);
 }
 
 /**

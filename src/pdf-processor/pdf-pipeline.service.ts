@@ -4,6 +4,7 @@ import { PDF_PROCESSOR_PROMPT } from '../chat/prompts/pdf-processor';
 import { PDF_CHUNKING_PROMPT } from '../chat/prompts/pdf-chunking-prompt';
 import { LLM_CLIENT, type LlmClient } from '../chat/llm/llm-client.interface';
 import type { LlmRequestMessage } from '../chat/types/llm.types';
+import { isSparseText } from './pdf-page-image';
 import { PdfTextService } from './pdf-text.service';
 import {
   splitMarkdownIntoSections,
@@ -222,7 +223,8 @@ export class PdfPipelineService {
         },
       );
       const markdown = response.choices?.[0]?.message?.content ?? '';
-      if (!markdown.trim() && pageText.trim()) {
+      // The prompt tells the LLM to drop pages without information.
+      if (!markdown.trim() && !isSparseText(pageText)) {
         this.logger.warn(
           `Empty LLM markdown for page ${currentPage}; using raw extracted text`,
         );

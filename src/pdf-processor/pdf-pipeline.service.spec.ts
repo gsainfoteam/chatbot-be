@@ -447,6 +447,41 @@ describe('PdfPipelineService page images', () => {
     expect(pass1Contents[1]).toEqual(expect.stringContaining('총 페이지: 3'));
   });
 
+  it('leaves out a sparse page the LLM returns empty without failing it', async () => {
+    const { callLLM } = fakeLlm(['', SECTION]);
+    const pipeline = createPipeline({ pages: ['감사합니다', '본문'], callLLM });
+
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(result.chunks.some((c) => c.content.includes('감사합니다'))).toBe(
+      false,
+    );
+  });
+
+  it('leaves out an image page the LLM returns empty without failing it', async () => {
+    const { callLLM } = fakeLlm(['', SECTION]);
+    const pipeline = createPipeline({
+      pages: [{ text: '', image: IMAGE }, '본문'],
+      callLLM,
+    });
+
+    const result = await pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf');
+
+    expect(result.chunks.length).toBeGreaterThan(0);
+  });
+
+  it('counts a text-rich page the LLM returns empty as failed', async () => {
+    const { callLLM } = fakeLlm(['', SECTION]);
+    const pipeline = createPipeline({
+      pages: ['충분히 긴 본문입니다. '.repeat(20), '본문'],
+      callLLM,
+    });
+
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold.*pages=\[1\]/);
+  });
+
   it('fails a document with no pages', async () => {
     const { callLLM } = fakeLlm([]);
     const pipeline = createPipeline({ pages: [], callLLM });

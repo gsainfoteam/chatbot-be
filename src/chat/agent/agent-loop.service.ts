@@ -1,3 +1,9 @@
+import {
+  FINISH_RESEARCH,
+  finishResearchTool,
+  readResearchAssessment,
+  type ResearchAssessment,
+} from './research-decision';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { LLM_CLIENT, type LlmClient } from '../llm/llm-client.interface';
@@ -71,6 +77,8 @@ export class AgentLoopService {
     const collected = new DocumentCollector();
     const steps = new Map<string, AgentStep>();
     const executedCalls = new Set<string>();
+    const callCounts = new Map<string, number>();
+    let assessment: ResearchAssessment | undefined;
     const emit = (step: AgentStep) => {
       steps.set(step.id, step);
       input.onStep?.(step);
@@ -122,6 +130,7 @@ export class AgentLoopService {
     const toolDefinitions = [...this.tools.values()].map(
       (tool) => tool.definition,
     );
+    toolDefinitions.push(finishResearchTool);
     const model = this.llmClient.getModel(this.config.modelTier);
     let rounds = 0;
     let stopReason: AgentStopReason = 'max-rounds';
@@ -156,7 +165,7 @@ export class AgentLoopService {
 
       const toolCalls = message?.tool_calls ?? [];
       if (!message || toolCalls.length === 0) {
-        stopReason = 'ready';
+        stopReason = 'unassessed';
         break;
       }
 
@@ -167,11 +176,37 @@ export class AgentLoopService {
         content: message.content ?? null,
       });
 
+      if (
+        toolCalls.length === 1 &&
+        toolCalls[0].function.name === FINISH_RESEARCH
+      ) {
+        assessment =
+          readResearchAssessment(
+            toolCalls[0].function.arguments,
+            collected.paths(),
+          ) ?? undefined;
+        if (assessment) {
+          stopReason =
+            assessment.outcome === 'complete' ? 'ready' : 'exhausted';
+          break;
+        }
+        messages.push({
+          role: 'tool',
+          tool_call_id: toolCalls[0].id,
+          name: FINISH_RESEARCH,
+          content:
+            '종료 판단이 유효하지 않습니다. 실제 자료 경로와 미해결 질문을 명시하거나 추가 조사하세요.',
+        });
+        continue;
+      }
+      const roundCounts = new Map<string, number>();
       const results = await Promise.all(
         toolCalls.map((call, index) =>
           index < MAX_TOOL_CALLS_PER_ROUND
             ? this.executeCall(call, {
                 round: rounds,
+                callCounts,
+                roundCounts,
                 context: {
                   catalog: input.catalog,
                   usage: input.usage,
@@ -207,6 +242,8 @@ export class AgentLoopService {
       steps: [...steps.values()],
       rounds,
       stopReason,
+      assessment,
+      elapsedMs: Date.now() - startedAt,
     };
     this.logger.log(
       `[PERF] agent loop: ${Date.now() - startedAt}ms, rounds=${rounds}, stop=${stopReason}, ` +
@@ -219,6 +256,8 @@ export class AgentLoopService {
     call: LlmToolCall,
     params: {
       round: number;
+      callCounts: Map<string, number>;
+      roundCounts: Map<string, number>;
       context: AgentToolContext;
       executedCalls: Set<string>;
       emit: (step: AgentStep) => void;
@@ -252,7 +291,17 @@ export class AgentLoopService {
     if (params.executedCalls.has(key)) {
       return '이미 같은 인자로 실행한 도구입니다. 다른 검색어를 쓰거나 조사를 마치세요.';
     }
+    const count = params.callCounts.get(name) ?? 0;
+    const roundCount = params.roundCounts.get(name) ?? 0;
+    if (
+      count >= (tool.maxCalls ?? 12) ||
+      roundCount >= (tool.maxCallsPerRound ?? MAX_TOOL_CALLS_PER_ROUND)
+    ) {
+      return '이 도구의 실행 한도에 도달했습니다. 다른 경로를 확인하거나 확보한 근거로 조사를 종료하세요.';
+    }
     params.executedCalls.add(key);
+    params.callCounts.set(name, count + 1);
+    params.roundCounts.set(name, roundCount + 1);
 
     const step: AgentStep = {
       id: `r${params.round}_${call.id}`,

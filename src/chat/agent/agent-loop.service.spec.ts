@@ -135,7 +135,7 @@ describe('AgentLoopService', () => {
 
     expect(execute).toHaveBeenCalledTimes(2);
     expect(callLLM).toHaveBeenCalledTimes(2);
-    expect(result.stopReason).toBe('ready');
+    expect(result.stopReason).toBe('unassessed');
     expect(result.rounds).toBe(2);
     expect(result.documents.map((doc) => doc.path)).toEqual([
       '문서/졸업 요건',
@@ -150,6 +150,7 @@ describe('AgentLoopService', () => {
     expect(model).toBe('normal-model');
     expect(options.tools.map((tool) => tool.function.name)).toEqual([
       'search_documents',
+      'finish_research',
     ]);
     expect(options.tool_choice).toBe('auto');
   });
@@ -297,4 +298,28 @@ describe('AgentLoopService', () => {
 
     expect(usage.total_tokens).toBe(30);
   });
+});
+
+it('finishes only with a structured assessment referencing collected evidence', async () => {
+  const { run } = setup([
+    response([toolCall('search', '규정')]),
+    response([
+      {
+        id: 'finish',
+        type: 'function',
+        function: {
+          name: 'finish_research',
+          arguments: JSON.stringify({
+            outcome: 'partial',
+            evidencePaths: ['문서/규정'],
+            unresolvedQuestions: ['마감일'],
+            reason: '다른 자료를 찾지 못함',
+          }),
+        },
+      },
+    ]),
+  ]);
+  const result = await run();
+  expect(result.stopReason).toBe('exhausted');
+  expect(result.assessment?.unresolvedQuestions).toEqual(['마감일']);
 });

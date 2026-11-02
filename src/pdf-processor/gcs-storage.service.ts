@@ -111,7 +111,6 @@ export class GcsStorageService {
 
   /**
    * Upload processed documents map (path → markdown string).
-   * Binary (image) entries are skipped in phase 1.
    */
   async uploadDocuments(documents: Record<string, string>): Promise<void> {
     for (const [path, content] of Object.entries(documents)) {
@@ -133,7 +132,7 @@ export class GcsStorageService {
   }
 
   /**
-   * Delete generated Markdown while preserving the source PDF for retry.
+   * Delete generated Markdown and page images while preserving the source PDF for retry.
    */
   async deleteProcessedArtifacts(resourceName: string): Promise<void> {
     const toDelete = await this.getProcessedArtifactFiles(resourceName);

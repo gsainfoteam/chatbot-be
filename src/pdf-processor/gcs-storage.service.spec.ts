@@ -42,7 +42,7 @@ describe('decodeServiceAccountCredentials', () => {
 });
 
 describe('GcsStorageService page images', () => {
-  it('stores a JPEG under the document prefix that deletion covers', async () => {
+  it('stores a JPEG under the document prefix', async () => {
     const save = jest.fn(async (_data: Buffer, _options: unknown) => undefined);
     const file = jest.fn((_path: string) => ({ save }));
     const service = Object.create(

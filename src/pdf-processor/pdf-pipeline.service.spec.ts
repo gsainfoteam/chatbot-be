@@ -5,6 +5,8 @@ import type { LlmRequestMessage, LlmResponse } from '../chat/types/llm.types';
 import { PdfPipelineService } from './pdf-pipeline.service';
 import type { PdfPageContent, PdfTextService } from './pdf-text.service';
 
+const STORED_IMAGE = Buffer.from('cropped');
+
 function llmResponse(
   content: string,
   finishReason: LlmResponse['choices'][0]['finish_reason'] = 'stop',
@@ -38,6 +40,8 @@ function createPipeline(options: {
               pageNumber: index + 1,
               text: '',
               image: null,
+              storedImage:
+                typeof page !== 'string' && page.image ? STORED_IMAGE : null,
               imageFailed: false,
               ...(typeof page === 'string' ? { text: page } : page),
             },
@@ -512,7 +516,7 @@ describe('PdfPipelineService page images', () => {
       );
 
       expect(allContent(result)).toContain(REFERENCE);
-      expect(sink).toHaveBeenCalledWith(1, Buffer.from('ABC'));
+      expect(sink).toHaveBeenCalledWith(1, STORED_IMAGE);
     });
 
     it('drops a reference to a different page', async () => {
@@ -706,7 +710,7 @@ describe('PdfPipelineService page images', () => {
       expect(allContent(result)).not.toContain('학생회관');
       expect(allContent(result)).not.toContain('오룡관');
       expect(allContent(result)).toContain('![doc 1쪽](IMAGE:page-1)');
-      expect(sink).toHaveBeenCalledWith(1, Buffer.from('ABC'));
+      expect(sink).toHaveBeenCalledWith(1, STORED_IMAGE);
     });
 
     it('keeps the LLM description of the image when two readings disagree', async () => {

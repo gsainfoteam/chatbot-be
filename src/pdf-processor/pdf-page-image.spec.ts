@@ -1,4 +1,5 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import { createCanvas, loadImage, type SKRSContext2D } from '@napi-rs/canvas';
 import {
   allImagesFailedToDecode,
   needsPageImage,
@@ -248,11 +249,14 @@ describe('allImagesFailedToDecode', () => {
 describe('renderPageImage', () => {
   function setup(pageWidth: number, pageHeight: number) {
     const encode = jest.fn(async () => Buffer.from('jpeg-bytes'));
-    const create = jest.fn((width: number, height: number) => {
-      void width;
-      void height;
-      return { canvas: { encode } };
-    });
+    const create = jest.fn((width: number, height: number) => ({
+      canvas: { width, height, encode },
+      context: {
+        getImageData: () => ({
+          data: new Uint8ClampedArray(width * height * 4).fill(255),
+        }),
+      },
+    }));
     const destroy = jest.fn();
     const task: { promise: Promise<void>; onContinue?: unknown } = {
       promise: Promise.resolve(),
@@ -272,7 +276,7 @@ describe('renderPageImage', () => {
   it('renders a normal page at twice its size as a JPEG data URL', async () => {
     const { page, factory, create } = setup(612, 792);
 
-    const image = await renderPageImage(page, factory);
+    const { image } = await renderPageImage(page, factory);
 
     expect(create).toHaveBeenCalledWith(1224, 1584);
     expect(image).toBe(
@@ -316,5 +320,116 @@ describe('renderPageImage', () => {
     expect(resume).not.toHaveBeenCalled();
     await new Promise((resolve) => setImmediate(resolve));
     expect(resume).toHaveBeenCalledTimes(1);
+  });
+
+  describe('the stored image', () => {
+    const destroy = jest.fn();
+    const factory = {
+      create(width: number, height: number) {
+        const canvas = createCanvas(width, height);
+        return { canvas, context: canvas.getContext('2d') };
+      },
+      destroy,
+    } as unknown as PageCanvasFactory;
+
+    /** Paints like pdf.js: a white page on a 1224x1584 canvas, then the content. */
+    function paintedPage(...ink: Array<[number, number, number, number]>) {
+      return {
+        getViewport: ({ scale }: { scale: number }) => ({
+          width: 612 * scale,
+          height: 792 * scale,
+        }),
+        render: ({
+          canvas,
+        }: {
+          canvas: { getContext(type: '2d'): SKRSContext2D };
+        }) => {
+          const context = canvas.getContext('2d');
+          context.fillStyle = '#ffffff';
+          context.fillRect(0, 0, 1224, 1584);
+          context.fillStyle = '#000000';
+          for (const [x0, y0, x1, y1] of ink) {
+            context.fillRect(x0, y0, x1 - x0, y1 - y0);
+          }
+          return { promise: Promise.resolve() };
+        },
+      } as never;
+    }
+
+    async function pixels(jpeg: Buffer) {
+      const decoded = await loadImage(jpeg);
+      const canvas = createCanvas(decoded.width, decoded.height);
+      const context = canvas.getContext('2d');
+      context.drawImage(decoded, 0, 0);
+      return {
+        width: decoded.width,
+        height: decoded.height,
+        red: (x: number, y: number) => context.getImageData(x, y, 1, 1).data[0],
+      };
+    }
+
+    it('gives the LLM the whole page and readers its content in a white margin', async () => {
+      const { image, storedImage } = await renderPageImage(
+        paintedPage([200, 200, 600, 500]),
+        factory,
+      );
+
+      const whole = await pixels(
+        Buffer.from(image.slice(image.indexOf(',') + 1), 'base64'),
+      );
+      expect([whole.width, whole.height]).toEqual([1224, 1584]);
+
+      // 400x300 of ink, 4px of padding around it, then 4% of 408 as a margin.
+      const stored = await pixels(storedImage);
+      expect([stored.width, stored.height]).toEqual([440, 340]);
+      expect(stored.red(2, 2)).toBeGreaterThan(240);
+      expect(stored.red(220, 170)).toBeLessThan(15);
+    });
+
+    it('stores the rendered page as it is when there is nothing to crop', async () => {
+      const { image, storedImage } = await renderPageImage(
+        paintedPage([0, 0, 1224, 1584]),
+        factory,
+      );
+
+      expect(storedImage.toString('base64')).toBe(
+        image.slice(image.indexOf(',') + 1),
+      );
+    });
+
+    it('releases both canvases, even when the crop cannot be encoded', async () => {
+      const ink = new Uint8ClampedArray(1224 * 1584 * 4).fill(255);
+      ink.fill(0, 800_000, 1_600_000);
+      const encode = jest
+        .fn<() => Promise<Buffer>>()
+        .mockResolvedValueOnce(Buffer.from('page'))
+        .mockRejectedValueOnce(new Error('encode failed'));
+      const release = jest.fn();
+      const failing = {
+        create: (width: number, height: number) => ({
+          canvas: { width, height, encode },
+          context: {
+            getImageData: () => ({ data: ink }),
+            fillRect: jest.fn(),
+            drawImage: jest.fn(),
+          },
+        }),
+        destroy: release,
+      } as unknown as PageCanvasFactory;
+
+      await expect(
+        renderPageImage(
+          {
+            getViewport: ({ scale }: { scale: number }) => ({
+              width: 612 * scale,
+              height: 792 * scale,
+            }),
+            render: () => ({ promise: Promise.resolve() }),
+          } as never,
+          failing,
+        ),
+      ).rejects.toThrow('encode failed');
+      expect(release).toHaveBeenCalledTimes(2);
+    });
   });
 });

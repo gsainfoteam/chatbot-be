@@ -24,6 +24,8 @@ export type PdfPageContent = {
   text: string;
   /** JPEG data URL, set only when the text layer alone would lose content. */
   image: string | null;
+  /** JPEG of the same page for readers, cropped to what is worth showing. */
+  storedImage: Buffer | null;
   /** The page needed an image, but rendering or decoding it failed. */
   imageFailed: boolean;
 };
@@ -62,12 +64,12 @@ export class PdfTextService {
     pdf: PdfDocument,
     text: string,
     ops: PdfjsModule['OPS'],
-  ): Promise<Pick<PdfPageContent, 'image' | 'imageFailed'>> {
+  ): Promise<Pick<PdfPageContent, 'image' | 'storedImage' | 'imageFailed'>> {
     try {
       const operatorList = await page.getOperatorList();
       const [x1, y1, x2, y2] = page.view;
       if (!needsPageImage(text, operatorList, ops, (x2 - x1) * (y2 - y1))) {
-        return { image: null, imageFailed: false };
+        return { image: null, storedImage: null, imageFailed: false };
       }
       if (await allImagesFailedToDecode(page, operatorList, ops)) {
         throw new Error('every image on the page failed to decode');
@@ -78,13 +80,15 @@ export class PdfTextService {
       // pdf.js runs on this thread; let waiting HTTP traffic through between decodes.
       await new Promise((resolve) => setImmediate(resolve));
       const canvasFactory = pdf.canvasFactory as PageCanvasFactory;
-      const image = await renderPageImage(page, canvasFactory);
-      return { image, imageFailed: false };
+      return {
+        ...(await renderPageImage(page, canvasFactory)),
+        imageFailed: false,
+      };
     } catch (error) {
       this.logger.warn(
         `Page ${page.pageNumber}: Page image unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return { image: null, imageFailed: true };
+      return { image: null, storedImage: null, imageFailed: true };
     }
   }
 

@@ -1,3 +1,5 @@
+import { storedCrop, type Box } from './page-image-crop';
+
 type PdfjsModule = typeof import('pdfjs-dist/legacy/build/pdf.mjs');
 type PdfOps = PdfjsModule['OPS'];
 export type PdfDocument = Awaited<
@@ -7,7 +9,32 @@ export type PdfPage = Awaited<ReturnType<PdfDocument['getPage']>>;
 type PdfOperatorList = Awaited<ReturnType<PdfPage['getOperatorList']>>;
 
 type PageCanvas = {
-  canvas: { encode(format: 'jpeg', quality: number): Promise<Buffer> };
+  canvas: {
+    width: number;
+    height: number;
+    encode(format: 'jpeg', quality: number): Promise<Buffer>;
+  };
+  context: {
+    fillStyle: string;
+    fillRect(x: number, y: number, width: number, height: number): void;
+    drawImage(
+      source: unknown,
+      sx: number,
+      sy: number,
+      sw: number,
+      sh: number,
+      dx: number,
+      dy: number,
+      dw: number,
+      dh: number,
+    ): void;
+    getImageData(
+      x: number,
+      y: number,
+      width: number,
+      height: number,
+    ): { data: Uint8ClampedArray };
+  };
 };
 
 export type PageCanvasFactory = {
@@ -31,6 +58,11 @@ const BROKEN_CHARS = /[-�]/g;
 const RENDER_SCALE = 2;
 const MAX_IMAGE_EDGE = 2000;
 const JPEG_QUALITY = 80;
+/**
+ * Of the crop width: every image is shown at the same width, so this looks the
+ * same on all of them. Content touching the edge of a picture looks cut off.
+ */
+const CROP_MARGIN = 0.04;
 
 function scanOperators(list: PdfOperatorList, ops: PdfOps) {
   const stack: number[][] = [];
@@ -167,17 +199,49 @@ export async function allImagesFailedToDecode(
   return images.every((image) => image === null);
 }
 
+async function encodeCrop(
+  source: PageCanvas,
+  canvasFactory: PageCanvasFactory,
+  [left, top, right, bottom]: Box,
+): Promise<Buffer> {
+  const width = right - left;
+  const height = bottom - top;
+  const margin = Math.round(width * CROP_MARGIN);
+  const target = canvasFactory.create(width + 2 * margin, height + 2 * margin);
+  try {
+    target.context.fillStyle = '#ffffff';
+    target.context.fillRect(0, 0, width + 2 * margin, height + 2 * margin);
+    target.context.drawImage(
+      source.canvas,
+      left,
+      top,
+      width,
+      height,
+      margin,
+      margin,
+      width,
+      height,
+    );
+    return await target.canvas.encode('jpeg', JPEG_QUALITY);
+  } finally {
+    canvasFactory.destroy(target);
+  }
+}
+
 /**
- * Render a page to a JPEG data URL.
+ * Render a page: the LLM reads all of it as a JPEG data URL, while readers get
+ * only `storedImage`, cropped to what they came to see.
  */
 export async function renderPageImage(
   page: PdfPage,
   canvasFactory: PageCanvasFactory,
-): Promise<string> {
-  const { width, height } = page.getViewport({ scale: 1 });
+): Promise<{ image: string; storedImage: Buffer }> {
+  const { width: pageWidth, height: pageHeight } = page.getViewport({
+    scale: 1,
+  });
   const scale = Math.min(
     RENDER_SCALE,
-    MAX_IMAGE_EDGE / Math.max(width, height),
+    MAX_IMAGE_EDGE / Math.max(pageWidth, pageHeight),
   );
   const viewport = page.getViewport({ scale });
   const entry = canvasFactory.create(
@@ -193,7 +257,16 @@ export async function renderPageImage(
     };
     await task.promise;
     const jpeg = await entry.canvas.encode('jpeg', JPEG_QUALITY);
-    return `data:image/jpeg;base64,${jpeg.toString('base64')}`;
+    const { width, height } = entry.canvas;
+    const crop = storedCrop(
+      entry.context.getImageData(0, 0, width, height).data,
+      width,
+      height,
+    );
+    return {
+      image: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
+      storedImage: crop ? await encodeCrop(entry, canvasFactory, crop) : jpeg,
+    };
   } finally {
     canvasFactory.destroy(entry);
   }

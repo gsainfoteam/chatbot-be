@@ -169,14 +169,16 @@ export class PdfPipelineService {
     page: PdfPageContent,
     onPageImage?: PageImageSink,
   ): Promise<string> {
-    if (!page.image || !hasPageImageReference(markdown, page.pageNumber)) {
+    if (
+      !page.storedImage ||
+      !hasPageImageReference(markdown, page.pageNumber)
+    ) {
       return markdown;
     }
 
     try {
       if (onPageImage) {
-        const base64 = page.image.slice(page.image.indexOf(',') + 1);
-        await onPageImage(page.pageNumber, Buffer.from(base64, 'base64'));
+        await onPageImage(page.pageNumber, page.storedImage);
         return markdown;
       }
     } catch (error) {

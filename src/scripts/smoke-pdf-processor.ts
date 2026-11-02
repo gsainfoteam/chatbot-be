@@ -221,12 +221,23 @@ async function main() {
       'q Q',
       fullPage('Broken'),
       fullPage('Oversized'),
+      'q 300 0 0 300 150 200 cm /Photo Do Q',
+      `${latinText}\nq 300 0 0 300 150 100 cm /Photo Do Q`,
     ]),
     async (page) => {
       pages.push(page);
     },
   );
-  const [korean, textOnly, photo, smallLogo, blank, broken, oversized] = pages;
+  const [
+    korean,
+    textOnly,
+    photo,
+    smallLogo,
+    blank,
+    broken,
+    oversized,
+    photoInMargins,
+  ] = pages;
   if (korean.text.replace(/\s+/g, '') !== '가나') {
     throw new Error(`predefined CMap text extract failed: "${korean.text}"`);
   }
@@ -263,6 +274,25 @@ async function main() {
     throw new Error('oversized image should be dropped without decoding');
   }
   console.log('OK page images');
+
+  // 7) stored images: 600px of photo, 4px of padding on each side, 4% margin
+  const widthOf = async (image: Buffer | null) =>
+    image ? (await loadImage(image)).width : 0;
+  const croppedWidth = await widthOf(photoInMargins.storedImage);
+  if (croppedWidth !== 656) {
+    throw new Error(`stored image is wrong: ${croppedWidth}`);
+  }
+  if (!photo.storedImage || (await widthOf(photo.storedImage)) !== 1224) {
+    throw new Error('a page filled to its edges should be stored whole');
+  }
+  const pageSentToLlm = Buffer.from(
+    photoInMargins.image?.split(',')[1] ?? '',
+    'base64',
+  );
+  if ((await loadImage(pageSentToLlm)).width !== 1224) {
+    throw new Error('the LLM should read the whole page');
+  }
+  console.log('OK stored images');
 
   console.log('=== smoke passed ===');
 }

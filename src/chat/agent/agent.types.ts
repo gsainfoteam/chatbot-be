@@ -1,3 +1,4 @@
+import type { ResearchAssessment } from './research-decision';
 import type { ListResourcesResult } from '../../retrieval/retrieval.types';
 import type { LlmTool, LlmUsage } from '../types/llm.types';
 
@@ -33,6 +34,9 @@ export type AgentStepOutcome =
 
 export interface AgentTool {
   readonly definition: LlmTool;
+  /** 서버가 강제하는 질문당/라운드당 실행 상한 */
+  readonly maxCalls?: number;
+  readonly maxCallsPerRound?: number;
   execute(
     args: Record<string, unknown>,
     context: AgentToolContext,
@@ -62,7 +66,8 @@ export type AgentStep = {
 
 export type AgentStopReason =
   | 'ready'
-  | 'no-progress'
+  | 'unassessed'
+  | 'exhausted'
   | 'max-rounds'
   | 'time-budget'
   | 'llm-error';
@@ -74,4 +79,6 @@ export type AgentRunResult = {
   steps: AgentStep[];
   rounds: number;
   stopReason: AgentStopReason;
+  assessment?: ResearchAssessment;
+  elapsedMs?: number;
 };

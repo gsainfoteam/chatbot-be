@@ -17,6 +17,14 @@ import type { AgentRunInput } from '../agent/agent-loop.service';
 import type { AgentRunResult } from '../agent/agent.types';
 
 describe('ChatOrchestrationService', () => {
+  it('researches external sources even when the internal catalog is empty', async () => {
+    const { run, agentLoopService } = setup(EMPTY_CATALOG, {
+      agentEnabled: true,
+      noticeWidgetKeyIds: ['w1'],
+    });
+    await run('장학금 공지', { widgetKeyId: 'w1' });
+    expect(agentLoopService.run).toHaveBeenCalled();
+  });
   function createLlmResponse(
     content: string,
     totalTokens: number,
@@ -707,7 +715,11 @@ describe('ChatOrchestrationService', () => {
           },
         );
 
-        await run('장학금 신청 기간 언제야?', { widgetKeyId: 'w1' });
+        await run(
+          '장학금 신청 기간 언제야?',
+          { widgetKeyId: 'w1' },
+          '신청 기간은 10월 6일까지입니다. [cite:1]',
+        );
 
         const [messages] = llmClient.generateFinalResponseStream.mock
           .calls[0] as unknown as [Array<{ role: string; content: string }>];
@@ -725,12 +737,8 @@ describe('ChatOrchestrationService', () => {
             (line) =>
               JSON.parse(line) as { sources: Array<Record<string, unknown>> },
           )[0];
-        // 본문까지 읽은 공지를 먼저, 최대 3개만 보여준다.
-        expect(event.sources.map((source) => source.id)).toEqual([
-          '301',
-          '1',
-          '2',
-        ]);
+        // 실제 인용한 유효한 출처만 보여준다.
+        expect(event.sources.map((source) => source.id)).toEqual(['301']);
         expect(event.sources[0]).not.toHaveProperty('opened');
         expect(chatService.createMessage).toHaveBeenCalledWith(
           'session-id',

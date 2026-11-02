@@ -1,3 +1,4 @@
+import { maskPersonalInfo } from './notice-text';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { McpToolClient } from '../../../../mcp/mcp-tool-client';
@@ -93,9 +94,11 @@ export class ZiggleNoticeClient {
       return [
         {
           id,
-          title,
+          title: maskPersonalInfo(title),
           summary:
-            typeof summary === 'string' && summary.trim() ? summary : null,
+            typeof summary === 'string' && summary.trim()
+              ? maskPersonalInfo(summary).slice(0, 4000)
+              : null,
         },
       ];
     });

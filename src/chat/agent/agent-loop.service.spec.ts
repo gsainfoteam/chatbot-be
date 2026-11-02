@@ -179,7 +179,7 @@ describe('AgentLoopService', () => {
 
     expect(execute).toHaveBeenCalledTimes(2);
     expect(callLLM).toHaveBeenCalledTimes(2);
-    expect(result.stopReason).toBe('ready');
+    expect(result.stopReason).toBe('unassessed');
     expect(result.rounds).toBe(2);
     expect(result.documents.map((doc) => doc.path)).toEqual([
       '문서/졸업 요건',
@@ -194,6 +194,7 @@ describe('AgentLoopService', () => {
     expect(model).toBe('normal-model');
     expect(options.tools.map((tool) => tool.function.name)).toEqual([
       'search_documents',
+      'finish_research',
     ]);
     expect(options.tool_choice).toBe('auto');
   });
@@ -383,8 +384,8 @@ describe('AgentLoopService', () => {
 
     const result = await run();
 
-    expect(callLLM).toHaveBeenCalledTimes(2);
-    expect(result.stopReason).toBe('no-progress');
+    expect(callLLM).toHaveBeenCalledTimes(3);
+    expect(result.stopReason).toBe('max-rounds');
   });
 
   it('keeps rephrasing while nothing has been found yet', async () => {
@@ -448,7 +449,10 @@ describe('AgentLoopService', () => {
 
       await run();
 
-      expect(toolNames(callLLM)).toEqual(['search_documents']);
+      expect(toolNames(callLLM)).toEqual([
+        'search_documents',
+        'finish_research',
+      ]);
       const system = (callLLM.mock.calls[0][0] as LlmMessage[])[0].content;
       expect(system).not.toContain('search_notices');
     });
@@ -464,6 +468,7 @@ describe('AgentLoopService', () => {
         'search_documents',
         'search_notices',
         'get_notice',
+        'finish_research',
       ]);
       const system = (callLLM.mock.calls[0][0] as LlmMessage[])[0].content;
       expect(system).toContain('## Ziggle 공지');
@@ -546,4 +551,52 @@ describe('AgentLoopService', () => {
       ]);
     });
   });
+});
+
+it('finishes only with a structured assessment referencing collected evidence', async () => {
+  const { run } = setup([
+    response([toolCall('search', '규정')]),
+    response([
+      {
+        id: 'finish',
+        type: 'function',
+        function: {
+          name: 'finish_research',
+          arguments: JSON.stringify({
+            outcome: 'partial',
+            evidencePaths: ['문서/규정'],
+            unresolvedQuestions: ['마감일'],
+            reason: '다른 자료를 찾지 못함',
+          }),
+        },
+      },
+    ]),
+  ]);
+  const result = await run();
+  expect(result.stopReason).toBe('exhausted');
+  expect(result.assessment?.unresolvedQuestions).toEqual(['마감일']);
+});
+
+it('continues from a weak seed through a summaryless notice to its body', async () => {
+  const { run, ziggle } = setup(
+    [
+      response([noticeCall('find', ['장학금'])]),
+      response([readNoticeCall('read', 42)]),
+    ],
+    {
+      notices: [{ id: 42, title: '장학금', summary: null }],
+      noticeBodies: { 42: '신청 기간은 11월 5일까지' },
+    },
+  );
+  const result = await run({
+    seed: {
+      documents: [{ path: 'weak', content: '무관한 문서' }],
+      usedResources: [],
+    },
+    enabledTools: ['search_documents', 'search_notices', 'get_notice'],
+  });
+  expect(ziggle.getNoticeBody).toHaveBeenCalledWith(42);
+  expect(result.documents.some((d) => d.path === 'ziggle-notice/42')).toBe(
+    true,
+  );
 });

@@ -1,3 +1,6 @@
+import { AnswerOutputFilter } from '../safety/answer-output';
+import { maskPersonalInfo } from '../agent/tools/ziggle/notice-text';
+import { StringDecoder } from 'node:string_decoder';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Readable } from 'stream';
@@ -67,18 +70,20 @@ export class ChatStreamTransport {
   consumeAndForward(
     stream: Readable,
     reply: FastifyReply,
+    output?: AnswerOutputFilter,
   ): Promise<StreamConsumeResult> {
     return new Promise((resolve, reject) => {
       let accumulatedContent = '';
       let model = '';
       let usage: LlmUsage | null = null;
       let buffer = '';
+      const decoder = new StringDecoder('utf8');
       let settled = false;
 
       stream.on('data', (chunk: Buffer) => {
         if (settled) return;
 
-        buffer += chunk.toString();
+        buffer += decoder.write(chunk);
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
@@ -100,7 +105,8 @@ export class ChatStreamTransport {
             continue;
           }
 
-          const content = parsed.choices?.[0]?.delta?.content;
+          const delta = parsed.choices?.[0]?.delta?.content;
+          const content = delta ? (output ? output.push(delta) : delta) : '';
           if (content) {
             accumulatedContent += content;
             try {
@@ -155,7 +161,16 @@ export class ChatStreamTransport {
       stream.on('end', () => {
         if (settled) return;
         settled = true;
-        resolve({ accumulatedContent, model, usage });
+        try {
+          const content = output?.push('', true) ?? '';
+          if (content) {
+            accumulatedContent += content;
+            reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
+          }
+          resolve({ accumulatedContent, model, usage });
+        } catch (error) {
+          reject(error);
+        }
       });
     });
   }
@@ -170,9 +185,9 @@ export class ChatStreamTransport {
       type: 'step',
       id: step.id,
       kind: step.kind,
-      label: step.label,
+      label: maskPersonalInfo(step.label),
       status: step.status,
-      ...(step.thought ? { thought: step.thought } : {}),
+      ...(step.thought ? { thought: maskPersonalInfo(step.thought) } : {}),
       ...(step.resultCount != null ? { resultCount: step.resultCount } : {}),
     };
     try {

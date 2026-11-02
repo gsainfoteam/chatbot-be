@@ -1,4 +1,10 @@
 import {
+  AnswerOutputFilter,
+  citationInstructions,
+  safeSources,
+} from '../safety/answer-output';
+import { maskPersonalInfo } from '../agent/tools/ziggle/notice-text';
+import {
   Inject,
   Injectable,
   Logger,
@@ -219,7 +225,7 @@ export class ChatOrchestrationService {
           .map((doc) => formatRelevantDocument(doc.content))
           .join('\n'),
         usedResources: agentResult.usedResources,
-        sources: agentResult.sources,
+        sources: safeSources(agentResult.sources),
         steps: agentResult.steps,
       };
     } catch (error) {
@@ -290,7 +296,7 @@ export class ChatOrchestrationService {
       );
 
       const hasResources = chunkCount > 0;
-      if (!hasResources) {
+      if (!hasResources && !this.agentLoopService.isEnabled()) {
         this.logger.warn('No resources from document catalog');
         const stream = await this.streamNoRelevantMaterials(
           historyMessages,
@@ -387,7 +393,10 @@ export class ChatOrchestrationService {
           name: 'list_resources',
           // 시스템 프롬프트의 금지 규칙만으로는 자료에 없는 항목을 덧붙이는 경우가 많아,
           // 자료 바로 뒤에 규칙을 한 번 더 둔다.
-          content: fullContent + ANSWER_GROUNDING_REMINDER,
+          content:
+            maskPersonalInfo(fullContent) +
+            ANSWER_GROUNDING_REMINDER +
+            citationInstructions(relevantResult.sources),
         },
       ];
 
@@ -514,6 +523,7 @@ export class ChatOrchestrationService {
         onStep: (step) => this.chatStreamTransport.writeStep(reply, step),
       });
 
+      const answerOutput = new AnswerOutputFilter(sources);
       let streamResult: {
         accumulatedContent: string;
         model: string;
@@ -523,6 +533,7 @@ export class ChatOrchestrationService {
         streamResult = await this.chatStreamTransport.consumeAndForward(
           stream,
           reply,
+          answerOutput,
         );
       } catch {
         // 스트림 에러 시 transport가 이미 응답을 종료함
@@ -539,7 +550,7 @@ export class ChatOrchestrationService {
           referencedDocumentCount > 0 &&
           !isNoAnswerResponse(streamResult.accumulatedContent);
         const answerResources = answered ? resources : [];
-        const answerSources = answered ? selectDisplayedSources(sources) : [];
+        const answerSources = answered ? answerOutput.usedSources() : [];
 
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
@@ -597,14 +608,4 @@ export class ChatOrchestrationService {
       this.chatStreamTransport.writeError(reply, errorMessage);
     }
   }
-}
-
-/** 화면에 보여줄 외부 출처 수. 요약만 본 공지까지 모두 보여주면 관련 없는 링크가 섞인다. */
-const MAX_DISPLAYED_SOURCES = 3;
-
-/** 본문까지 읽은 출처를 먼저, 같은 조건이면 수집 순서대로 */
-function selectDisplayedSources(sources: ExternalSource[]): ExternalSource[] {
-  return [...sources]
-    .sort((a, b) => Number(b.opened) - Number(a.opened))
-    .slice(0, MAX_DISPLAYED_SOURCES);
 }

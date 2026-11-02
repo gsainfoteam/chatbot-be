@@ -2,17 +2,12 @@ import {
   PAGE_START,
   pageImageObjectPath,
 } from '../../pdf-processor/page-image-reference';
+import type { ResourceInfo } from './resource-content.service';
 
 export type PageImageCandidate = {
   objectPath: string;
   description: string;
   context: string;
-};
-
-export type PageImageResource = {
-  path: string;
-  formats: string[];
-  url: string;
 };
 
 const PAGE_IMAGE_REFERENCE = /!\[([^\]]*)\]\(IMAGE:page-(\d+)\)/g;
@@ -71,7 +66,7 @@ export function selectPageImageResources(
   answer: string,
   question: string,
   candidates: PageImageCandidate[],
-): PageImageResource[] {
+): ResourceInfo[] {
   const said = bigrams(`${answer} ${question}`);
   const best = new Map<
     string,

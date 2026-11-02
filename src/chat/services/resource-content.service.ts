@@ -18,7 +18,7 @@ import {
  * FE·SSE용 참조 리소스 정보
  */
 export interface ResourceInfo {
-  path: string; // 문서 제목 (PDF/PNG인 경우 format 포함)
+  path: string; // 문서 제목 (PDF/PNG인 경우 format 포함) 또는 쪽 이미지 설명
   formats: string[];
   url: string;
 }

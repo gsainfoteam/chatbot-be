@@ -41,6 +41,26 @@ describe('decodeServiceAccountCredentials', () => {
   });
 });
 
+describe('GcsStorageService page images', () => {
+  it('stores a JPEG under the document prefix that deletion covers', async () => {
+    const save = jest.fn(async (_data: Buffer, _options: unknown) => undefined);
+    const file = jest.fn((_path: string) => ({ save }));
+    const service = Object.create(
+      GcsStorageService.prototype,
+    ) as GcsStorageService;
+    Object.defineProperty(service, 'bucket', { value: { file } });
+    const jpeg = Buffer.from('jpeg');
+
+    await service.uploadPageImage('문서', 3, jpeg);
+
+    expect(file).toHaveBeenCalledWith('문서/images/page-3.jpg');
+    expect(save).toHaveBeenCalledWith(jpeg, {
+      contentType: 'image/jpeg',
+      resumable: false,
+    });
+  });
+});
+
 describe('GcsStorageService deletion', () => {
   it('attempts every deletion and propagates aggregated failures', async () => {
     const warn = jest.fn();

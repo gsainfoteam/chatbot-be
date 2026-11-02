@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Storage, Bucket, File } from '@google-cloud/storage';
+import { pageImageObjectPath } from './page-image-reference';
 import { Trace } from '@gsainfoteam/nest-observability';
 
 type GcsServiceAccountCredentials = {
@@ -88,6 +89,17 @@ export class GcsStorageService {
     const objectPath = `${resourceName}.pdf`;
     const [buf] = await this.bucket.file(objectPath).download();
     return buf;
+  }
+
+  /** Stored under the document prefix, so artifact deletion removes it too. */
+  async uploadPageImage(
+    resourceName: string,
+    pageNumber: number,
+    jpeg: Buffer,
+  ): Promise<void> {
+    await this.bucket
+      .file(pageImageObjectPath(resourceName, pageNumber))
+      .save(jpeg, { contentType: 'image/jpeg', resumable: false });
   }
 
   async uploadMarkdown(objectPath: string, content: string): Promise<void> {

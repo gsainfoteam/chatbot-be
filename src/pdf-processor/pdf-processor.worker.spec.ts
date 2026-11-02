@@ -39,6 +39,7 @@ function createWorker(options: {
     sortOrder: number;
   }>;
   processPdfError?: Error;
+  processPdfImpl?: (...args: unknown[]) => Promise<unknown>;
   uploadDocumentsError?: Error;
   heartbeatOwned?: boolean;
   markFailed?: boolean;
@@ -82,6 +83,9 @@ function createWorker(options: {
   };
   const gcs = {
     downloadPdf: jest.fn(() => Promise.resolve(Buffer.from('%PDF-test'))),
+    uploadPageImage: jest.fn<
+      (resourceName: string, page: number, jpeg: Buffer) => Promise<void>
+    >(() => Promise.resolve()),
     uploadDocuments: options.uploadDocumentsError
       ? jest.fn(() => Promise.reject(options.uploadDocumentsError!))
       : jest.fn(() => Promise.resolve()),
@@ -105,9 +109,11 @@ function createWorker(options: {
     chunks,
   };
   const pipeline = {
-    processPdf: options.processPdfError
-      ? jest.fn(() => Promise.reject(options.processPdfError!))
-      : jest.fn(() => Promise.resolve(pipelineResult)),
+    processPdf:
+      options.processPdfImpl ??
+      (options.processPdfError
+        ? jest.fn(() => Promise.reject(options.processPdfError!))
+        : jest.fn(() => Promise.resolve(pipelineResult))),
     processMarkdown: jest.fn<
       (markdown: string, resourceName: string) => Promise<unknown>
     >(() => Promise.resolve(pipelineResult)),
@@ -134,6 +140,48 @@ function createWorker(options: {
     embeddingService,
   };
 }
+
+describe('PdfProcessorWorker page images', () => {
+  type ImageSink = (page: number, jpeg: Buffer) => Promise<void>;
+  const callable = (worker: PdfProcessorWorker) =>
+    worker as unknown as { processDocument(doc: Document): Promise<void> };
+
+  it('stores page images the pipeline reports under the document', async () => {
+    const jpeg = Buffer.from('jpeg');
+    const { worker, gcs } = createWorker({
+      completeProcessing: true,
+      processPdfImpl: async (...args) => {
+        await (args[2] as ImageSink)(3, jpeg);
+        return {
+          documents: {},
+          metadata: { description: '', chunks: [] },
+          summary: '',
+          chunks: [
+            { path: 'test', description: '', content: '# t', sortOrder: 0 },
+          ],
+        };
+      },
+    });
+
+    await callable(worker).processDocument(processingDocument());
+
+    expect(gcs.uploadPageImage).toHaveBeenCalledWith('test', 3, jpeg);
+  });
+
+  it('cleans up stored images when the pipeline fails afterwards', async () => {
+    const { worker, gcs } = createWorker({
+      completeProcessing: true,
+      processPdfImpl: async (...args) => {
+        await (args[2] as ImageSink)(1, Buffer.from('jpeg'));
+        throw new Error('pipeline failed');
+      },
+    });
+
+    await callable(worker).processDocument(processingDocument());
+
+    expect(gcs.deleteProcessedArtifacts).toHaveBeenCalledWith('test');
+  });
+});
 
 describe('PdfProcessorWorker attempt ownership', () => {
   it('does not delete shared artifacts when completion loses ownership', async () => {

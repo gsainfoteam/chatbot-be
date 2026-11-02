@@ -13,6 +13,7 @@ import { GcsStorageService } from './gcs-storage.service';
 import { parseFiniteNumber } from './parse-finite-number';
 import {
   PdfPipelineService,
+  type PageImageSink,
   type PipelineChunk,
   type PipelineResult,
 } from './pdf-pipeline.service';
@@ -152,7 +153,10 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     const heartbeat = this.startHeartbeat(doc.id, processingToken);
     let generatedArtifactsMayExist = false;
     try {
-      const result = await this.runPipeline(doc);
+      const result = await this.runPipeline(doc, async (pageNumber, jpeg) => {
+        generatedArtifactsMayExist = true;
+        await this.gcs.uploadPageImage(resourceName, pageNumber, jpeg);
+      });
 
       if (!result.chunks.length) {
         throw new Error(
@@ -222,7 +226,10 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async runPipeline(doc: Document): Promise<PipelineResult> {
+  private async runPipeline(
+    doc: Document,
+    onPageImage: PageImageSink,
+  ): Promise<PipelineResult> {
     if (doc.sourceType === 'text') {
       if (!doc.sourceText?.trim()) {
         throw new Error(`Text document has no source text: id=${doc.id}`);
@@ -234,7 +241,11 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     }
 
     const pdfBytes = await this.gcs.downloadPdf(doc.resourceName);
-    return this.pipeline.processPdf(pdfBytes, `${doc.resourceName}.pdf`);
+    return this.pipeline.processPdf(
+      pdfBytes,
+      `${doc.resourceName}.pdf`,
+      onPageImage,
+    );
   }
 
   /**

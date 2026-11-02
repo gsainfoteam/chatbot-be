@@ -4,8 +4,17 @@ import { PDF_PROCESSOR_PROMPT } from '../chat/prompts/pdf-processor';
 import { PDF_CHUNKING_PROMPT } from '../chat/prompts/pdf-chunking-prompt';
 import { LLM_CLIENT, type LlmClient } from '../chat/llm/llm-client.interface';
 import type { LlmRequestMessage } from '../chat/types/llm.types';
+import {
+  appendPageImageReference,
+  hasNoTextLayer,
+  hasPageImageReference,
+  normalizeImageReferences,
+  pageImageReferenceOnly,
+  readingAgreement,
+  readingsDisagree,
+} from './page-image-reference';
 import { isSparseText } from './pdf-page-image';
-import { PdfTextService } from './pdf-text.service';
+import { type PdfPageContent, PdfTextService } from './pdf-text.service';
 import {
   splitMarkdownIntoSections,
   type MarkdownSection,
@@ -33,6 +42,8 @@ export type PipelineResult = {
   chunks: PipelineChunk[];
 };
 
+export type PageImageSink = (pageNumber: number, jpeg: Buffer) => Promise<void>;
+
 type ChunkMetadata = {
   index: number;
   path: string;
@@ -49,8 +60,6 @@ const SNIPPET_CHARS = 1_500;
 const OVERVIEW_CHARS = 2_500;
 /** Fail the whole job when Pass 1 LLM fallbacks exceed this fraction of pages. */
 const DEFAULT_PASS1_MAX_FAILURE_RATIO = 0.1;
-/** Images are not stored, so a reference would point nowhere; keep its description. */
-const MARKDOWN_IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
 
 @Trace()
 @Injectable()
@@ -89,6 +98,7 @@ export class PdfPipelineService {
   async processPdf(
     pdfBytes: Buffer,
     filename: string,
+    onPageImage?: PageImageSink,
   ): Promise<PipelineResult> {
     const pageMarkdowns: string[] = [];
     const failedPages: number[] = [];
@@ -115,12 +125,15 @@ export class PdfPipelineService {
         previousContext,
       });
       if (usedFallback) failedPages.push(page.pageNumber);
-      pageMarkdowns.push(markdown);
-      if (markdown.trim()) {
+      pageMarkdowns.push(
+        await this.storeReferencedImage(markdown, page, onPageImage),
+      );
+      const pageContext = normalizeImageReferences(markdown, null);
+      if (pageContext.trim()) {
         previousContext =
-          markdown.length > this.contextLength
-            ? markdown.slice(-this.contextLength)
-            : markdown;
+          pageContext.length > this.contextLength
+            ? pageContext.slice(-this.contextLength)
+            : pageContext;
       }
     });
 
@@ -148,6 +161,30 @@ export class PdfPipelineService {
       `Pass 2 only: Labeling text knowledge ${resourceName} (${markdown.length} chars)`,
     );
     return this.chunkMarkdownWithMetadata(markdown, `${resourceName}.pdf`);
+  }
+
+  /** Stores the image right away so a long document does not pile them up in memory. */
+  private async storeReferencedImage(
+    markdown: string,
+    page: PdfPageContent,
+    onPageImage?: PageImageSink,
+  ): Promise<string> {
+    if (!page.image || !hasPageImageReference(markdown, page.pageNumber)) {
+      return markdown;
+    }
+
+    try {
+      if (onPageImage) {
+        const base64 = page.image.slice(page.image.indexOf(',') + 1);
+        await onPageImage(page.pageNumber, Buffer.from(base64, 'base64'));
+        return markdown;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Failed to store image of page ${page.pageNumber}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    return normalizeImageReferences(markdown, null);
   }
 
   private assertPass1FailureWithinLimit(
@@ -221,19 +258,48 @@ export class PdfPipelineService {
 
     try {
       const model = this.llm.getModel('normal');
-      const response = await this.llm.callLLM(
-        [{ role: 'user', content }],
-        model,
-        {
-          temperature: 0.2,
-          max_tokens: 8000,
-          timeoutMs: this.llmTimeoutMs,
-        },
+      const readPage = async () => {
+        const response = await this.llm.callLLM(
+          [{ role: 'user', content }],
+          model,
+          {
+            temperature: 0.2,
+            max_tokens: 8000,
+            timeoutMs: this.llmTimeoutMs,
+          },
+        );
+        return response.choices?.[0]?.message?.content ?? '';
+      };
+
+      let markdown = await readPage();
+      // Nothing but the LLM's reading backs a page with hardly any text, and text
+      // too small to read comes out different each time. The image can still be
+      // read by a person, so it stays and the text goes.
+      const secondReading =
+        pageImage && isSparseText(pageText) && markdown.trim()
+          ? await readPage()
+          : markdown;
+      const unreadable = readingsDisagree(markdown, secondReading);
+      if (unreadable) {
+        this.logger.warn(
+          `Readings of page ${currentPage} disagree (${readingAgreement(markdown, secondReading).toFixed(2)}); keeping only its image`,
+        );
+        markdown = pageImageReferenceOnly(markdown, currentPage);
+      }
+
+      markdown = normalizeImageReferences(
+        markdown,
+        pageImage ? currentPage : null,
       );
-      const markdown = (response.choices?.[0]?.message?.content ?? '').replace(
-        MARKDOWN_IMAGE,
-        '$1',
-      );
+      // Everything on a page without a text layer came from its image.
+      if (
+        pageImage &&
+        (unreadable || (hasNoTextLayer(pageText) && markdown.trim())) &&
+        !hasPageImageReference(markdown, currentPage)
+      ) {
+        markdown = appendPageImageReference(markdown, filename, currentPage);
+      }
+
       // The prompt tells the LLM to drop pages without information.
       if (!markdown.trim() && !isSparseText(pageText)) {
         this.logger.warn(

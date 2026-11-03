@@ -166,6 +166,9 @@ export class PdfTextService {
         } finally {
           page.cleanup();
         }
+        // Bun frees decoded images only at its next collection, so a scan would
+        // otherwise stack several pages of them: 445MB instead of 356MB for five.
+        (globalThis as { Bun?: { gc(force: boolean): void } }).Bun?.gc(true);
         await onPage(content, pdf.numPages);
       }
     } finally {

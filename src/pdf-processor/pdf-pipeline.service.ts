@@ -56,7 +56,7 @@ type MetadataBatchResponse = {
 const METADATA_BATCH_SIZE = 15;
 const SNIPPET_CHARS = 1_500;
 const OVERVIEW_CHARS = 2_500;
-/** Fail the whole job when Pass 1 LLM fallbacks exceed this fraction of pages. */
+/** Fail the whole job when more than this fraction of pages fail in Pass 1. */
 const DEFAULT_PASS1_MAX_FAILURE_RATIO = 0.1;
 
 @Trace()
@@ -194,7 +194,7 @@ export class PdfPipelineService {
 
     const ratio = failedPages.length / totalPages;
     this.logger.warn(
-      `Pass 1 LLM fallbacks: ${failedPages.length}/${totalPages} pages (${(ratio * 100).toFixed(1)}%) pages=[${failedPages.join(',')}]`,
+      `Pass 1 failed pages: ${failedPages.length}/${totalPages} pages (${(ratio * 100).toFixed(1)}%) pages=[${failedPages.join(',')}]`,
     );
 
     if (
@@ -202,7 +202,7 @@ export class PdfPipelineService {
       ratio > this.pass1MaxFailureRatio
     ) {
       throw new Error(
-        `Pass 1 LLM failures exceeded threshold: ${failedPages.length}/${totalPages} pages failed ` +
+        `Pass 1 page failures exceeded threshold: ${failedPages.length}/${totalPages} pages failed ` +
           `(max ratio ${this.pass1MaxFailureRatio}). pages=[${failedPages.join(',')}]`,
       );
     }

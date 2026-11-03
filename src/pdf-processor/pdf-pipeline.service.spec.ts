@@ -223,7 +223,7 @@ describe('PdfPipelineService metadata pass', () => {
     // 2/3 ≈ 66% > default 10%
     await expect(
       pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
-    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold/);
+    ).rejects.toThrow(/Pass 1 page failures exceeded threshold/);
   });
 
   it('continues when a small Pass 1 fallback stays within the threshold', async () => {
@@ -281,7 +281,7 @@ describe('PdfPipelineService metadata pass', () => {
 
     await expect(
       pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
-    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold/);
+    ).rejects.toThrow(/Pass 1 page failures exceeded threshold/);
   });
 });
 
@@ -391,7 +391,7 @@ describe('PdfPipelineService page images', () => {
 
     await expect(
       pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
-    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold.*pages=\[1\]/);
+    ).rejects.toThrow(/Pass 1 page failures exceeded threshold.*pages=\[1\]/);
     expect(pass1Contents).toHaveLength(1);
   });
 
@@ -404,7 +404,7 @@ describe('PdfPipelineService page images', () => {
 
     await expect(
       pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
-    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold.*pages=\[1\]/);
+    ).rejects.toThrow(/Pass 1 page failures exceeded threshold.*pages=\[1\]/);
     expect(pass1Contents[0]).toEqual(expect.stringContaining('남은 본문'));
   });
 
@@ -714,7 +714,7 @@ describe('PdfPipelineService page images', () => {
 
     await expect(
       pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
-    ).rejects.toThrow(/Pass 1 LLM failures exceeded threshold.*pages=\[1\]/);
+    ).rejects.toThrow(/Pass 1 page failures exceeded threshold.*pages=\[1\]/);
   });
 
   it('fails a document with no pages', async () => {

@@ -78,6 +78,9 @@ function createWorker(options: {
     heartbeatProcessing: jest.fn<
       (id: string, processingToken: string) => Promise<boolean>
     >(() => Promise.resolve(options.heartbeatOwned ?? true)),
+    failRepeatedlyStuck: jest.fn<
+      () => Promise<{ id: string; resourceName: string }[]>
+    >(() => Promise.resolve([])),
     requeueStaleProcessing: jest.fn(() => Promise.resolve(0)),
     claimQueued: jest.fn(() => Promise.resolve([])),
   };
@@ -205,6 +208,32 @@ describe('PdfProcessorWorker page images', () => {
     await callable(worker).processDocument(processingDocument());
 
     expect(gcs.deleteProcessedArtifacts).toHaveBeenCalledWith('test');
+  });
+});
+
+describe('PdfProcessorWorker stale documents', () => {
+  const callable = (worker: PdfProcessorWorker) =>
+    worker as unknown as { requeueStale(): Promise<void> };
+
+  it('cleans up after a document stuck twice and requeues the rest', async () => {
+    const { worker, repo, gcs } = createWorker({ completeProcessing: true });
+    repo.failRepeatedlyStuck.mockResolvedValue([
+      { id: 'stuck-doc', resourceName: 'stuck' },
+    ]);
+
+    await callable(worker).requeueStale();
+
+    expect(gcs.deleteProcessedArtifacts).toHaveBeenCalledWith('stuck');
+    expect(repo.requeueStaleProcessing).toHaveBeenCalled();
+  });
+
+  it('touches no artifacts when nothing is stuck twice', async () => {
+    const { worker, repo, gcs } = createWorker({ completeProcessing: true });
+
+    await callable(worker).requeueStale();
+
+    expect(gcs.deleteProcessedArtifacts).not.toHaveBeenCalled();
+    expect(repo.requeueStaleProcessing).toHaveBeenCalled();
   });
 });
 

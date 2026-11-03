@@ -94,9 +94,20 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
   private async requeueStale(): Promise<void> {
     try {
       const staleBefore = new Date(Date.now() - this.staleProcessingMs);
+      const activeIds = [...this.activeDocumentIds];
+      const stuck = await this.documentsRepo.failRepeatedlyStuck(
+        staleBefore,
+        activeIds,
+      );
+      for (const { id, resourceName } of stuck) {
+        this.logger.error(
+          `Failed document stuck twice: id=${id} name=${resourceName}`,
+        );
+        await this.cleanupGeneratedArtifacts(resourceName);
+      }
       const count = await this.documentsRepo.requeueStaleProcessing(
         staleBefore,
-        [...this.activeDocumentIds],
+        activeIds,
       );
       this.lastStaleCheckAt = Date.now();
       if (count > 0) {

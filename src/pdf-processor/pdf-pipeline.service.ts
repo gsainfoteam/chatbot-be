@@ -252,6 +252,10 @@ export class PdfPipelineService {
           { type: 'image_url', image_url: { url: pageImage } },
         ]
       : userText;
+    const fallback = {
+      markdown: pageText.trim() ? `## Page ${currentPage}\n\n${pageText}` : '',
+      usedFallback: true,
+    };
 
     try {
       const model = this.llm.getModel('normal');
@@ -264,8 +268,9 @@ export class PdfPipelineService {
           timeoutMs: this.llmTimeoutMs,
         },
       );
+      const choice = response.choices?.[0];
       let markdown = normalizeImageReferences(
-        response.choices?.[0]?.message?.content ?? '',
+        choice?.message?.content ?? '',
         pageImage ? currentPage : null,
       );
       // Everything on a page without a text layer came from its image.
@@ -278,27 +283,23 @@ export class PdfPipelineService {
         markdown = appendPageImageReference(markdown, filename, currentPage);
       }
 
-      // The prompt tells the LLM to drop pages without information.
-      if (!markdown.trim() && !isSparseText(pageText)) {
+      // The prompt tells the LLM to drop pages without information, which an
+      // answer cut off by the token limit or a filter has not done.
+      if (
+        !markdown.trim() &&
+        (choice?.finish_reason !== 'stop' || !isSparseText(pageText))
+      ) {
         this.logger.warn(
-          `Empty LLM markdown for page ${currentPage}; using raw extracted text`,
+          `Empty LLM markdown for page ${currentPage} (finish_reason=${choice?.finish_reason}); using raw extracted text`,
         );
-        return {
-          markdown: `## Page ${currentPage}\n\n${pageText}`,
-          usedFallback: true,
-        };
+        return fallback;
       }
       return { markdown, usedFallback: false };
     } catch (error) {
       this.logger.error(
         `Error calling LLM for page ${currentPage}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return {
-        markdown: pageText.trim()
-          ? `## Page ${currentPage}\n\n${pageText}`
-          : '',
-        usedFallback: true,
-      };
+      return fallback;
     }
   }
 

@@ -290,7 +290,7 @@ describe('PdfPipelineService page images', () => {
   const SECTION = `## 제목\n\n${'본문 '.repeat(700)}`;
 
   /** Pass 1 answers in order; Pass 2 answers are generated from the request. */
-  function fakeLlm(pass1Outputs: Array<string | Error>) {
+  function fakeLlm(pass1Outputs: Array<string | Error | LlmResponse>) {
     const pass1Contents: LlmRequestMessage['content'][] = [];
     const callLLM = jest.fn<(...args: unknown[]) => Promise<LlmResponse>>(
       async (...args) => {
@@ -314,7 +314,7 @@ describe('PdfPipelineService page images', () => {
         const output = pass1Outputs[pass1Contents.length] ?? SECTION;
         pass1Contents.push(content);
         if (output instanceof Error) throw output;
-        return llmResponse(output);
+        return typeof output === 'string' ? llmResponse(output) : output;
       },
     );
     return { callLLM, pass1Contents };
@@ -703,6 +703,18 @@ describe('PdfPipelineService page images', () => {
     expect(result.chunks.some((c) => c.content.includes('감사합니다'))).toBe(
       false,
     );
+  });
+
+  it('counts an image page whose answer was cut off as failed', async () => {
+    const { callLLM } = fakeLlm([llmResponse('', 'length'), SECTION]);
+    const pipeline = createPipeline({
+      pages: [{ text: '', image: IMAGE }, '본문'],
+      callLLM,
+    });
+
+    await expect(
+      pipeline.processPdf(Buffer.from('%PDF'), 'doc.pdf'),
+    ).rejects.toThrow(/Pass 1 page failures exceeded threshold.*pages=\[1\]/);
   });
 
   it('counts a text-rich page the LLM returns empty as failed', async () => {

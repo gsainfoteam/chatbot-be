@@ -84,6 +84,7 @@ function scanOperators(list: PdfOperatorList, ops: PdfOps) {
   const scan = {
     imageArea: 0,
     images: [] as Point[][],
+    masks: [] as Point[][],
     hasImage: false,
     paintedPaths: 0,
     hasShading: false,
@@ -121,15 +122,18 @@ function scanOperators(list: PdfOperatorList, ops: PdfOps) {
         break;
       case ops.paintImageXObject:
       case ops.paintInlineImageXObject:
-      case ops.paintImageMaskXObject:
+      case ops.paintImageMaskXObject: {
+        const corners = UNIT_SQUARE.map((corner) =>
+          applyMatrix(matrix, corner),
+        );
         scan.hasImage = true;
         scan.imageArea += Math.abs(
           matrix[0] * matrix[3] - matrix[1] * matrix[2],
         );
-        scan.images.push(
-          UNIT_SQUARE.map((corner) => applyMatrix(matrix, corner)),
-        );
+        scan.images.push(corners);
+        if (fn === ops.paintImageMaskXObject) scan.masks.push(corners);
         break;
+      }
       case ops.constructPath:
         if (args[0] !== ops.endPath) scan.paintedPaths += 1;
         break;
@@ -184,8 +188,11 @@ export function needsPageImage(
  * render() holds every image of a page at once, so their costs add up: four 12MP
  * photos got the 512MB pod killed. A page gets as many pixels as one image may
  * have, and one with more is left to its text.
+ * A mask is painted through a canvas as large as it is drawn, page or not, so
+ * an 8x8 mask scaled far past the page got the pod killed as well.
  */
 export function exceedsImageBudget(
+  page: PdfPage,
   operatorList: PdfOperatorList,
   ops: PdfOps,
 ): boolean {
@@ -197,7 +204,15 @@ export function exceedsImageBudget(
     }
   });
   const total = [...pixels.values()].reduce((sum, count) => sum + count, 0);
-  return total > MAX_IMAGE_PIXELS;
+  if (total > MAX_IMAGE_PIXELS) return true;
+
+  const { transform } = renderViewport(page);
+  return scanOperators(operatorList, ops).masks.some((corners) => {
+    const [left, top, right, bottom] = boundsOf(
+      corners.map((point) => applyMatrix(transform, point)),
+    );
+    return (right - left) * (bottom - top) > MAX_IMAGE_PIXELS;
+  });
 }
 
 /**

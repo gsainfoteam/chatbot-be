@@ -75,7 +75,7 @@ export class PdfTextService {
       if (!needsPageImage(text, operatorList, ops, (x2 - x1) * (y2 - y1))) {
         return { image: null, storedImage: null, imageFailed: false };
       }
-      if (exceedsImageBudget(operatorList, ops)) {
+      if (exceedsImageBudget(page, operatorList, ops)) {
         throw new Error('the images on the page are too large to render');
       }
       if (await allImagesFailedToDecode(page, operatorList, ops)) {

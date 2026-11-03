@@ -41,6 +41,16 @@ function operatorList(...ops: Op[]) {
   };
 }
 
+function fakePage(width = 612, height = 792) {
+  return {
+    getViewport: ({ scale }: { scale: number }) => ({
+      width: width * scale,
+      height: height * scale,
+      transform: [scale, 0, 0, -scale, 0, height * scale],
+    }),
+  };
+}
+
 function image(width: number, height: number): Op[] {
   return [
     [OPS.save],
@@ -180,7 +190,17 @@ describe('needsPageImage', () => {
 
 describe('exceedsImageBudget', () => {
   const exceeds = (...ops: Op[]) =>
-    exceedsImageBudget(operatorList(...ops) as never, OPS as never);
+    exceedsImageBudget(
+      fakePage() as never,
+      operatorList(...ops) as never,
+      OPS as never,
+    );
+  const maskDrawn = (size: number): Op[] => [
+    [OPS.save],
+    [OPS.transform, [size, 0, 0, size, 0, 0]],
+    [OPS.paintImageMaskXObject, [{ width: 8, height: 8 }]],
+    [OPS.restore],
+  ];
   const photo = (id: string, megapixels: number): Op => [
     OPS.paintImageXObject,
     [id, megapixels * 1_000_000, 1],
@@ -202,6 +222,15 @@ describe('exceedsImageBudget', () => {
         [OPS.paintImageMaskXObject, [{ width: 9000, height: 9000 }]],
       ),
     ).toBe(false);
+  });
+
+  it('allows a mask drawn over the whole page', () => {
+    expect(exceeds(...maskDrawn(792))).toBe(false);
+  });
+
+  // The canvas is twice the page, so 2,300pt is drawn on 4,600px square: 21MP.
+  it('stops a mask drawn far past the page', () => {
+    expect(exceeds(...maskDrawn(2_300))).toBe(true);
   });
 });
 
@@ -277,21 +306,11 @@ describe('allImagesFailedToDecode', () => {
 });
 
 describe('pageFigureRegion', () => {
-  function page(width = 612, height = 792) {
-    return {
-      getViewport: ({ scale }: { scale: number }) => ({
-        width: width * scale,
-        height: height * scale,
-        transform: [scale, 0, 0, -scale, 0, height * scale],
-      }),
-    };
-  }
-
   function region(
     ops: Op[],
     items: unknown[] = [],
     text = LONG_TEXT,
-    target = page(),
+    target = fakePage(),
   ) {
     return pageFigureRegion(
       target as never,
@@ -366,7 +385,7 @@ describe('pageFigureRegion', () => {
   });
 
   it('keeps everything on a wide page', () => {
-    expect(region(FIGURE, [], LONG_TEXT, page(792, 612))).toBeNull();
+    expect(region(FIGURE, [], LONG_TEXT, fakePage(792, 612))).toBeNull();
   });
 
   it('takes in a line of text the crop would cut', () => {

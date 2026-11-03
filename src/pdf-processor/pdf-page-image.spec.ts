@@ -187,8 +187,8 @@ describe('exceedsImageBudget', () => {
   ];
 
   it('adds up the images of a page', () => {
-    expect(exceeds(photo('a', 12), photo('b', 12), photo('c', 6))).toBe(false);
-    expect(exceeds(photo('a', 12), photo('b', 12), photo('c', 7))).toBe(true);
+    expect(exceeds(photo('a', 12), photo('b', 8))).toBe(false);
+    expect(exceeds(photo('a', 12), photo('b', 9))).toBe(true);
   });
 
   it('counts an image painted repeatedly once', () => {

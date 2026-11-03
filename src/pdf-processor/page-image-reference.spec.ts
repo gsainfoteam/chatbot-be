@@ -53,6 +53,13 @@ describe('normalizeImageReferences', () => {
       '절차도',
     );
   });
+
+  it('stays fast on text full of unclosed references', () => {
+    const started = Date.now();
+    normalizeImageReferences('![]( '.repeat(3_000), 3);
+
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
 });
 
 describe('hasPageImageReference', () => {

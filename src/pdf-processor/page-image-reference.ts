@@ -1,6 +1,8 @@
 const NO_TEXT_LAYER_CHARS = 10;
 
-const IMAGE_REFERENCE = /!\[(.*?)\]\(([^)]*)\)/gs;
+// Bounded because page text full of unclosed `![](` made the unbounded form
+// backtrack for 85s on 20KB, with the event loop stalled.
+const IMAGE_REFERENCE = /!\[(.{0,300}?)\]\(([^()]{0,200})\)/gs;
 
 /** Where a page with a stored image starts, so only that page speaks for the image. */
 export const PAGE_START = '<!-- page -->';

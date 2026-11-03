@@ -42,20 +42,20 @@ describe('decodeServiceAccountCredentials', () => {
 });
 
 describe('GcsStorageService page images', () => {
-  it('stores a JPEG under the document prefix', async () => {
+  it('stores a PNG under the document prefix', async () => {
     const save = jest.fn(async (_data: Buffer, _options: unknown) => undefined);
     const file = jest.fn((_path: string) => ({ save }));
     const service = Object.create(
       GcsStorageService.prototype,
     ) as GcsStorageService;
     Object.defineProperty(service, 'bucket', { value: { file } });
-    const jpeg = Buffer.from('jpeg');
+    const png = Buffer.from('png');
 
-    await service.uploadPageImage('문서', 3, jpeg);
+    await service.uploadPageImage('문서', 3, png);
 
-    expect(file).toHaveBeenCalledWith('문서/images/page-3.jpg');
-    expect(save).toHaveBeenCalledWith(jpeg, {
-      contentType: 'image/jpeg',
+    expect(file).toHaveBeenCalledWith('문서/images/page-3.png');
+    expect(save).toHaveBeenCalledWith(png, {
+      contentType: 'image/png',
       resumable: false,
     });
   });

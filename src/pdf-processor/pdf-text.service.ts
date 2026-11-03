@@ -27,7 +27,7 @@ export type PdfPageContent = {
   text: string;
   /** JPEG data URL, set only when the text layer alone would lose content. */
   image: string | null;
-  /** JPEG of the same page for readers, cropped to what is worth showing. */
+  /** PNG of the same page for readers, cropped to what is worth showing. */
   storedImage: Buffer | null;
   /** The page needed an image, but rendering or decoding it failed. */
   imageFailed: boolean;

@@ -97,7 +97,7 @@ export function selectPageImageResources(
     .slice(0, MAX_IMAGES)
     .map(({ candidate }) => ({
       path: candidate.description,
-      formats: ['jpg'],
+      formats: ['png'],
       url: candidate.objectPath.split('/').map(encodeURIComponent).join('/'),
     }));
 }

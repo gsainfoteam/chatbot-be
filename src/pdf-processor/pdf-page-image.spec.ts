@@ -515,8 +515,8 @@ describe('renderPageImage', () => {
       } as never;
     }
 
-    async function pixels(jpeg: Buffer) {
-      const decoded = await loadImage(jpeg);
+    async function pixels(image: Buffer) {
+      const decoded = await loadImage(image);
       const canvas = createCanvas(decoded.width, decoded.height);
       const context = canvas.getContext('2d');
       context.drawImage(decoded, 0, 0);
@@ -540,6 +540,7 @@ describe('renderPageImage', () => {
       expect([whole.width, whole.height]).toEqual([1224, 1584]);
 
       // 400x300 of ink, 4px of padding around it, then 4% of 408 as a margin.
+      expect(storedImage.subarray(1, 4).toString()).toBe('PNG');
       const stored = await pixels(storedImage);
       expect([stored.width, stored.height]).toEqual([440, 340]);
       expect(stored.red(2, 2)).toBeGreaterThan(240);
@@ -580,16 +581,16 @@ describe('renderPageImage', () => {
       expect(stored.red(5, stored.height / 2)).toBeGreaterThan(240);
     });
 
-    it('stores the rendered page as it is when there is nothing to crop', async () => {
-      const { image, storedImage } = await renderPageImage(
+    it('stores the whole rendered page as a PNG when there is nothing to crop', async () => {
+      const { storedImage } = await renderPageImage(
         paintedPage([0, 0, 1224, 1584]),
         factory,
         null,
       );
 
-      expect(storedImage.toString('base64')).toBe(
-        image.slice(image.indexOf(',') + 1),
-      );
+      expect(storedImage.subarray(1, 4).toString()).toBe('PNG');
+      const stored = await pixels(storedImage);
+      expect([stored.width, stored.height]).toEqual([1224, 1584]);
     });
 
     it('releases both canvases, even when the crop cannot be encoded', async () => {

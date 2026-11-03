@@ -40,7 +40,7 @@ export type PipelineResult = {
   chunks: PipelineChunk[];
 };
 
-export type PageImageSink = (pageNumber: number, jpeg: Buffer) => Promise<void>;
+export type PageImageSink = (pageNumber: number, png: Buffer) => Promise<void>;
 
 type ChunkMetadata = {
   index: number;

@@ -139,7 +139,7 @@ describe('ResourceContentService', () => {
     expect(result.content).toContain('졸업 표');
     expect(result.content).not.toContain('IMAGE:page-5');
     expect(result.pageImages.map((image) => image.objectPath)).toEqual([
-      '학사편람/images/page-5.jpg',
+      '학사편람/images/page-5.png',
     ]);
   });
 

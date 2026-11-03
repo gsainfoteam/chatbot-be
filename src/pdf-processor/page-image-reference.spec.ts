@@ -9,7 +9,7 @@ import {
 
 describe('pageImageObjectPath', () => {
   it('places the image under the document prefix', () => {
-    expect(pageImageObjectPath('문서', 3)).toBe('문서/images/page-3.jpg');
+    expect(pageImageObjectPath('문서', 3)).toBe('문서/images/page-3.png');
   });
 });
 

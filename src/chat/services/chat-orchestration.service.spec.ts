@@ -241,7 +241,7 @@ describe('ChatOrchestrationService', () => {
   describe('page images in the answer', () => {
     const CHUNK =
       '졸업하려면 총 130학점을 이수해야 합니다.\n\n![졸업 요건 표](IMAGE:page-5)';
-    const IMAGE_URL = `${encodeURIComponent('학사편람')}/images/page-5.jpg`;
+    const IMAGE_URL = `${encodeURIComponent('학사편람')}/images/page-5.png`;
 
     it('sends the image of the page the answer draws on', async () => {
       const { run, writtenSse, chatService } = setup(createCatalog(), CHUNK);
@@ -249,7 +249,7 @@ describe('ChatOrchestrationService', () => {
       await run('졸업 요건 알려줘', undefined, '총 130학점을 이수해야 합니다.');
 
       expect(writtenSse()).toContain(IMAGE_URL);
-      expect(writtenSse()).toContain('"formats":["jpg"]');
+      expect(writtenSse()).toContain('"formats":["png"]');
       expect(chatService.createMessage).toHaveBeenCalledWith(
         'session-id',
         expect.objectContaining({

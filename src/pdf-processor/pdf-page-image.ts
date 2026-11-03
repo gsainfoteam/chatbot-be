@@ -16,6 +16,7 @@ type PageCanvas = {
     width: number;
     height: number;
     encode(format: 'jpeg', quality: number): Promise<Buffer>;
+    encode(format: 'png'): Promise<Buffer>;
   };
   context: {
     fillStyle: string;
@@ -327,7 +328,7 @@ async function encodeCrop(
       width,
       height,
     );
-    return await target.canvas.encode('jpeg', JPEG_QUALITY);
+    return await target.canvas.encode('png');
   } finally {
     canvasFactory.destroy(target);
   }
@@ -335,7 +336,8 @@ async function encodeCrop(
 
 /**
  * Render a page: the LLM reads all of it as a JPEG data URL, while readers get
- * only `storedImage`, cropped to what they came to see.
+ * only `storedImage`, cropped to what they came to see. That one is a PNG, the
+ * only image format the widget shows inline.
  */
 export async function renderPageImage(
   page: PdfPage,
@@ -365,7 +367,9 @@ export async function renderPageImage(
     );
     return {
       image: `data:image/jpeg;base64,${jpeg.toString('base64')}`,
-      storedImage: crop ? await encodeCrop(entry, canvasFactory, crop) : jpeg,
+      storedImage: crop
+        ? await encodeCrop(entry, canvasFactory, crop)
+        : await entry.canvas.encode('png'),
     };
   } finally {
     canvasFactory.destroy(entry);

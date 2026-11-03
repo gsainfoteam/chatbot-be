@@ -87,7 +87,7 @@ function createWorker(options: {
   const gcs = {
     downloadPdf: jest.fn(() => Promise.resolve(Buffer.from('%PDF-test'))),
     uploadPageImage: jest.fn<
-      (resourceName: string, page: number, jpeg: Buffer) => Promise<void>
+      (resourceName: string, page: number, png: Buffer) => Promise<void>
     >(() => Promise.resolve()),
     uploadDocuments: options.uploadDocumentsError
       ? jest.fn(() => Promise.reject(options.uploadDocumentsError!))
@@ -145,16 +145,16 @@ function createWorker(options: {
 }
 
 describe('PdfProcessorWorker page images', () => {
-  type ImageSink = (page: number, jpeg: Buffer) => Promise<void>;
+  type ImageSink = (page: number, png: Buffer) => Promise<void>;
   const callable = (worker: PdfProcessorWorker) =>
     worker as unknown as { processDocument(doc: Document): Promise<void> };
 
   it('stores page images the pipeline reports under the document', async () => {
-    const jpeg = Buffer.from('jpeg');
+    const png = Buffer.from('png');
     const { worker, gcs } = createWorker({
       completeProcessing: true,
       processPdfImpl: async (...args) => {
-        await (args[2] as ImageSink)(3, jpeg);
+        await (args[2] as ImageSink)(3, png);
         return {
           documents: {},
           metadata: { description: '', chunks: [] },
@@ -168,7 +168,7 @@ describe('PdfProcessorWorker page images', () => {
 
     await callable(worker).processDocument(processingDocument());
 
-    expect(gcs.uploadPageImage).toHaveBeenCalledWith('test', 3, jpeg);
+    expect(gcs.uploadPageImage).toHaveBeenCalledWith('test', 3, png);
   });
 
   it('stores nothing once the document is no longer ours', async () => {
@@ -177,7 +177,7 @@ describe('PdfProcessorWorker page images', () => {
       completeProcessing: true,
       heartbeatOwned: false,
       processPdfImpl: async (...args) => {
-        storing = (args[2] as ImageSink)(3, Buffer.from('jpeg'));
+        storing = (args[2] as ImageSink)(3, Buffer.from('png'));
         await storing.catch(() => undefined);
         return {
           documents: {},
@@ -200,7 +200,7 @@ describe('PdfProcessorWorker page images', () => {
     const { worker, gcs } = createWorker({
       completeProcessing: true,
       processPdfImpl: async (...args) => {
-        await (args[2] as ImageSink)(1, Buffer.from('jpeg'));
+        await (args[2] as ImageSink)(1, Buffer.from('png'));
         throw new Error('pipeline failed');
       },
     });

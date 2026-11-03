@@ -95,11 +95,11 @@ export class GcsStorageService {
   async uploadPageImage(
     resourceName: string,
     pageNumber: number,
-    jpeg: Buffer,
+    png: Buffer,
   ): Promise<void> {
     await this.bucket
       .file(pageImageObjectPath(resourceName, pageNumber))
-      .save(jpeg, { contentType: 'image/jpeg', resumable: false });
+      .save(png, { contentType: 'image/png', resumable: false });
   }
 
   async uploadMarkdown(objectPath: string, content: string): Promise<void> {

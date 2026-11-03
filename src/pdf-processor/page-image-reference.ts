@@ -11,7 +11,7 @@ export function pageImageObjectPath(
   resourceName: string,
   pageNumber: number,
 ): string {
-  return `${resourceName}/images/page-${pageNumber}.jpg`;
+  return `${resourceName}/images/page-${pageNumber}.png`;
 }
 
 /** A page number alone does not count as text. */

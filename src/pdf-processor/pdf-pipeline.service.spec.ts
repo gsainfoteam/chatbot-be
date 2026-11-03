@@ -505,7 +505,7 @@ describe('PdfPipelineService page images', () => {
       result.chunks.map((chunk) => chunk.content).join('\n');
 
     function imageSink() {
-      return jest.fn<(page: number, jpeg: Buffer) => Promise<void>>(
+      return jest.fn<(page: number, png: Buffer) => Promise<void>>(
         async () => undefined,
       );
     }

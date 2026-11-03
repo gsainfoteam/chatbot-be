@@ -164,7 +164,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     const heartbeat = this.startHeartbeat(doc.id, processingToken);
     let generatedArtifactsMayExist = false;
     try {
-      const result = await this.runPipeline(doc, async (pageNumber, jpeg) => {
+      const result = await this.runPipeline(doc, async (pageNumber, png) => {
         // A deleted document would otherwise get images nothing cleans up.
         if (
           !(await this.documentsRepo.heartbeatProcessing(
@@ -175,7 +175,7 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
           throw new Error('Processing ownership lost');
         }
         generatedArtifactsMayExist = true;
-        await this.gcs.uploadPageImage(resourceName, pageNumber, jpeg);
+        await this.gcs.uploadPageImage(resourceName, pageNumber, png);
       });
 
       if (!result.chunks.length) {

@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Inject,
   InternalServerErrorException,
@@ -199,6 +201,44 @@ export class ChatService {
     sessionId: string,
     dto: ChatMessageInputDto,
   ): Promise<ChatMessageDto> {
+    // Lock the session before counting and inserting so concurrent requests cannot spend a sixth turn.
+    if (dto.role === MessageRole.USER) {
+      return this.db.transaction(async (tx) => {
+        const [session] = await tx
+          .select({ id: sessions.id })
+          .from(sessions)
+          .where(eq(sessions.id, sessionId))
+          .for('update')
+          .limit(1);
+        if (!session) throw new NotFoundException('Session not found');
+        const [row] = await tx
+          .select({ count: count() })
+          .from(messages)
+          .where(
+            and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')),
+          );
+        if (Number(row?.count ?? 0) >= MAX_QUESTIONS_PER_SESSION) {
+          throw new HttpException(
+            {
+              statusCode: 429,
+              message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
+              limit: MAX_QUESTIONS_PER_SESSION,
+            },
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
+        const [message] = await tx
+          .insert(messages)
+          .values({
+            sessionId,
+            role: dto.role,
+            content: dto.content,
+            metadata: dto.metadata ?? null,
+          })
+          .returning();
+        return this.toMessageDto(message);
+      });
+    }
     // user 메시지는 total_answers 집계 대상이 아니므로 단순 insert.
     if (dto.role !== MessageRole.ASSISTANT) {
       const [newMessage] = await this.db

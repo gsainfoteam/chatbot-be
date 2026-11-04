@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from '@jest/globals';
 import { validate } from './env.validation';
+import { readAgentConfig } from '../chat/agent/agent.config';
 
 function baseEnv(overrides: Record<string, unknown> = {}) {
   return {
@@ -144,5 +145,134 @@ describe('embedding backfill configuration', () => {
     expect(result.EMBEDDING_BACKFILL_BATCH_SIZE).toBe(32);
     expect(result.EMBEDDING_BACKFILL_INTERVAL_MS).toBe(300000);
     expect(result.EMBEDDING_RETRIEVAL_ENABLED).toBe(false);
+  });
+});
+
+describe('agent configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it('keeps the agent off unless it is enabled explicitly', () => {
+    const config = validate(baseEnv(credentials)) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(
+      readAgentConfig({ get: (key: string) => config[key] } as never),
+    ).toEqual({
+      enabled: false,
+      enforceTimeBudget: false,
+      maxRounds: 3,
+      timeBudgetMs: 20000,
+      webTimeBudgetMs: 35000,
+      modelTier: 'normal',
+    });
+  });
+
+  it('accepts agent settings from string env values', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        AGENT_ENABLED: 'true',
+        AGENT_MAX_ROUNDS: '2',
+        AGENT_TIME_BUDGET_MS: '15000',
+        AGENT_MODEL_TIER: 'light',
+      }),
+    );
+    expect(result.AGENT_ENABLED).toBe(true);
+    expect(result.AGENT_MAX_ROUNDS).toBe(2);
+    expect(result.AGENT_TIME_BUDGET_MS).toBe(15000);
+    expect(result.AGENT_MODEL_TIER).toBe('light');
+  });
+
+  it.each([
+    { AGENT_ENABLED: 'yes' },
+    { AGENT_MAX_ROUNDS: 0 },
+    { AGENT_MAX_ROUNDS: 7 },
+    { AGENT_TIME_BUDGET_MS: 999 },
+    { AGENT_MODEL_TIER: 'huge' },
+  ])('rejects invalid agent settings %j', (settings) => {
+    expect(() => validate(baseEnv({ ...credentials, ...settings }))).toThrow();
+  });
+});
+
+describe('Ziggle MCP configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it('does not require Ziggle settings', () => {
+    expect(() => validate(baseEnv(credentials))).not.toThrow();
+  });
+
+  it('requires a long enough API key once the URL is set', () => {
+    expect(() =>
+      validate(
+        baseEnv({
+          ...credentials,
+          ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      validate(
+        baseEnv({
+          ...credentials,
+          ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+          ZIGGLE_MCP_API_KEY: 'short',
+        }),
+      ),
+    ).toThrow();
+  });
+
+  it('accepts a complete Ziggle setup', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+        ZIGGLE_MCP_API_KEY: 'k'.repeat(32),
+        ZIGGLE_MCP_TIMEOUT_MS: '3000',
+        ZIGGLE_NOTICE_WIDGET_KEY_IDS: '*',
+      }),
+    );
+    expect(result.ZIGGLE_MCP_TIMEOUT_MS).toBe(3000);
+  });
+});
+
+describe('web search configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it('keeps web search off by default', () => {
+    // 미설정이면 값이 비어 있고, WebSearchClient는 true일 때만 켠다.
+    expect(validate(baseEnv(credentials)).WEB_SEARCH_ENABLED).not.toBe(true);
+  });
+
+  it('accepts web search settings from string env values', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        WEB_SEARCH_ENABLED: 'true',
+        WEB_SEARCH_TIMEOUT_MS: '12000',
+        AGENT_WEB_TIME_BUDGET_MS: '40000',
+        WEB_SEARCH_ALLOWED_DOMAINS: 'gist.ac.kr',
+      }),
+    );
+    expect(result.WEB_SEARCH_ENABLED).toBe(true);
+    expect(result.WEB_SEARCH_TIMEOUT_MS).toBe(12000);
+    expect(result.AGENT_WEB_TIME_BUDGET_MS).toBe(40000);
+  });
+
+  it.each([
+    { WEB_SEARCH_ENABLED: 'yes' },
+    { WEB_SEARCH_TIMEOUT_MS: 500 },
+    { AGENT_WEB_TIME_BUDGET_MS: 200000 },
+  ])('rejects invalid web search settings %j', (settings) => {
+    expect(() => validate(baseEnv({ ...credentials, ...settings }))).toThrow();
   });
 });

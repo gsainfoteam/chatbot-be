@@ -2,17 +2,36 @@ import type { ResearchAssessment } from './research-decision';
 import type { ListResourcesResult } from '../../retrieval/retrieval.types';
 import type { LlmTool, LlmUsage } from '../types/llm.types';
 
-export type AgentDocument = { path: string; content: string };
+export type AgentDocument = {
+  path: string;
+  content: string;
+  sourceUrls?: string[];
+};
 
 export type UsedResource = { path: string; formats: string[] };
+
+/** 내부 문서가 아닌 출처. FE `resources`(리소스 센터 PDF)와 섞지 않고 따로 보낸다. */
+export type ExternalSource = {
+  kind: 'notice' | 'web';
+  id: string;
+  title: string;
+  url: string;
+  /** 본문까지 읽었는지. 표시 순서를 정할 때 쓴다. */
+  opened: boolean;
+  /** 웹 출처가 학교 공식 도메인인지. 공지에는 없다. */
+  official?: boolean;
+};
 
 /** 한 턴 동안 모든 도구가 공유하는 맥락 */
 export type AgentToolContext = {
   catalog: ListResourcesResult;
+  signal?: AbortSignal;
   /** 검색 단계에서 LLM을 쓰면 토큰을 여기에 더한다. */
   usage: LlmUsage;
   /** 이미 에이전트에게 보여준 문서 경로. 같은 본문을 다시 넘기지 않으려고 쓴다. */
   seenPaths: ReadonlySet<string>;
+  /** 한 번의 조사 동안 도구끼리 공유하는 값(예: 검색으로 본 공지 제목). 키는 도구가 정한다. */
+  state: Map<string, unknown>;
 };
 
 export type AgentToolResult = {
@@ -23,6 +42,9 @@ export type AgentToolResult = {
   /** 최종 답변 근거로 모을 문서 */
   documents?: AgentDocument[];
   usedResources?: UsedResource[];
+  sources?: ExternalSource[];
+  candidates?: string[];
+  resolvedCandidates?: string[];
 };
 
 export type AgentStepStatus = 'running' | 'done' | 'failed';
@@ -45,6 +67,7 @@ export interface AgentTool {
   describeStep(
     args: Record<string, unknown>,
     outcome: AgentStepOutcome,
+    context: AgentToolContext,
   ): string;
 }
 
@@ -76,9 +99,14 @@ export type AgentRunResult = {
   /** 경로 기준으로 중복을 뺀, 수집 순서대로의 문서 */
   documents: AgentDocument[];
   usedResources: UsedResource[];
+  /** 수집 순서대로의 외부 출처(같은 url은 하나). 본문을 읽은 출처는 opened=true */
+  sources: ExternalSource[];
   steps: AgentStep[];
   rounds: number;
   stopReason: AgentStopReason;
   assessment?: ResearchAssessment;
   elapsedMs?: number;
+  model?: string;
+  maxRounds?: number;
+  timeBudgetEnforced?: boolean;
 };

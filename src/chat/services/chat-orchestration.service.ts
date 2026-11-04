@@ -1,4 +1,18 @@
 import {
+  GistScopePolicy,
+  type ScopeDiagnostics,
+  SCOPE_REFUSAL,
+  SCOPE_UNAVAILABLE,
+} from '../safety/gist-scope.policy';
+import { chatAdmission } from '../safety/chat-admission';
+import type { TurnDiagnostics } from '../safety/turn-diagnostics';
+import {
+  AnswerOutputFilter,
+  citationInstructions,
+  safeSources,
+} from '../safety/answer-output';
+import { maskPersonalInfo } from '../agent/tools/ziggle/notice-text';
+import {
   Inject,
   Injectable,
   Logger,
@@ -9,17 +23,22 @@ import { UsageService } from '../../usage/usage.service';
 import { LLM_CLIENT, type LlmClient } from '../llm/llm-client.interface';
 import type { LlmMessage, LlmUsage } from '../types/llm.types';
 import { MessageRole } from '../../common/dto/chat-message-input.dto';
-import type { Readable } from 'stream';
+import { Readable } from 'stream';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   FINAL_RESPONSE_SYSTEM_PROMPT,
+  buildNoticeAnswerRules,
+  buildWebAnswerRules,
+  formatSeoulDate,
   NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
   ANSWER_GROUNDING_REMINDER,
+  NO_ANSWER_LEAD,
   isNoAnswerResponse,
 } from '../prompts';
 import {
   ResourceContentService,
   formatRelevantDocument,
+  type RelevantResourceContents,
   type ResourceInfo,
 } from './resource-content.service';
 import { ChatStreamTransport } from './chat-stream.transport';
@@ -27,16 +46,48 @@ import { RetrievalService } from '../../retrieval/retrieval.service';
 import { Trace } from '@gsainfoteam/nest-observability';
 import { UnansweredQuestionsRepository } from '../../unanswered-questions/unanswered-questions.repository';
 import { AgentLoopService } from '../agent/agent-loop.service';
-import { decideAnswerRoute } from '../agent/answer-route';
-import type { AgentStep } from '../agent/agent.types';
+import { decideAnswerRoute, type AnswerRoute } from '../agent/answer-route';
+import type { AgentStep, ExternalSource } from '../agent/agent.types';
+import { hasNoticeIntent } from '../agent/notice-intent';
+import { SEARCH_DOCUMENTS_TOOL_NAME } from '../agent/tools/search-documents.tool';
+import { SEARCH_NOTICES_TOOL_NAME } from '../agent/tools/ziggle/search-notices.tool';
+import { GET_NOTICE_TOOL_NAME } from '../agent/tools/ziggle/get-notice.tool';
+import { ZiggleNoticeClient } from '../agent/tools/ziggle/ziggle-notice.client';
+import { NOTICE_MARKER } from '../agent/tools/ziggle/notice-registry';
+import {
+  SEARCH_WEB_TOOL_NAME,
+  WEB_MARKER,
+} from '../agent/tools/web/search-web.tool';
+import { WebSearchClient } from '../agent/tools/web/web-search.client';
 
 export type { ResourceInfo };
 
 interface ProcessUserQuestionStreamOptions {
+  signal?: AbortSignal;
+  diagnostics?: TurnDiagnostics;
   persistUserMessage?: boolean;
   historyBefore?: Date;
   /** 에이전트 재탐색 진행 단계를 받는다. 빠른 경로에서는 호출되지 않는다. */
   onStep?: (step: AgentStep) => void;
+  /** 위젯별 기능(예: Ziggle 공지) 허용 여부를 판단하는 데 쓴다. */
+  widgetKeyId?: string;
+}
+
+/** 답변 근거로 모은 자료 */
+type GatheredContent = {
+  content: string;
+  usedResources: Array<{ path: string; formats: string[] }>;
+  /** 공지처럼 리소스 센터 밖의 출처 */
+  sources: ExternalSource[];
+  /** 에이전트가 거친 단계의 최종 상태. 빠른 경로면 비어 있다. */
+  steps: AgentStep[];
+  route: AnswerRoute;
+  /** 첫 검색 결과. 빠른 경로 답변이 답변 불가일 때 재탐색의 출발점으로 쓴다. */
+  initial: RelevantResourceContents;
+};
+
+function hasRelevantContent(result: GatheredContent): boolean {
+  return result.content.trim().length > 0;
 }
 
 interface StreamingResponseOptions extends ProcessUserQuestionStreamOptions {
@@ -61,6 +112,8 @@ export class ChatOrchestrationService {
     private readonly chatStreamTransport: ChatStreamTransport,
     private readonly unansweredQuestionsRepository: UnansweredQuestionsRepository,
     private readonly agentLoopService: AgentLoopService,
+    private readonly ziggleNoticeClient: ZiggleNoticeClient,
+    private readonly webSearchClient: WebSearchClient,
   ) {}
 
   private createEmptyUsage(): LlmUsage {
@@ -120,16 +173,20 @@ export class ChatOrchestrationService {
   private streamNoRelevantMaterials(
     historyMessages: LlmMessage[],
     userQuestion: string,
+    signal?: AbortSignal,
   ): Promise<Readable> {
     return this.llmClient.generateFinalResponseStream(
       [
         { role: 'system', content: NO_RELEVANT_MATERIALS_SYSTEM_PROMPT },
-        ...historyMessages,
-        { role: 'user', content: userQuestion },
+        ...historyMessages.map((m) => ({
+          ...m,
+          content: m.content ? maskPersonalInfo(m.content) : m.content,
+        })),
+        { role: 'user', content: maskPersonalInfo(userQuestion) },
       ],
       [],
       this.llmClient.getModel('normal'),
-      { temperature: 0 },
+      { temperature: 0, signal },
     );
   }
 
@@ -142,31 +199,57 @@ export class ChatOrchestrationService {
     historyMessages: LlmMessage[],
     listResult: Awaited<ReturnType<RetrievalService['listCatalog']>>,
     usage: LlmUsage,
-    onStep?: (step: AgentStep) => void,
-  ): Promise<{
-    content: string;
-    usedResources: Array<{ path: string; formats: string[] }>;
-    /** 에이전트가 거친 단계의 최종 상태. 빠른 경로면 비어 있다. */
-    steps: AgentStep[];
-  }> {
+    options: Pick<
+      ProcessUserQuestionStreamOptions,
+      'onStep' | 'widgetKeyId' | 'signal' | 'diagnostics'
+    >,
+    /** 빠른 경로 답변이 답변 불가로 시작해 다시 찾을 때: 첫 검색 결과를 재사용하고 에이전트로 간다. */
+    retry?: { initial: RelevantResourceContents },
+  ): Promise<GatheredContent> {
+    const { onStep } = options;
     let t0 = Date.now();
+    options.signal?.throwIfAborted();
     const initial =
-      await this.resourceContentService.fetchRelevantResourceContents(
+      retry?.initial ??
+      (await this.resourceContentService.fetchRelevantResourceContents(
         userQuestion,
         listResult,
         usage,
+        options.signal,
+      ));
+    if (!retry) {
+      this.logger.log(
+        `[PERF] fetchRelevantResourceContents: ${Date.now() - t0}ms`,
       );
-    this.logger.log(
-      `[PERF] fetchRelevantResourceContents: ${Date.now() - t0}ms`,
-    );
+    }
 
-    const { route, reason } = decideAnswerRoute({
-      agentEnabled: this.agentLoopService.isEnabled(),
-      documentCount: initial.documents.length,
-      confident: initial.confident,
-    });
-    this.logger.log(`[DEBUG] answer route: ${route} (${reason})`);
-    if (route === 'direct') return { ...initial, steps: [] };
+    const agentEnabled = this.agentLoopService.isEnabled();
+    const noticesEnabled =
+      agentEnabled && this.ziggleNoticeClient.isEnabledFor(options.widgetKeyId);
+    const webEnabled =
+      agentEnabled && this.webSearchClient.isEnabledFor(options.widgetKeyId);
+    const { route, reason } = retry
+      ? { route: 'agent' as const, reason: 'no-answer-retry' }
+      : decideAnswerRoute({
+          agentEnabled,
+          documentCount: initial.documents.length,
+          confident: initial.confident,
+          noticeIntent: noticesEnabled && hasNoticeIntent(userQuestion),
+        });
+    this.logger.log(
+      `[DEBUG] answer route: ${route} (${reason}), notices=${noticesEnabled}, web=${webEnabled}`,
+    );
+    options.signal?.throwIfAborted();
+    if (options.diagnostics)
+      Object.assign(options.diagnostics, {
+        route,
+        routeReason: reason,
+        noticesEnabled,
+        webEnabled,
+      });
+    if (route === 'direct') {
+      return { ...initial, sources: [], steps: [], route, initial };
+    }
 
     t0 = Date.now();
     const steps = new Map<string, AgentStep>();
@@ -177,6 +260,7 @@ export class ChatOrchestrationService {
     try {
       const agentResult = await this.agentLoopService.run({
         question: userQuestion,
+        signal: options.signal,
         history: historyMessages,
         catalog: listResult,
         usage,
@@ -184,17 +268,75 @@ export class ChatOrchestrationService {
           documents: initial.documents,
           usedResources: initial.usedResources,
         },
+        enabledTools: [
+          SEARCH_DOCUMENTS_TOOL_NAME,
+          ...(noticesEnabled
+            ? [SEARCH_NOTICES_TOOL_NAME, GET_NOTICE_TOOL_NAME]
+            : []),
+          ...(webEnabled ? [SEARCH_WEB_TOOL_NAME] : []),
+        ],
         onStep: recordStep,
       });
+      if (options.diagnostics)
+        Object.assign(options.diagnostics, {
+          rounds: agentResult.rounds,
+          stopReason: agentResult.stopReason,
+          assessment: agentResult.assessment
+            ? JSON.parse(
+                maskPersonalInfo(JSON.stringify(agentResult.assessment)),
+              )
+            : undefined,
+          researchMs: agentResult.elapsedMs,
+          researchModel: agentResult.model,
+          maxRounds: agentResult.maxRounds,
+          timeBudgetEnforced: agentResult.timeBudgetEnforced,
+          toolCalls: agentResult.steps
+            .filter((s) => s.kind !== 'research')
+            .reduce(
+              (counts, s) => ({
+                ...counts,
+                [s.kind]: (counts[s.kind] ?? 0) + 1,
+              }),
+              {} as Record<string, number>,
+            ),
+          toolFailures: agentResult.steps.filter((s) => s.status === 'failed')
+            .length,
+        });
       this.logger.log(`[PERF] agent research: ${Date.now() - t0}ms`);
+      const selected = agentResult.assessment
+        ? agentResult.documents.filter((d) =>
+            agentResult.assessment!.evidencePaths.includes(d.path),
+          )
+        : agentResult.documents;
+      const selectedUrls = new Set(selected.flatMap((d) => d.sourceUrls ?? []));
       return {
-        content: agentResult.documents
-          .map((doc) => formatRelevantDocument(doc.content))
-          .join('\n'),
-        usedResources: agentResult.usedResources,
+        content:
+          selected
+            .map((doc) => formatRelevantDocument(doc.content))
+            .join('\n') +
+          (selected.length && agentResult.assessment?.outcome === 'partial'
+            ? '\n[조사에서 확인하지 못한 항목 — 답변에서도 확인 불가를 명시하고 추정하지 말 것]\n' +
+              agentResult.assessment.unresolvedQuestions
+                .map((q) => `- ${maskPersonalInfo(q)}`)
+                .join('\n')
+            : ''),
+        usedResources: agentResult.usedResources.filter((r) =>
+          selected.some(
+            (d) => d.path === r.path || d.path.startsWith(r.path + '/'),
+          ),
+        ),
+        sources: safeSources(
+          agentResult.assessment
+            ? agentResult.sources.filter((s) => selectedUrls.has(s.url))
+            : agentResult.sources,
+        ),
         steps: agentResult.steps,
+        route,
+        initial,
       };
     } catch (error) {
+      options.signal?.throwIfAborted();
+      if (options.diagnostics) options.diagnostics.stopReason = 'agent-error';
       this.logger.warn(
         `Agent research failed; answering with the first search: ${
           error instanceof Error ? error.message : String(error)
@@ -206,8 +348,185 @@ export class ChatOrchestrationService {
           recordStep({ ...step, status: 'failed' });
         }
       }
-      return { ...initial, steps: [...steps.values()] };
+      return {
+        ...initial,
+        sources: [],
+        steps: [...steps.values()],
+        route,
+        initial,
+      };
     }
+  }
+
+  /** 근거 자료 없이 답할 때의 결과. 에이전트가 거친 단계는 그대로 남긴다. */
+  private async noRelevantMaterialsResult(
+    historyMessages: LlmMessage[],
+    userQuestion: string,
+    usage: LlmUsage,
+    steps: AgentStep[],
+    signal?: AbortSignal,
+  ) {
+    this.logger.warn('No reference documents available.');
+    const stream = await this.streamNoRelevantMaterials(
+      historyMessages,
+      userQuestion,
+      signal,
+    );
+    return {
+      stream,
+      resources: [],
+      referencedDocumentCount: 0,
+      usage,
+      steps,
+      sources: [],
+    };
+  }
+
+  /** 모은 자료로 최종 답변 스트림을 연다. */
+  private async startAnswerStream(
+    relevantResult: GatheredContent,
+    listResult: Awaited<ReturnType<RetrievalService['listCatalog']>>,
+    historyMessages: LlmMessage[],
+    userQuestion: string,
+    signal?: AbortSignal,
+  ): Promise<{ stream: Readable; resources: ResourceInfo[] }> {
+    const resultText =
+      listResult.texts.join('\n') || JSON.stringify(listResult.raw, null, 2);
+
+    // LLM 입력 길이가 커지면 400이 발생할 수 있어, tool 호출 컨텐츠는 하드 캡을 둡니다.
+    // 끝에 붙는 답변 규칙 리마인더 몫은 미리 뺀다.
+    const MAX_TOOL_CONTENT_CHARS = 50000 - ANSWER_GROUNDING_REMINDER.length;
+    const separator = '\n\n';
+    const relevantPart = relevantResult.content;
+    const listPart = resultText;
+    const fullContentOriginalChars =
+      relevantPart.length + separator.length + listPart.length;
+
+    const maxListChars = Math.max(
+      0,
+      MAX_TOOL_CONTENT_CHARS - relevantPart.length - separator.length,
+    );
+    const LIST_TRUNCATION_NOTE =
+      '\n\n[Truncated: document catalog preview too long]';
+    let listPartForTool = listPart;
+    let fullContentWasTruncated = false;
+    if (listPart.length > maxListChars) {
+      const maxSlice = Math.max(0, maxListChars - LIST_TRUNCATION_NOTE.length);
+      listPartForTool = listPart.slice(0, maxSlice) + LIST_TRUNCATION_NOTE;
+      fullContentWasTruncated = true;
+    }
+    let fullContent = relevantPart + separator + listPartForTool;
+    if (fullContent.length > MAX_TOOL_CONTENT_CHARS) {
+      const maxRel = Math.max(
+        0,
+        MAX_TOOL_CONTENT_CHARS - listPartForTool.length - separator.length,
+      );
+      fullContent =
+        relevantPart.slice(0, maxRel) +
+        '\n\n[Truncated: reference material too long]' +
+        separator +
+        listPartForTool;
+      fullContentWasTruncated = true;
+    }
+
+    const syntheticToolCallId = 'list_resources_0';
+    const toolResults: Array<{
+      tool_call_id: string;
+      name: string;
+      content: string;
+    }> = [
+      {
+        tool_call_id: syntheticToolCallId,
+        name: 'list_resources',
+        // 시스템 프롬프트의 금지 규칙만으로는 자료에 없는 항목을 덧붙이는 경우가 많아,
+        // 자료 바로 뒤에 규칙을 한 번 더 둔다.
+        content:
+          maskPersonalInfo(fullContent) +
+          ANSWER_GROUNDING_REMINDER +
+          citationInstructions(relevantResult.sources),
+      },
+    ];
+
+    const allResources: ResourceInfo[] = [];
+    // 텍스트 지식 문서는 원본 PDF가 없으므로 이미 본 경로로 취급해 FE 참조 목록에서 제외한다.
+    const seenFePdfPaths = new Set<string>(
+      (listResult.resources ?? [])
+        .filter((resource) => resource.sourceType === 'text')
+        .map((resource) => resource.path),
+    );
+    for (const r of relevantResult.usedResources) {
+      this.resourceContentService.appendFePdfResourceEntryFromUsed(
+        allResources,
+        seenFePdfPaths,
+        r,
+      );
+    }
+
+    const t0 = Date.now();
+    this.logger.debug('Generating final response with tool results...');
+    const messages: LlmMessage[] = [
+      {
+        role: 'system',
+        content:
+          FINAL_RESPONSE_SYSTEM_PROMPT +
+          (relevantResult.content.includes(NOTICE_MARKER)
+            ? buildNoticeAnswerRules(formatSeoulDate(new Date()))
+            : '') +
+          (relevantResult.content.includes(WEB_MARKER)
+            ? buildWebAnswerRules()
+            : ''),
+      },
+      ...historyMessages.map((m) => ({
+        ...m,
+        content: m.content ? maskPersonalInfo(m.content) : m.content,
+      })),
+      { role: 'user', content: maskPersonalInfo(userQuestion) },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: syntheticToolCallId,
+            type: 'function',
+            function: { name: 'list_resources', arguments: '{}' },
+          },
+        ],
+      },
+    ];
+
+    const toolResultsContentCharsSum = toolResults.reduce(
+      (sum, r) => sum + (r.content?.length ?? 0),
+      0,
+    );
+
+    const roleCounts: Record<string, number> = {};
+    let assistantToolCalls = 0;
+    let contentNullCount = 0;
+    for (const m of messages) {
+      roleCounts[m.role] = (roleCounts[m.role] ?? 0) + 1;
+      if (m.role === 'assistant') {
+        assistantToolCalls += m.tool_calls?.length ?? 0;
+      }
+      if (m.content === null) {
+        contentNullCount += 1;
+      }
+    }
+
+    this.logger.debug(
+      `[DEBUG] Final LLM request summary: model=heavy, messages=${messages.length}, roles=${JSON.stringify(roleCounts)}, contentNullCount=${contentNullCount}, assistantToolCalls=${assistantToolCalls}, toolResults=${toolResults.length}, toolResultsContentCharsSum=${toolResultsContentCharsSum}, fullContentOriginalChars=${fullContentOriginalChars}, fullContentWasTruncated=${fullContentWasTruncated}, numberOfAllResources=${allResources.length}`,
+    );
+
+    const stream = await this.llmClient.generateFinalResponseStream(
+      messages,
+      toolResults,
+      this.llmClient.getModel('heavy'),
+      { signal },
+    );
+    this.logger.log(
+      `[PERF] generateFinalResponseStream(시작까지): ${Date.now() - t0}ms`,
+    );
+
+    return { stream, resources: allResources };
   }
 
   /**
@@ -225,9 +544,15 @@ export class ChatOrchestrationService {
     usage: LlmUsage;
     /** 에이전트 재탐색 단계. 빠른 경로면 비어 있다. */
     steps: AgentStep[];
+    /** 공지처럼 리소스 센터 밖의 출처 */
+    sources: ExternalSource[];
   }> {
     const perfTurnStart = Date.now();
     const usage = this.createEmptyUsage();
+    if (options.diagnostics) {
+      options.diagnostics.observedUsage = usage;
+      options.diagnostics.scopeModel = this.llmClient.getModel('light');
+    }
 
     try {
       let t0 = Date.now();
@@ -249,9 +574,45 @@ export class ChatOrchestrationService {
         this.logger.log(`[PERF] createMessage(user): ${Date.now() - t0}ms`);
       }
 
+      options.signal?.throwIfAborted();
+      if (this.agentLoopService.isEnabled()) {
+        const scopeDiagnostics: ScopeDiagnostics = {};
+        const scope = await new GistScopePolicy(this.llmClient).assess(
+          userQuestion,
+          historyMessages,
+          usage,
+          options.signal,
+          scopeDiagnostics,
+        );
+        if (options.diagnostics) {
+          options.diagnostics.scope = scope.reason;
+          options.diagnostics.scopeAttempts = scopeDiagnostics.attempts;
+          options.diagnostics.scopeMs = scopeDiagnostics.elapsedMs;
+          options.diagnostics.scopeFailure = scopeDiagnostics.failure;
+          if (scopeDiagnostics.usageIncomplete)
+            options.diagnostics.usageIncomplete = true;
+        }
+        if (!scope.allowed) {
+          const content =
+            scope.reason === 'unavailable' ? SCOPE_UNAVAILABLE : SCOPE_REFUSAL;
+          const stream = Readable.from([
+            `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`,
+          ]);
+          return {
+            stream,
+            resources: [],
+            referencedDocumentCount: 0,
+            usage,
+            steps: [],
+            sources: [],
+          };
+        }
+      }
       t0 = Date.now();
+      options.signal?.throwIfAborted();
       this.logger.debug('Loading document catalog from DB...');
       const listResult = await this.retrievalService.listCatalog();
+      options.signal?.throwIfAborted();
       this.logger.log(`[PERF] listCatalog: ${Date.now() - t0}ms`);
 
       const chunkCount = listResult.chunks?.length ?? 0;
@@ -260,11 +621,12 @@ export class ChatOrchestrationService {
       );
 
       const hasResources = chunkCount > 0;
-      if (!hasResources) {
+      if (!hasResources && !this.agentLoopService.isEnabled()) {
         this.logger.warn('No resources from document catalog');
         const stream = await this.streamNoRelevantMaterials(
           historyMessages,
           userQuestion,
+          options.signal,
         );
         return {
           stream,
@@ -272,169 +634,97 @@ export class ChatOrchestrationService {
           referencedDocumentCount: 0,
           usage,
           steps: [],
+          sources: [],
         };
       }
 
-      const relevantResult = await this.gatherRelevantContent(
+      let relevantResult = await this.gatherRelevantContent(
         userQuestion,
         historyMessages,
         listResult,
         usage,
-        options.onStep,
+        options,
       );
-
-      const hasContent =
-        typeof relevantResult.content === 'string' &&
-        relevantResult.content.trim().length > 0;
-
-      if (!hasContent) {
-        this.logger.warn('No reference documents available.');
-        const stream = await this.streamNoRelevantMaterials(
+      if (!hasRelevantContent(relevantResult)) {
+        return this.noRelevantMaterialsResult(
           historyMessages,
           userQuestion,
-        );
-        return {
-          stream,
-          resources: [],
-          referencedDocumentCount: 0,
           usage,
-          steps: relevantResult.steps,
-        };
-      }
-
-      const resultText =
-        listResult.texts.join('\n') || JSON.stringify(listResult.raw, null, 2);
-
-      // LLM 입력 길이가 커지면 400이 발생할 수 있어, tool 호출 컨텐츠는 하드 캡을 둡니다.
-      // 끝에 붙는 답변 규칙 리마인더 몫은 미리 뺀다.
-      const MAX_TOOL_CONTENT_CHARS = 50000 - ANSWER_GROUNDING_REMINDER.length;
-      const separator = '\n\n';
-      const relevantPart = relevantResult.content;
-      const listPart = resultText;
-      const fullContentOriginalChars =
-        relevantPart.length + separator.length + listPart.length;
-
-      const maxListChars = Math.max(
-        0,
-        MAX_TOOL_CONTENT_CHARS - relevantPart.length - separator.length,
-      );
-      const LIST_TRUNCATION_NOTE =
-        '\n\n[Truncated: document catalog preview too long]';
-      let listPartForTool = listPart;
-      let fullContentWasTruncated = false;
-      if (listPart.length > maxListChars) {
-        const maxSlice = Math.max(
-          0,
-          maxListChars - LIST_TRUNCATION_NOTE.length,
-        );
-        listPartForTool = listPart.slice(0, maxSlice) + LIST_TRUNCATION_NOTE;
-        fullContentWasTruncated = true;
-      }
-      let fullContent = relevantPart + separator + listPartForTool;
-      if (fullContent.length > MAX_TOOL_CONTENT_CHARS) {
-        const maxRel = Math.max(
-          0,
-          MAX_TOOL_CONTENT_CHARS - listPartForTool.length - separator.length,
-        );
-        fullContent =
-          relevantPart.slice(0, maxRel) +
-          '\n\n[Truncated: reference material too long]' +
-          separator +
-          listPartForTool;
-        fullContentWasTruncated = true;
-      }
-
-      const syntheticToolCallId = 'list_resources_0';
-      const toolResults: Array<{
-        tool_call_id: string;
-        name: string;
-        content: string;
-      }> = [
-        {
-          tool_call_id: syntheticToolCallId,
-          name: 'list_resources',
-          // 시스템 프롬프트의 금지 규칙만으로는 자료에 없는 항목을 덧붙이는 경우가 많아,
-          // 자료 바로 뒤에 규칙을 한 번 더 둔다.
-          content: fullContent + ANSWER_GROUNDING_REMINDER,
-        },
-      ];
-
-      const allResources: ResourceInfo[] = [];
-      // 텍스트 지식 문서는 원본 PDF가 없으므로 이미 본 경로로 취급해 FE 참조 목록에서 제외한다.
-      const seenFePdfPaths = new Set<string>(
-        (listResult.resources ?? [])
-          .filter((resource) => resource.sourceType === 'text')
-          .map((resource) => resource.path),
-      );
-      for (const r of relevantResult.usedResources) {
-        this.resourceContentService.appendFePdfResourceEntryFromUsed(
-          allResources,
-          seenFePdfPaths,
-          r,
+          relevantResult.steps,
+          options.signal,
         );
       }
-
-      t0 = Date.now();
-      this.logger.debug('Generating final response with tool results...');
-      const messages: LlmMessage[] = [
-        { role: 'system', content: FINAL_RESPONSE_SYSTEM_PROMPT },
-        ...historyMessages,
-        { role: 'user', content: userQuestion },
-        {
-          role: 'assistant',
-          content: null,
-          tool_calls: [
-            {
-              id: syntheticToolCallId,
-              type: 'function',
-              function: { name: 'list_resources', arguments: '{}' },
-            },
-          ],
-        },
-      ];
-
-      const toolResultsContentCharsSum = toolResults.reduce(
-        (sum, r) => sum + (r.content?.length ?? 0),
-        0,
+      let answer = await this.startAnswerStream(
+        relevantResult,
+        listResult,
+        historyMessages,
+        userQuestion,
+        options.signal,
       );
 
-      const roleCounts: Record<string, number> = {};
-      let assistantToolCalls = 0;
-      let contentNullCount = 0;
-      for (const m of messages) {
-        roleCounts[m.role] = (roleCounts[m.role] ?? 0) + 1;
-        if (m.role === 'assistant') {
-          assistantToolCalls += m.tool_calls?.length ?? 0;
-        }
-        if (m.content === null) {
-          contentNullCount += 1;
+      // 빠른 경로는 첫 검색의 거리만 보고 고르므로, 문서가 비슷해 보여도 답이 없을 수 있다.
+      // 답변이 "정보가 없다"로 시작하면 클라이언트에 보내기 전에 버리고 에이전트로 다시 찾는다.
+      if (
+        relevantResult.route === 'direct' &&
+        this.agentLoopService.isEnabled()
+      ) {
+        const probe = await this.chatStreamTransport.detectLeadingText(
+          answer.stream,
+          NO_ANSWER_LEAD,
+          options.signal,
+        );
+        if (probe.matched) {
+          if (options.diagnostics) {
+            options.diagnostics.discardedAnswers =
+              (options.diagnostics.discardedAnswers ?? 0) + 1;
+            options.diagnostics.usageIncomplete = true;
+          }
+          this.logger.log(
+            '[DEBUG] direct answer was a no-answer reply; retrying with agent research',
+          );
+          relevantResult = await this.gatherRelevantContent(
+            userQuestion,
+            historyMessages,
+            listResult,
+            usage,
+            options,
+            { initial: relevantResult.initial },
+          );
+          if (!hasRelevantContent(relevantResult)) {
+            return this.noRelevantMaterialsResult(
+              historyMessages,
+              userQuestion,
+              usage,
+              relevantResult.steps,
+              options.signal,
+            );
+          }
+          answer = await this.startAnswerStream(
+            relevantResult,
+            listResult,
+            historyMessages,
+            userQuestion,
+            options.signal,
+          );
+        } else {
+          answer = { ...answer, stream: probe.stream };
         }
       }
 
-      this.logger.debug(
-        `[DEBUG] Final LLM request summary: model=heavy, messages=${messages.length}, roles=${JSON.stringify(roleCounts)}, contentNullCount=${contentNullCount}, assistantToolCalls=${assistantToolCalls}, toolResults=${toolResults.length}, toolResultsContentCharsSum=${toolResultsContentCharsSum}, fullContentOriginalChars=${fullContentOriginalChars}, fullContentWasTruncated=${fullContentWasTruncated}, numberOfAllResources=${allResources.length}`,
-      );
-
-      const stream = await this.llmClient.generateFinalResponseStream(
-        messages,
-        toolResults,
-        this.llmClient.getModel('heavy'),
-      );
-      this.logger.log(
-        `[PERF] generateFinalResponseStream(시작까지): ${Date.now() - t0}ms`,
-      );
       this.logger.log(
         `[PERF] processUserQuestionStream 전체: ${Date.now() - perfTurnStart}ms`,
       );
-
       return {
-        stream,
-        resources: allResources,
-        referencedDocumentCount: relevantResult.usedResources.length,
+        stream: answer.stream,
+        resources: answer.resources,
+        referencedDocumentCount:
+          relevantResult.usedResources.length + relevantResult.sources.length,
         usage,
         steps: relevantResult.steps,
+        sources: relevantResult.sources,
       };
     } catch (error) {
+      options.signal?.throwIfAborted();
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error(
@@ -457,21 +747,38 @@ export class ChatOrchestrationService {
     req: FastifyRequest,
     options: StreamingResponseOptions = {},
   ): Promise<void> {
-    this.chatStreamTransport.prepareSse(reply, req);
+    const release = chatAdmission.acquire(
+      sessionId,
+      req.ip ?? req.raw?.socket?.remoteAddress ?? 'unknown',
+    );
+    const controller = new AbortController();
+    const disconnect = () => {
+      if (!reply.raw.writableEnded) controller.abort();
+    };
+    reply.raw.once?.('close', disconnect);
+    const diagnostics: TurnDiagnostics = { version: 1 };
+    const startedAt = Date.now();
+    let usageRecordAttempted = false;
 
     try {
+      this.chatStreamTransport.prepareSse(reply, req);
       const {
         stream,
         resources,
         referencedDocumentCount,
         usage: reasoningUsage,
         steps,
+        sources,
       } = await this.processUserQuestionStream(sessionId, userQuestion, {
+        signal: controller.signal,
+        diagnostics,
         persistUserMessage: options.persistUserMessage,
         historyBefore: options.historyBefore,
+        widgetKeyId: options.widgetKeyId,
         onStep: (step) => this.chatStreamTransport.writeStep(reply, step),
       });
 
+      const answerOutput = new AnswerOutputFilter(sources);
       let streamResult: {
         accumulatedContent: string;
         model: string;
@@ -481,22 +788,59 @@ export class ChatOrchestrationService {
         streamResult = await this.chatStreamTransport.consumeAndForward(
           stream,
           reply,
+          answerOutput,
+          controller.signal,
+          () => {
+            diagnostics.firstContentMs ??= Date.now() - startedAt;
+          },
         );
       } catch {
         // 스트림 에러 시 transport가 이미 응답을 종료함
+        diagnostics.usageIncomplete = true;
         return;
       }
 
       try {
         const totalUsage = { ...reasoningUsage };
         this.addTokenUsage(totalUsage, streamResult.usage);
+        diagnostics.observedUsage = totalUsage;
+        diagnostics.answerModel = streamResult.model || undefined;
+        if (
+          !streamResult.usage &&
+          ['gist', 'followup'].includes(diagnostics.scope ?? '')
+        )
+          diagnostics.usageIncomplete = true;
         const usage = this.hasTokenUsage(totalUsage) ? totalUsage : undefined;
 
         // 검색에 걸린 문서가 있어도 최종 답변이 답변 불가면 참조 문서를 숨기고 미답변으로 본다.
         const answered =
           referencedDocumentCount > 0 &&
           !isNoAnswerResponse(streamResult.accumulatedContent);
+        const refusalScope =
+          diagnostics.scope &&
+          !['gist', 'followup'].includes(diagnostics.scope);
+        diagnostics.totalMs = Date.now() - startedAt;
+        diagnostics.outcomeBasis = diagnostics.assessment
+          ? 'research-assessment'
+          : 'response-heuristic';
+        diagnostics.outcome = refusalScope
+          ? 'scope-refused'
+          : !answered
+            ? 'unanswered'
+            : /세부 내용.{0,20}원문|본문.{0,15}이미지/.test(
+                  streamResult.accumulatedContent,
+                )
+              ? 'source-only'
+              : diagnostics.assessment?.outcome === 'partial' ||
+                  /그 외 내용은 현재 확인 가능한 정보에 없습니다/.test(
+                    streamResult.accumulatedContent,
+                  )
+                ? 'partial'
+                : 'answered';
         const answerResources = answered ? resources : [];
+        const usedSources = answered ? answerOutput.usedSources() : [];
+        const answerSources = usedSources.filter((s) => s.kind === 'notice');
+        const answerWebSources = usedSources.filter((s) => s.kind === 'web');
 
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
@@ -505,10 +849,14 @@ export class ChatOrchestrationService {
             content: streamResult.accumulatedContent,
             metadata: {
               ...(options.assistantMetadata ?? {}),
+              evaluation: diagnostics,
               model: streamResult.model || undefined,
               usage,
               resources:
                 answerResources.length > 0 ? answerResources : undefined,
+              sources: answerSources.length > 0 ? answerSources : undefined,
+              webSources:
+                answerWebSources.length > 0 ? answerWebSources : undefined,
               // 히스토리에서도 진행 과정을 다시 보여줄 수 있게 최종 상태를 남긴다.
               steps: steps.length > 0 ? steps : undefined,
             },
@@ -517,6 +865,7 @@ export class ChatOrchestrationService {
         }
 
         if (usage?.total_tokens != null) {
+          usageRecordAttempted = true;
           try {
             await this.usageService.recordUsage(sessionId, {
               totalTokens: usage.total_tokens,
@@ -530,10 +879,12 @@ export class ChatOrchestrationService {
         }
 
         this.chatStreamTransport.writeResources(reply, answerResources);
+        this.chatStreamTransport.writeSources(reply, answerSources);
+        this.chatStreamTransport.writeWebSources(reply, answerWebSources);
         this.chatStreamTransport.writeDone(reply);
 
         // 응답 종료 후 기록해 SSE 완료 시점을 늦추지 않는다.
-        if (!answered) {
+        if (!answered && !refusalScope) {
           await this.recordUnansweredQuestion(
             sessionId,
             userQuestion,
@@ -546,10 +897,34 @@ export class ChatOrchestrationService {
         this.chatStreamTransport.writeError(reply, 'Failed to save message');
       }
     } catch (error) {
+      if (controller.signal.aborted) return;
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       this.logger.error('Error in chat stream:', errorMessage);
       this.chatStreamTransport.writeError(reply, errorMessage);
+    } finally {
+      reply.raw.off?.('close', disconnect);
+      if (controller.signal.aborted) diagnostics.usageIncomplete = true;
+      if (
+        !usageRecordAttempted &&
+        (diagnostics.observedUsage?.total_tokens ?? 0) > 0
+      ) {
+        try {
+          await this.usageService.recordUsage(sessionId, {
+            totalTokens: diagnostics.observedUsage!.total_tokens,
+          });
+        } catch {
+          this.logger.warn(
+            'Failed to record observed usage for interrupted turn',
+          );
+        }
+      }
+      diagnostics.totalMs ??= Date.now() - startedAt;
+      this.logger.log(
+        `[CHAT_EVALUATION] ${JSON.stringify({ sessionId, ...diagnostics })}`,
+      );
+      controller.abort();
+      release();
     }
   }
 }

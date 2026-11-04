@@ -248,6 +248,7 @@ export class ResourceContentService {
     resources: ListResourceItem[],
     catalogChunks?: Array<{ path: string }>,
     tokenUsage?: LlmUsage,
+    signal?: AbortSignal,
   ): Promise<RelevantResourceContents> {
     this.logger.log(
       `[DEBUG] 1차 선별(description 기준) 입력: 상위 리소스 ${resources.length}개, chunk 총 ${resources.reduce((s, r) => s + (r.chunks?.length ?? 0), 0)}개 → LLM에 전달`,
@@ -260,6 +261,7 @@ export class ResourceContentService {
         question,
         5,
       );
+    signal?.throwIfAborted();
     if (chunkSelection) {
       this.logger.log(
         `[PERF] selectRelevantChunkPaths(vector): ${Date.now() - t0}ms`,
@@ -271,12 +273,14 @@ export class ResourceContentService {
           resources,
           5,
           tokenUsage,
+          signal,
         );
       this.logger.log(
         `[PERF] selectRelevantChunkPaths(LLM fallback): ${Date.now() - t0}ms`,
       );
     }
 
+    signal?.throwIfAborted();
     const chunkPaths = [
       ...chunkSelection.rootPaths,
       ...chunkSelection.detailPaths,
@@ -377,7 +381,9 @@ export class ResourceContentService {
     question: string,
     listResult: ListResourcesResult,
     tokenUsage?: LlmUsage,
+    signal?: AbortSignal,
   ): Promise<RelevantResourceContents> {
+    signal?.throwIfAborted();
     const isNewFormat =
       listResult.resources &&
       listResult.resources.length > 0 &&
@@ -390,6 +396,7 @@ export class ResourceContentService {
         listResult.resources!,
         listResult.chunks,
         tokenUsage,
+        signal,
       );
     }
     return { content: '', usedResources: [], documents: [] };

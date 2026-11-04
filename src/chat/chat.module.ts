@@ -17,6 +17,11 @@ import { LLM_CLIENT } from './llm/llm-client.interface';
 import { llmClientProvider } from './llm/llm-client.provider';
 import { AgentLoopService } from './agent/agent-loop.service';
 import { SearchDocumentsTool } from './agent/tools/search-documents.tool';
+import { ZiggleNoticeClient } from './agent/tools/ziggle/ziggle-notice.client';
+import { SearchNoticesTool } from './agent/tools/ziggle/search-notices.tool';
+import { GetNoticeTool } from './agent/tools/ziggle/get-notice.tool';
+import { WebSearchClient } from './agent/tools/web/web-search.client';
+import { SearchWebTool } from './agent/tools/web/search-web.tool';
 
 @Module({
   imports: [
@@ -37,6 +42,11 @@ import { SearchDocumentsTool } from './agent/tools/search-documents.tool';
     ResourceContentService,
     ChatStreamTransport,
     SearchDocumentsTool,
+    ZiggleNoticeClient,
+    SearchNoticesTool,
+    GetNoticeTool,
+    WebSearchClient,
+    SearchWebTool,
     AgentLoopService,
     ChatOrchestrationService,
   ],

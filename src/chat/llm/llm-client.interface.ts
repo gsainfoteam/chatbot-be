@@ -1,5 +1,6 @@
 import type { Readable } from 'stream';
 import type {
+  GroundedSearchResponse,
   LlmMessage,
   LlmModelType,
   LlmRequest,
@@ -15,6 +16,7 @@ export type LlmCallOptions = {
   max_tokens?: number;
   /** axios request timeout in milliseconds (default 15000) */
   timeoutMs?: number;
+  signal?: AbortSignal;
   /** function calling에 노출할 도구. 비어 있으면 요청에 싣지 않는다. */
   tools?: LlmTool[];
   tool_choice?: LlmRequest['tool_choice'];
@@ -39,6 +41,19 @@ export interface LlmClient {
     messages: LlmMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: { temperature?: number },
+    options?: Pick<LlmCallOptions, 'temperature' | 'signal'>,
   ): Promise<Readable>;
+
+  /**
+   * 구글 검색 그라운딩을 켜고 호출한다(Gemini 전용). Letsur 게이트웨이(LiteLLM → Vertex AI)는
+   * `vertex_ai_grounding_metadata`로 근거를 돌려준다.
+   */
+  searchWithGoogle(
+    messages: LlmMessage[],
+    model: string,
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'max_tokens' | 'timeoutMs' | 'signal'
+    >,
+  ): Promise<GroundedSearchResponse>;
 }

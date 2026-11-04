@@ -50,6 +50,7 @@ export class ResourceSelectionService {
     resources: ListResourceItem[],
     maxResults: number = 5,
     tokenUsage?: LlmUsage,
+    signal?: AbortSignal,
   ): Promise<RelevantChunkSelection> {
     if (!resources?.length) {
       return { rootPaths: [], detailPaths: [] };
@@ -74,7 +75,7 @@ export class ResourceSelectionService {
           { role: 'user', content: userPrompt },
         ],
         this.llmClient.getModel('light'),
-        { temperature: 0.1, max_tokens: 5000 },
+        { temperature: 0.1, max_tokens: 5000, signal },
       );
       this.addTokenUsage(tokenUsage, response.usage);
 

@@ -2,7 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EmbeddingService } from '../../embedding/embedding.service';
 import { RetrievalService } from '../../retrieval/retrieval.service';
-import { extractQuerySignals } from '../../retrieval/query-signals';
+import {
+  extractQuerySignals,
+  stripSchoolName,
+} from '../../retrieval/query-signals';
 import {
   applyAdaptiveConfidenceFilter,
   enforceDocumentDiversity,
@@ -88,11 +91,13 @@ export class VectorChunkSelectionService {
     }
 
     const startedAt = Date.now();
-    const signals = extractQuerySignals(question);
+    // 학교 이름은 모든 문서에 공통이라 거리·exact 근거를 부풀리기만 한다.
+    const searchQuery = stripSchoolName(question);
+    const signals = extractQuerySignals(searchQuery);
 
     let queryEmbedding: number[];
     try {
-      queryEmbedding = await this.embeddingService.embedText(question);
+      queryEmbedding = await this.embeddingService.embedText(searchQuery);
     } catch {
       this.logger.warn('Question embedding failed; falling back to LLM');
       return null;

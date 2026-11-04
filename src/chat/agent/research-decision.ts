@@ -5,6 +5,7 @@ export type ResearchAssessment = {
   evidencePaths: string[];
   unresolvedQuestions: string[];
   reason: string;
+  skippedCandidates?: Array<{ path: string; reason: string }>;
 };
 
 export const FINISH_RESEARCH = 'finish_research';
@@ -31,6 +32,19 @@ export const finishResearchTool: LlmTool = {
           type: 'array',
           items: { type: 'string' },
           description: '아직 답하지 못한 하위 질문. complete일 때만 비어 있다.',
+        },
+        skippedCandidates: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              reason: { type: 'string' },
+            },
+            required: ['path', 'reason'],
+          },
+          description:
+            '질문과 무관하여 본문을 읽지 않을 후보 경로와 이유. 관련 후보는 먼저 읽는다.',
         },
         reason: {
           type: 'string',
@@ -87,6 +101,23 @@ export function readResearchAssessment(
     if (value.outcome === 'complete' && value.unresolvedQuestions.length !== 0)
       return null;
     if (value.outcome !== 'complete' && value.unresolvedQuestions.length === 0)
+      return null;
+    if (value.outcome === 'insufficient' && value.evidencePaths.length > 0)
+      return null;
+    if (
+      value.skippedCandidates !== undefined &&
+      (!Array.isArray(value.skippedCandidates) ||
+        value.skippedCandidates.length > 30 ||
+        !value.skippedCandidates.every(
+          (c) =>
+            c &&
+            typeof c.path === 'string' &&
+            c.path.length < 500 &&
+            typeof c.reason === 'string' &&
+            c.reason.trim().length > 0 &&
+            c.reason.length < 300,
+        ))
+    )
       return null;
     return { ...value, evidencePaths: [...new Set(value.evidencePaths)] };
   } catch {

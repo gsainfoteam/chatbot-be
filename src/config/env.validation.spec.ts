@@ -163,8 +163,10 @@ describe('agent configuration', () => {
       readAgentConfig({ get: (key: string) => config[key] } as never),
     ).toEqual({
       enabled: false,
+      enforceTimeBudget: false,
       maxRounds: 3,
       timeBudgetMs: 20000,
+      webTimeBudgetMs: 35000,
       modelTier: 'normal',
     });
   });
@@ -192,6 +194,85 @@ describe('agent configuration', () => {
     { AGENT_TIME_BUDGET_MS: 999 },
     { AGENT_MODEL_TIER: 'huge' },
   ])('rejects invalid agent settings %j', (settings) => {
+    expect(() => validate(baseEnv({ ...credentials, ...settings }))).toThrow();
+  });
+});
+
+describe('Ziggle MCP configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it('does not require Ziggle settings', () => {
+    expect(() => validate(baseEnv(credentials))).not.toThrow();
+  });
+
+  it('requires a long enough API key once the URL is set', () => {
+    expect(() =>
+      validate(
+        baseEnv({
+          ...credentials,
+          ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+        }),
+      ),
+    ).toThrow();
+    expect(() =>
+      validate(
+        baseEnv({
+          ...credentials,
+          ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+          ZIGGLE_MCP_API_KEY: 'short',
+        }),
+      ),
+    ).toThrow();
+  });
+
+  it('accepts a complete Ziggle setup', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        ZIGGLE_MCP_URL: 'https://api.ziggle.gistory.me/mcp',
+        ZIGGLE_MCP_API_KEY: 'k'.repeat(32),
+        ZIGGLE_MCP_TIMEOUT_MS: '3000',
+        ZIGGLE_NOTICE_WIDGET_KEY_IDS: '*',
+      }),
+    );
+    expect(result.ZIGGLE_MCP_TIMEOUT_MS).toBe(3000);
+  });
+});
+
+describe('web search configuration', () => {
+  const credentials = {
+    LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.example.com/v1',
+    LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+  };
+
+  it('keeps web search off by default', () => {
+    // 미설정이면 값이 비어 있고, WebSearchClient는 true일 때만 켠다.
+    expect(validate(baseEnv(credentials)).WEB_SEARCH_ENABLED).not.toBe(true);
+  });
+
+  it('accepts web search settings from string env values', () => {
+    const result = validate(
+      baseEnv({
+        ...credentials,
+        WEB_SEARCH_ENABLED: 'true',
+        WEB_SEARCH_TIMEOUT_MS: '12000',
+        AGENT_WEB_TIME_BUDGET_MS: '40000',
+        WEB_SEARCH_ALLOWED_DOMAINS: 'gist.ac.kr',
+      }),
+    );
+    expect(result.WEB_SEARCH_ENABLED).toBe(true);
+    expect(result.WEB_SEARCH_TIMEOUT_MS).toBe(12000);
+    expect(result.AGENT_WEB_TIME_BUDGET_MS).toBe(40000);
+  });
+
+  it.each([
+    { WEB_SEARCH_ENABLED: 'yes' },
+    { WEB_SEARCH_TIMEOUT_MS: 500 },
+    { AGENT_WEB_TIME_BUDGET_MS: 200000 },
+  ])('rejects invalid web search settings %j', (settings) => {
     expect(() => validate(baseEnv({ ...credentials, ...settings }))).toThrow();
   });
 });

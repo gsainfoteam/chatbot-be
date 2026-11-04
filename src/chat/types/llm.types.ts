@@ -10,6 +10,20 @@ export interface LlmMessage {
 }
 
 /**
+ * 멀티모달 요청의 content 파트
+ */
+type LlmContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/**
+ * 요청 메시지 형식. 응답 메시지(LlmMessage)의 content는 항상 문자열입니다.
+ */
+export interface LlmRequestMessage extends Omit<LlmMessage, 'content'> {
+  content: string | LlmContentPart[] | null;
+}
+
+/**
  * Function calling tool call 형식
  */
 export interface LlmToolCall {
@@ -26,7 +40,7 @@ export interface LlmToolCall {
  */
 export interface LlmRequest {
   model: string;
-  messages: LlmMessage[];
+  messages: LlmRequestMessage[];
   tools?: LlmTool[];
   tool_choice?:
     | 'auto'

@@ -13,6 +13,7 @@ import type {
   LlmMessage,
   LlmModelType,
   LlmRequest,
+  LlmRequestMessage,
   LlmResponse,
   LlmToolResult,
 } from '../types/llm.types';
@@ -72,7 +73,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   }
 
   async callLLM(
-    messages: LlmMessage[],
+    messages: LlmRequestMessage[],
     model?: string,
     options?: LlmCallOptions,
   ): Promise<LlmResponse> {
@@ -293,7 +294,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
     }
   }
 
-  protected summarizeMessages(messages: LlmMessage[]) {
+  protected summarizeMessages(messages: LlmRequestMessage[]) {
     const roleCounts: Record<string, number> = {};
     let assistantToolCalls = 0;
     let toolRoleMessages = 0;

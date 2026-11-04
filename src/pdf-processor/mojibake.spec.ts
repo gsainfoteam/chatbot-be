@@ -3,8 +3,21 @@ import {
   isLikelyMojibake,
   tryFixMojibake,
   normalizeExtractedText,
+  removeLoneSurrogates,
 } from './mojibake';
 import iconv from 'iconv-lite';
+
+describe('lone surrogates from broken font mappings', () => {
+  it('removes them because the LLM gateway rejects a request with them', () => {
+    expect(removeLoneSurrogates('지글 앱\uDFA7 설치\uDB24')).toBe(
+      '지글 앱 설치',
+    );
+  });
+
+  it('keeps characters outside the basic plane intact', () => {
+    expect(removeLoneSurrogates('안내 😀 끝')).toBe('안내 😀 끝');
+  });
+});
 
 describe('mojibake', () => {
   it('detects Korean UTF-8 misdecoded as latin1', () => {

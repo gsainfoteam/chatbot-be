@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ResourceContentService } from '../../services/resource-content.service';
+import { stripPageImageReferences } from '../../services/page-image-sources';
 import { withRo } from './korean-particle';
 import type {
   AgentDocument,
@@ -115,10 +116,11 @@ export function describeDocumentsForAgent(
   }
 
   const sections = fresh.map((doc) => {
+    const content = stripPageImageReferences(doc.content);
     const body =
-      doc.content.length > MAX_DOCUMENT_CHARS_FOR_AGENT
-        ? `${doc.content.slice(0, MAX_DOCUMENT_CHARS_FOR_AGENT)}\n[이하 생략]`
-        : doc.content;
+      content.length > MAX_DOCUMENT_CHARS_FOR_AGENT
+        ? `${content.slice(0, MAX_DOCUMENT_CHARS_FOR_AGENT)}\n[이하 생략]`
+        : content;
     return `### ${doc.path}\n${body}`;
   });
   if (repeated > 0) {

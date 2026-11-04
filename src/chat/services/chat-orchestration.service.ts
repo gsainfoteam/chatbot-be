@@ -37,11 +37,16 @@ import {
 } from '../prompts';
 import {
   ResourceContentService,
+  collectPageImages,
   formatRelevantDocument,
   type RelevantResourceContents,
   type ResourceInfo,
 } from './resource-content.service';
 import { ChatStreamTransport } from './chat-stream.transport';
+import {
+  type PageImageCandidate,
+  selectPageImageResources,
+} from './page-image-sources';
 import { RetrievalService } from '../../retrieval/retrieval.service';
 import { Trace } from '@gsainfoteam/nest-observability';
 import { UnansweredQuestionsRepository } from '../../unanswered-questions/unanswered-questions.repository';
@@ -77,6 +82,8 @@ interface ProcessUserQuestionStreamOptions {
 type GatheredContent = {
   content: string;
   usedResources: Array<{ path: string; formats: string[] }>;
+  /** 답변 근거 chunk가 참조하는 쪽 이미지 */
+  pageImages: PageImageCandidate[];
   /** 공지처럼 리소스 센터 밖의 출처 */
   sources: ExternalSource[];
   /** 에이전트가 거친 단계의 최종 상태. 빠른 경로면 비어 있다. */
@@ -325,6 +332,7 @@ export class ChatOrchestrationService {
             (d) => d.path === r.path || d.path.startsWith(r.path + '/'),
           ),
         ),
+        pageImages: collectPageImages(selected),
         sources: safeSources(
           agentResult.assessment
             ? agentResult.sources.filter((s) => selectedUrls.has(s.url))
@@ -375,6 +383,7 @@ export class ChatOrchestrationService {
     return {
       stream,
       resources: [],
+      pageImages: [],
       referencedDocumentCount: 0,
       usage,
       steps,
@@ -539,6 +548,8 @@ export class ChatOrchestrationService {
   ): Promise<{
     stream: Readable;
     resources: ResourceInfo[];
+    /** 사용한 chunk가 참조하는 쪽 이미지. 답변이 끝난 뒤 내용을 보고 고른다. */
+    pageImages: PageImageCandidate[];
     /** 답변 근거로 사용한 문서(chunk) 수. FE 참조 목록 노출 여부와 무관하다. */
     referencedDocumentCount: number;
     usage: LlmUsage;
@@ -601,6 +612,7 @@ export class ChatOrchestrationService {
           return {
             stream,
             resources: [],
+            pageImages: [],
             referencedDocumentCount: 0,
             usage,
             steps: [],
@@ -633,6 +645,7 @@ export class ChatOrchestrationService {
           resources: [],
           referencedDocumentCount: 0,
           usage,
+          pageImages: [],
           steps: [],
           sources: [],
         };
@@ -717,6 +730,7 @@ export class ChatOrchestrationService {
       return {
         stream: answer.stream,
         resources: answer.resources,
+        pageImages: relevantResult.pageImages,
         referencedDocumentCount:
           relevantResult.usedResources.length + relevantResult.sources.length,
         usage,
@@ -765,6 +779,7 @@ export class ChatOrchestrationService {
       const {
         stream,
         resources,
+        pageImages,
         referencedDocumentCount,
         usage: reasoningUsage,
         steps,
@@ -837,7 +852,16 @@ export class ChatOrchestrationService {
                   )
                 ? 'partial'
                 : 'answered';
-        const answerResources = answered ? resources : [];
+        const answerResources = answered
+          ? [
+              ...resources,
+              ...selectPageImageResources(
+                streamResult.accumulatedContent,
+                userQuestion,
+                pageImages,
+              ),
+            ]
+          : [];
         const usedSources = answered ? answerOutput.usedSources() : [];
         const answerSources = usedSources.filter((s) => s.kind === 'notice');
         const answerWebSources = usedSources.filter((s) => s.kind === 'web');

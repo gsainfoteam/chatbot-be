@@ -4,6 +4,7 @@ import type {
   LlmMessage,
   LlmModelType,
   LlmRequest,
+  LlmRequestMessage,
   LlmResponse,
   LlmTool,
   LlmToolResult,
@@ -32,7 +33,7 @@ export interface LlmClient {
   getModel(type: LlmModelType): string;
 
   callLLM(
-    messages: LlmMessage[],
+    messages: LlmRequestMessage[],
     model?: string,
     options?: LlmCallOptions,
   ): Promise<LlmResponse>;

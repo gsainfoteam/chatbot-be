@@ -8,12 +8,17 @@ import { ResourceSelectionService } from './resource-selection.service';
 import { VectorChunkSelectionService } from './vector-chunk-selection.service';
 import type { LlmUsage } from '../types/llm.types';
 import { Trace } from '@gsainfoteam/nest-observability';
+import {
+  extractPageImages,
+  type PageImageCandidate,
+  stripPageImageReferences,
+} from './page-image-sources';
 
 /**
  * FE·SSE용 참조 리소스 정보
  */
 export interface ResourceInfo {
-  path: string; // 문서 제목 (PDF/PNG인 경우 format 포함)
+  path: string; // 문서 제목 (PDF/PNG인 경우 format 포함) 또는 쪽 이미지 설명
   formats: string[];
   url: string;
 }
@@ -24,13 +29,22 @@ export interface RelevantResourceContents {
   usedResources: Array<{ path: string; formats: string[] }>;
   /** 선별된 chunk 본문. 여러 번 검색한 결과를 경로 기준으로 합칠 때 쓴다. */
   documents: Array<{ path: string; content: string }>;
+  /** 선별된 chunk가 참조하는 쪽 이미지. 답변이 끝난 뒤 내용을 보고 고른다. */
+  pageImages: PageImageCandidate[];
   /** 벡터 선별이 강한 근거를 찾았는지. LLM 선별이나 선별 실패는 undefined. */
   confident?: boolean;
 }
 
 /** 답변 LLM에 넘기는 chunk 본문 한 개의 형식 */
 export function formatRelevantDocument(content: string): string {
-  return `\n\n## 관련 정보\n\n${content}`;
+  return `\n\n## 관련 정보\n\n${stripPageImageReferences(content)}`;
+}
+
+/** 선별된 chunk 본문에서 쪽 이미지 후보를 모은다. */
+export function collectPageImages(
+  documents: Array<{ path: string; content: string }>,
+): PageImageCandidate[] {
+  return documents.flatMap((doc) => extractPageImages(doc.content, doc.path));
 }
 
 /**
@@ -290,6 +304,7 @@ export class ResourceContentService {
         content: '',
         usedResources: [],
         documents: [],
+        pageImages: [],
         confident: chunkSelection.confident,
       };
     }
@@ -319,6 +334,7 @@ export class ResourceContentService {
         content: '',
         usedResources: [],
         documents: [],
+        pageImages: [],
         confident: chunkSelection.confident,
       };
     }
@@ -368,6 +384,7 @@ export class ResourceContentService {
         path,
         content,
       })),
+      pageImages: collectPageImages(documentCandidates),
       confident: chunkSelection.confident,
     };
   }
@@ -399,7 +416,7 @@ export class ResourceContentService {
         signal,
       );
     }
-    return { content: '', usedResources: [], documents: [] };
+    return { content: '', usedResources: [], documents: [], pageImages: [] };
   }
 
   private generateResourceUrl(resourcePath: string): string {

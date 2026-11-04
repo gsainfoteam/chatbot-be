@@ -153,6 +153,8 @@ describe('ChatOrchestrationService', () => {
     noticeWidgetKeyIds?: string[];
     /** 웹 검색을 쓸 수 있는 위젯 키 ID */
     webWidgetKeyIds?: string[];
+    /** 검색된 chunk 본문. 없으면 경로에 맞는 기본 본문 */
+    chunkContent?: string;
   };
 
   function setup(listResult: ListResourcesResult, options: SetupOptions = {}) {
@@ -162,9 +164,11 @@ describe('ChatOrchestrationService', () => {
       getContentsByPaths: jest.fn(async (paths: string[]) =>
         paths.map((path) => ({
           path,
-          content: path.includes('졸업')
-            ? '졸업요건 문서 본문입니다.'
-            : '수강신청 문서 본문입니다.',
+          content:
+            options.chunkContent ??
+            (path.includes('졸업')
+              ? '졸업요건 문서 본문입니다.'
+              : '수강신청 문서 본문입니다.'),
         })),
       ),
     };
@@ -349,6 +353,67 @@ describe('ChatOrchestrationService', () => {
         }),
       }),
     );
+  });
+
+  describe('page images in the answer', () => {
+    const CHUNK =
+      '졸업하려면 총 130학점을 이수해야 합니다.\n\n![졸업 요건 표](IMAGE:page-5)';
+    const IMAGE_URL = `${encodeURIComponent('학사편람')}/images/page-5.png`;
+
+    it('sends the image of the page the answer draws on', async () => {
+      const { run, writtenSse, chatService } = setup(createCatalog(), {
+        chunkContent: CHUNK,
+      });
+
+      await run('졸업 요건 알려줘', undefined, '총 130학점을 이수해야 합니다.');
+
+      expect(writtenSse()).toContain(IMAGE_URL);
+      expect(writtenSse()).toContain('"formats":["png"]');
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        'session-id',
+        expect.objectContaining({
+          role: MessageRole.ASSISTANT,
+          metadata: expect.objectContaining({
+            resources: expect.arrayContaining([
+              expect.objectContaining({ url: IMAGE_URL }),
+            ]),
+          }),
+        }),
+      );
+    });
+
+    it('sends no image with an answer that declines', async () => {
+      const { run, writtenSse } = setup(createCatalog(), {
+        chunkContent: CHUNK,
+      });
+
+      await run('졸업 요건 알려줘', undefined, NO_ANSWER_MESSAGE);
+
+      expect(writtenSse()).not.toContain(IMAGE_URL);
+    });
+
+    it('sends the image of a page the agent found', async () => {
+      const { run, writtenSse, llmClient } = setup(createCatalog(), {
+        agentEnabled: true,
+        vectorSelection: { rootPaths: [], detailPaths: [] },
+        agentRun: async () => ({
+          documents: [{ path: '학사편람/졸업요건', content: CHUNK }],
+          usedResources: [{ path: '학사편람/졸업요건', formats: ['md'] }],
+          sources: [],
+          steps: [],
+          rounds: 1,
+          stopReason: 'ready',
+        }),
+      });
+
+      await run('졸업 요건 알려줘', undefined, '총 130학점을 이수해야 합니다.');
+
+      const [, toolResults] = llmClient.generateFinalResponseStream.mock
+        .calls[0] as unknown as [unknown, Array<{ content: string }>];
+      expect(toolResults[0].content).toContain('졸업 요건 표');
+      expect(toolResults[0].content).not.toContain('IMAGE:page-5');
+      expect(writtenSse()).toContain(IMAGE_URL);
+    });
   });
 
   it('does not record an unanswered question when documents were referenced', async () => {

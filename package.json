@@ -47,6 +47,7 @@
     "@gsainfoteam/nest-observability": "^0.0.9",
     "@kubiks/otel-drizzle": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.25.2",
+    "@napi-rs/canvas": "^1.0.0",
     "@nestjs/axios": "^4.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",

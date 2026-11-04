@@ -85,4 +85,13 @@ describe('describeDocumentsForAgent', () => {
     expect(content).not.toContain('첫 본문');
     expect(content).toContain('이미 확인한 문서 1개는 생략');
   });
+
+  it('shows page images by their description only', () => {
+    const content = describeDocumentsForAgent(
+      [{ path: 'A/1', content: '본문\n\n![졸업 요건 표](IMAGE:page-5)' }],
+      new Set(),
+    );
+    expect(content).toContain('졸업 요건 표');
+    expect(content).not.toContain('IMAGE:page-5');
+  });
 });

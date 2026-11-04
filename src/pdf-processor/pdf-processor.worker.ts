@@ -13,6 +13,7 @@ import { GcsStorageService } from './gcs-storage.service';
 import { parseFiniteNumber } from './parse-finite-number';
 import {
   PdfPipelineService,
+  type PageImageSink,
   type PipelineChunk,
   type PipelineResult,
 } from './pdf-pipeline.service';
@@ -93,9 +94,20 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
   private async requeueStale(): Promise<void> {
     try {
       const staleBefore = new Date(Date.now() - this.staleProcessingMs);
+      const activeIds = [...this.activeDocumentIds];
+      const stuck = await this.documentsRepo.failRepeatedlyStuck(
+        staleBefore,
+        activeIds,
+      );
+      for (const { id, resourceName } of stuck) {
+        this.logger.error(
+          `Failed document stuck twice: id=${id} name=${resourceName}`,
+        );
+        await this.cleanupGeneratedArtifacts(resourceName);
+      }
       const count = await this.documentsRepo.requeueStaleProcessing(
         staleBefore,
-        [...this.activeDocumentIds],
+        activeIds,
       );
       this.lastStaleCheckAt = Date.now();
       if (count > 0) {
@@ -152,7 +164,19 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     const heartbeat = this.startHeartbeat(doc.id, processingToken);
     let generatedArtifactsMayExist = false;
     try {
-      const result = await this.runPipeline(doc);
+      const result = await this.runPipeline(doc, async (pageNumber, png) => {
+        // A deleted document would otherwise get images nothing cleans up.
+        if (
+          !(await this.documentsRepo.heartbeatProcessing(
+            doc.id,
+            processingToken,
+          ))
+        ) {
+          throw new Error('Processing ownership lost');
+        }
+        generatedArtifactsMayExist = true;
+        await this.gcs.uploadPageImage(resourceName, pageNumber, png);
+      });
 
       if (!result.chunks.length) {
         throw new Error(
@@ -222,7 +246,10 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async runPipeline(doc: Document): Promise<PipelineResult> {
+  private async runPipeline(
+    doc: Document,
+    onPageImage: PageImageSink,
+  ): Promise<PipelineResult> {
     if (doc.sourceType === 'text') {
       if (!doc.sourceText?.trim()) {
         throw new Error(`Text document has no source text: id=${doc.id}`);
@@ -234,7 +261,11 @@ export class PdfProcessorWorker implements OnModuleInit, OnModuleDestroy {
     }
 
     const pdfBytes = await this.gcs.downloadPdf(doc.resourceName);
-    return this.pipeline.processPdf(pdfBytes, `${doc.resourceName}.pdf`);
+    return this.pipeline.processPdf(
+      pdfBytes,
+      `${doc.resourceName}.pdf`,
+      onPageImage,
+    );
   }
 
   /**

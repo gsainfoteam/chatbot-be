@@ -23,6 +23,30 @@ export interface ResourceInfo {
   url: string;
 }
 
+export interface RelevantResourceContents {
+  /** 답변 LLM에 넘길 본문. documents를 `formatRelevantDocument`로 이어 붙인 것 */
+  content: string;
+  usedResources: Array<{ path: string; formats: string[] }>;
+  /** 선별된 chunk 본문. 여러 번 검색한 결과를 경로 기준으로 합칠 때 쓴다. */
+  documents: Array<{ path: string; content: string }>;
+  /** 선별된 chunk가 참조하는 쪽 이미지. 답변이 끝난 뒤 내용을 보고 고른다. */
+  pageImages: PageImageCandidate[];
+  /** 벡터 선별이 강한 근거를 찾았는지. LLM 선별이나 선별 실패는 undefined. */
+  confident?: boolean;
+}
+
+/** 답변 LLM에 넘기는 chunk 본문 한 개의 형식 */
+export function formatRelevantDocument(content: string): string {
+  return `\n\n## 관련 정보\n\n${stripPageImageReferences(content)}`;
+}
+
+/** 선별된 chunk 본문에서 쪽 이미지 후보를 모은다. */
+export function collectPageImages(
+  documents: Array<{ path: string; content: string }>,
+): PageImageCandidate[] {
+  return documents.flatMap((doc) => extractPageImages(doc.content, doc.path));
+}
+
 /**
  * DB Retrieval 기반 리소스 내용 fetch·파싱·FE 리소스 조립
  */
@@ -238,11 +262,8 @@ export class ResourceContentService {
     resources: ListResourceItem[],
     catalogChunks?: Array<{ path: string }>,
     tokenUsage?: LlmUsage,
-  ): Promise<{
-    content: string;
-    usedResources: Array<{ path: string; formats: string[] }>;
-    pageImages: PageImageCandidate[];
-  }> {
+    signal?: AbortSignal,
+  ): Promise<RelevantResourceContents> {
     this.logger.log(
       `[DEBUG] 1차 선별(description 기준) 입력: 상위 리소스 ${resources.length}개, chunk 총 ${resources.reduce((s, r) => s + (r.chunks?.length ?? 0), 0)}개 → LLM에 전달`,
     );
@@ -254,6 +275,7 @@ export class ResourceContentService {
         question,
         5,
       );
+    signal?.throwIfAborted();
     if (chunkSelection) {
       this.logger.log(
         `[PERF] selectRelevantChunkPaths(vector): ${Date.now() - t0}ms`,
@@ -265,18 +287,26 @@ export class ResourceContentService {
           resources,
           5,
           tokenUsage,
+          signal,
         );
       this.logger.log(
         `[PERF] selectRelevantChunkPaths(LLM fallback): ${Date.now() - t0}ms`,
       );
     }
 
+    signal?.throwIfAborted();
     const chunkPaths = [
       ...chunkSelection.rootPaths,
       ...chunkSelection.detailPaths,
     ];
     if (chunkPaths.length === 0) {
-      return { content: '', usedResources: [], pageImages: [] };
+      return {
+        content: '',
+        usedResources: [],
+        documents: [],
+        pageImages: [],
+        confident: chunkSelection.confident,
+      };
     }
 
     t0 = Date.now();
@@ -300,7 +330,13 @@ export class ResourceContentService {
     );
 
     if (documentCandidates.length === 0) {
-      return { content: '', usedResources: [], pageImages: [] };
+      return {
+        content: '',
+        usedResources: [],
+        documents: [],
+        pageImages: [],
+        confident: chunkSelection.confident,
+      };
     }
 
     this.logger.log(
@@ -311,9 +347,7 @@ export class ResourceContentService {
     const mdUsed: Array<{ path: string; formats: string[] }> = [];
 
     for (const doc of documentCandidates) {
-      contents.push(
-        `\n\n## 관련 정보\n\n${stripPageImageReferences(doc.content)}`,
-      );
+      contents.push(formatRelevantDocument(doc.content));
       mdUsed.push({ path: doc.path, formats: ['md'] });
     }
 
@@ -346,9 +380,12 @@ export class ResourceContentService {
     return {
       content: contents.join('\n'),
       usedResources: finalUsedResources,
-      pageImages: documentCandidates.flatMap((doc) =>
-        extractPageImages(doc.content, doc.path),
-      ),
+      documents: documentCandidates.map(({ path, content }) => ({
+        path,
+        content,
+      })),
+      pageImages: collectPageImages(documentCandidates),
+      confident: chunkSelection.confident,
     };
   }
 
@@ -361,11 +398,9 @@ export class ResourceContentService {
     question: string,
     listResult: ListResourcesResult,
     tokenUsage?: LlmUsage,
-  ): Promise<{
-    content: string;
-    usedResources: Array<{ path: string; formats: string[] }>;
-    pageImages: PageImageCandidate[];
-  }> {
+    signal?: AbortSignal,
+  ): Promise<RelevantResourceContents> {
+    signal?.throwIfAborted();
     const isNewFormat =
       listResult.resources &&
       listResult.resources.length > 0 &&
@@ -378,9 +413,10 @@ export class ResourceContentService {
         listResult.resources!,
         listResult.chunks,
         tokenUsage,
+        signal,
       );
     }
-    return { content: '', usedResources: [], pageImages: [] };
+    return { content: '', usedResources: [], documents: [], pageImages: [] };
   }
 
   private generateResourceUrl(resourcePath: string): string {

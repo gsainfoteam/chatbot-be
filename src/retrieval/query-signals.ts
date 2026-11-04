@@ -155,6 +155,26 @@ export function extractExactSignals(normalized: string): ExactSignal[] {
   return signals;
 }
 
+/**
+ * 학교 이름과 바로 뒤의 조사. 모든 문서가 GIST 문서라 질의의 학교 이름은 문서를 구분하지 못하고,
+ * 오히려 "GIST 안강훈 교수"처럼 문서에 없는 질문도 임베딩 거리를 가깝게 만든다.
+ */
+const SCHOOL_NAME =
+  /(?:\bGIST\b|지스트|광주\s*과학\s*기술원|광주\s*과기원)(?:의|에서|에|은|는|이|가|을|를|와|과)?/gi;
+
+/** 학교 이름을 빼고 남는 글자가 이보다 적으면 원래 질의를 쓴다. 예: "GIST 소개해줘" */
+const MIN_REMAINING_CHARS = 4;
+
+/**
+ * 검색용 질의에서 학교 이름을 뺀다. 빼고 나면 의미가 남지 않는 짧은 질의는 그대로 둔다.
+ */
+export function stripSchoolName(question: string): string {
+  const stripped = normalizeQuery(question.replace(SCHOOL_NAME, ' '));
+  return stripped.replace(/\s/g, '').length >= MIN_REMAINING_CHARS
+    ? stripped
+    : normalizeQuery(question);
+}
+
 /** 질의를 정규화하고 exact 신호를 뽑습니다. */
 export function extractQuerySignals(question: string): QuerySignals {
   const normalized = normalizeQuery(question ?? '');

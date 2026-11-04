@@ -12,12 +12,14 @@ export type UsedResource = { path: string; formats: string[] };
 
 /** 내부 문서가 아닌 출처. FE `resources`(리소스 센터 PDF)와 섞지 않고 따로 보낸다. */
 export type ExternalSource = {
-  kind: 'notice';
+  kind: 'notice' | 'web';
   id: string;
   title: string;
   url: string;
   /** 본문까지 읽었는지. 표시 순서를 정할 때 쓴다. */
   opened: boolean;
+  /** 웹 출처가 학교 공식 도메인인지. 공지에는 없다. */
+  official?: boolean;
 };
 
 /** 한 턴 동안 모든 도구가 공유하는 맥락 */

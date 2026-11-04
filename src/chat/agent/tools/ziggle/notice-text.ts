@@ -80,6 +80,8 @@ const STUDENT_ID_LIST_THRESHOLD = 3;
  */
 export function maskPersonalInfo(text: string): string {
   let masked = text
+    .normalize('NFKC')
+    .replace(/[\u200b-\u200f\u2060\ufeff]/g, '')
     .replace(RESIDENT_NUMBER, '[주민등록번호 가림]')
     .replace(MOBILE_NUMBER, '[휴대전화 번호 가림]');
   const studentIds = masked.match(STUDENT_ID) ?? [];

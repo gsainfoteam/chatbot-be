@@ -151,6 +151,8 @@ describe('ChatOrchestrationService', () => {
     agentRun?: (input: AgentRunInput) => Promise<AgentRunResult>;
     /** Ziggle 공지를 쓸 수 있는 위젯 키 ID */
     noticeWidgetKeyIds?: string[];
+    /** 웹 검색을 쓸 수 있는 위젯 키 ID */
+    webWidgetKeyIds?: string[];
   };
 
   function setup(listResult: ListResourcesResult, options: SetupOptions = {}) {
@@ -208,6 +210,11 @@ describe('ChatOrchestrationService', () => {
         (...args: unknown[]) => Promise<RelevantChunkSelection | null>
       >(async () => options.vectorSelection ?? null),
     };
+    const webSearchClient = {
+      isEnabledFor: jest.fn((widgetKeyId: string | undefined) =>
+        (options.webWidgetKeyIds ?? []).includes(widgetKeyId ?? ''),
+      ),
+    };
     const ziggleNoticeClient = {
       isEnabledFor: jest.fn((widgetKeyId: string | undefined) =>
         (options.noticeWidgetKeyIds ?? []).includes(widgetKeyId ?? ''),
@@ -248,6 +255,7 @@ describe('ChatOrchestrationService', () => {
       unansweredQuestionsRepository as never,
       agentLoopService as never,
       ziggleNoticeClient as never,
+      webSearchClient as never,
     );
 
     const reply = {
@@ -935,6 +943,139 @@ describe('ChatOrchestrationService', () => {
 
         expect(agentLoopService.run).toHaveBeenCalledTimes(1);
         expect(llmClient.generateFinalResponseStream).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('web search', () => {
+      it.each([
+        ['w1', ['search_documents', 'search_web']],
+        ['other', ['search_documents']],
+      ])('gives widget %s the tools %j', async (widgetKeyId, enabledTools) => {
+        const { run, agentLoopService } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: weakSelection,
+          webWidgetKeyIds: ['w1'],
+        });
+
+        await run('기숙사 외박 어떻게 해?', { widgetKeyId });
+
+        expect(agentLoopService.run).toHaveBeenCalledWith(
+          expect.objectContaining({ enabledTools }),
+        );
+      });
+
+      it('sends web sources in their own event so notices do not crowd them out', async () => {
+        const notice = (id: string) => ({
+          kind: 'notice' as const,
+          id,
+          title: `공지 ${id}`,
+          url: `https://ziggle.gistory.me/notice/${id}`,
+          opened: false,
+        });
+        const web = (url: string, official: boolean) => ({
+          kind: 'web' as const,
+          id: url,
+          title: new URL(url).hostname,
+          url,
+          opened: false,
+          official,
+        });
+        const { run, writtenSse, chatService } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: { rootPaths: [], detailPaths: [] },
+          webWidgetKeyIds: ['w1'],
+          agentRun: async () => ({
+            documents: [{ path: 'web-search/x', content: '[웹 검색] 결과' }],
+            usedResources: [],
+            sources: [
+              notice('1'),
+              notice('2'),
+              notice('3'),
+              notice('4'),
+              web('https://blog.example.com/a', false),
+              web('https://dorm.gist.ac.kr/guide', true),
+            ],
+            steps: [],
+            rounds: 2,
+            stopReason: 'ready',
+          }),
+        });
+
+        await run(
+          '기숙사 외박 어떻게 해?',
+          { widgetKeyId: 'w1' },
+          '생활관 안내 [cite:1] [cite:6]',
+        );
+
+        const events = writtenSse()
+          .split('\n\n')
+          .map((line) => line.replace(/^data: /, ''))
+          .filter((line) => line.startsWith('{"type":"'))
+          .map(
+            (line) =>
+              JSON.parse(line) as {
+                type: string;
+                sources?: Array<{ id: string; kind: string }>;
+              },
+          );
+        const notices = events.find((event) => event.type === 'sources');
+        const webSources = events.find((event) => event.type === 'web_sources');
+        expect(notices?.sources?.map((source) => source.id)).toEqual(['1']);
+        // 수집 목록이 아니라 실제 인용한 출처만 나온다.
+        expect(webSources?.sources?.map((source) => source.id)).toEqual([
+          'https://dorm.gist.ac.kr/guide',
+        ]);
+        expect(chatService.createMessage).toHaveBeenCalledWith(
+          'session-id',
+          expect.objectContaining({
+            role: MessageRole.ASSISTANT,
+            metadata: expect.objectContaining({
+              sources: expect.arrayContaining([
+                expect.objectContaining({ kind: 'notice' }),
+              ]),
+              webSources: expect.arrayContaining([
+                expect.objectContaining({ kind: 'web', official: true }),
+              ]),
+            }),
+          }),
+        );
+      });
+
+      it('adds web answer rules when web findings are in the materials', async () => {
+        const { run, llmClient } = setup(createCatalog(), {
+          agentEnabled: true,
+          vectorSelection: { rootPaths: [], detailPaths: [] },
+          webWidgetKeyIds: ['w1'],
+          agentRun: async () => ({
+            documents: [
+              {
+                path: 'web-search/gist기숙사외박',
+                content:
+                  "[웹 검색] 'GIST 기숙사 외박' 검색 결과\n- 외박은 생활관 시스템에서 신청한다. (출처: dorm.gist.ac.kr, 공식)",
+              },
+            ],
+            usedResources: [],
+            sources: [
+              {
+                kind: 'web',
+                id: 'https://dorm.gist.ac.kr/guide',
+                title: 'dorm.gist.ac.kr',
+                url: 'https://dorm.gist.ac.kr/guide',
+                opened: false,
+              },
+            ],
+            steps: [],
+            rounds: 2,
+            stopReason: 'ready',
+          }),
+        });
+
+        await run('기숙사 외박 어떻게 해?', { widgetKeyId: 'w1' });
+
+        const [messages] = llmClient.generateFinalResponseStream.mock
+          .calls[0] as unknown as [Array<{ role: string; content: string }>];
+        expect(messages[0].content).toContain('### 8. 웹 검색 자료');
+        expect(messages[0].content).not.toContain('### 7. Ziggle 공지 자료');
       });
     });
 

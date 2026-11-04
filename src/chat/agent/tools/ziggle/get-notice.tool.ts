@@ -99,14 +99,14 @@ export class GetNoticeTool implements AgentTool {
         };
       }
       return {
-        content: `${reason} 읽을 수 없고 요약도 없습니다. 제목과 원문 링크만 답변 자료로 남깁니다.`,
+        content: `[path=${noticeDocumentPath(id, 'body')}] ${reason} 읽을 수 없고 요약도 없습니다. 제목과 원문 링크만 답변 자료로 남깁니다.`,
         resultCount: 0,
         resolvedCandidates: [`ziggle-notice/${id}`],
         documents: [
           {
             path: noticeDocumentPath(id, 'body'),
             sourceUrls: [source.url],
-            content: `${NOTICE_MARKER} ${known.title}\n\n(${reason} 내용을 확인할 수 없는 공지입니다. 세부 내용은 공지 원문에서 확인해야 합니다.)`,
+            content: `${NOTICE_MARKER} ${known.title}\n원문 링크: ${source.url}\n\n(${reason} 내용을 확인할 수 없는 공지입니다. 세부 내용은 공지 원문에서 확인해야 합니다.)`,
           },
         ],
         sources: [source],
@@ -125,7 +125,7 @@ export class GetNoticeTool implements AgentTool {
         {
           path: noticeDocumentPath(id, 'body'),
           sourceUrls: [source.url],
-          content: `${NOTICE_MARKER} ${known.title}\n\n${body}`,
+          content: `${NOTICE_MARKER} ${known.title}\n원문 링크: ${source.url}\n\n${body}`,
         },
       ],
       sources: [source],

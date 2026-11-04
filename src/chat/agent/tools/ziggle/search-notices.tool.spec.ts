@@ -105,7 +105,8 @@ describe('SearchNoticesTool', () => {
       {
         path: 'ziggle-notice/10/summary',
         sourceUrls: ['https://ziggle.example/notice/10'],
-        content: '[Ziggle 공지] 장학생 선발\n요약: 장학생 선발 요약',
+        content:
+          '[Ziggle 공지] 장학생 선발\n원문 링크: https://ziggle.example/notice/10\n요약: 장학생 선발 요약',
       },
     ]);
     expect(result.sources).toEqual([

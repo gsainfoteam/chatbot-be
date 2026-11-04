@@ -43,13 +43,15 @@ export class AnswerOutputFilter {
   }
 
   push(text: string, final = false): string {
-    this.pending += text;
+    this.pending += text
+      .normalize('NFKC')
+      .replace(/[\u200b-\u200f\u2060\ufeff]/g, '');
     let cut = final
       ? this.pending.length
       : Math.max(0, this.pending.length - 128);
     if (!final) {
       // Never split a number-like run (including international and spaced numbers).
-      for (const match of this.pending.matchAll(/[+\d][\d\s().+\-]*/g)) {
+      for (const match of this.pending.matchAll(/[+\d][\d\s().+-]*/g)) {
         if (match.index < cut && match.index + match[0].length > cut)
           cut = match.index;
       }
@@ -78,15 +80,17 @@ export class AnswerOutputFilter {
     const replacements: string[] = [];
     const link = (source: ExternalSource): string => {
       this.cited.add(source.url);
-      const title = source.title.replace(/[\[\]\\\r\n]/g, ' ');
+      const title = source.title.replace(/[[\]\\\r\n]/g, ' ');
       const url = source.url.replace(/\(/g, '%28').replace(/\)/g, '%29');
       replacements.push(`[${title}](${url})`);
-      return `\u0000${replacements.length - 1}\u0000`;
+      return `\ue000${replacements.length - 1}\ue000`;
     };
-    let result = text.replace(/\[cite:(\d+)\]/g, (_, id: string) => {
-      const source = this.sources[Number(id) - 1];
-      return source ? link(source) : '';
-    });
+    let result = text
+      .replace(/\ue000/g, '')
+      .replace(/\[cite:(\d+)\]/g, (_, id: string) => {
+        const source = this.sources[Number(id) - 1];
+        return source ? link(source) : '';
+      });
     result = result.replace(
       /\[([^\]\n]*)\]\(([^\n)]*)\)/g,
       (_, label: string, url: string) => {
@@ -100,7 +104,7 @@ export class AnswerOutputFilter {
     });
     result = maskPersonalInfo(result).replace(/\[cite:[^\]\n]*(?:\]|$)/g, '');
     return result.replace(
-      /\u0000(\d+)\u0000/g,
+      /\ue000(\d+)\ue000/g,
       (_, i: string) => replacements[Number(i)] ?? '',
     );
   }

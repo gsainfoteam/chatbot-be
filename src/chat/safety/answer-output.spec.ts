@@ -13,6 +13,8 @@ describe('streamed answer privacy and citations', () => {
       '010-1234-5678',
       '+82 10 1234 5678',
       '010 1234 5678',
+      '０１０－１２３４－５６７８',
+      '010\u200b-1234\u200b-5678',
     ]) {
       const text = '담당자 ' + phone + ' 입니다. ' + '후속 설명 '.repeat(60);
       for (let split = 0; split < text.length; split++) {

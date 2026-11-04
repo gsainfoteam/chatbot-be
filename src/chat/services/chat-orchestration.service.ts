@@ -1,5 +1,6 @@
 import {
   GistScopePolicy,
+  type ScopeDiagnostics,
   SCOPE_REFUSAL,
   SCOPE_UNAVAILABLE,
 } from '../safety/gist-scope.policy';
@@ -27,6 +28,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   FINAL_RESPONSE_SYSTEM_PROMPT,
   buildNoticeAnswerRules,
+  buildWebAnswerRules,
   formatSeoulDate,
   NO_RELEVANT_MATERIALS_SYSTEM_PROMPT,
   ANSWER_GROUNDING_REMINDER,
@@ -52,6 +54,11 @@ import { SEARCH_NOTICES_TOOL_NAME } from '../agent/tools/ziggle/search-notices.t
 import { GET_NOTICE_TOOL_NAME } from '../agent/tools/ziggle/get-notice.tool';
 import { ZiggleNoticeClient } from '../agent/tools/ziggle/ziggle-notice.client';
 import { NOTICE_MARKER } from '../agent/tools/ziggle/notice-registry';
+import {
+  SEARCH_WEB_TOOL_NAME,
+  WEB_MARKER,
+} from '../agent/tools/web/search-web.tool';
+import { WebSearchClient } from '../agent/tools/web/web-search.client';
 
 export type { ResourceInfo };
 
@@ -106,6 +113,7 @@ export class ChatOrchestrationService {
     private readonly unansweredQuestionsRepository: UnansweredQuestionsRepository,
     private readonly agentLoopService: AgentLoopService,
     private readonly ziggleNoticeClient: ZiggleNoticeClient,
+    private readonly webSearchClient: WebSearchClient,
   ) {}
 
   private createEmptyUsage(): LlmUsage {
@@ -218,6 +226,8 @@ export class ChatOrchestrationService {
     const agentEnabled = this.agentLoopService.isEnabled();
     const noticesEnabled =
       agentEnabled && this.ziggleNoticeClient.isEnabledFor(options.widgetKeyId);
+    const webEnabled =
+      agentEnabled && this.webSearchClient.isEnabledFor(options.widgetKeyId);
     const { route, reason } = retry
       ? { route: 'agent' as const, reason: 'no-answer-retry' }
       : decideAnswerRoute({
@@ -227,11 +237,16 @@ export class ChatOrchestrationService {
           noticeIntent: noticesEnabled && hasNoticeIntent(userQuestion),
         });
     this.logger.log(
-      `[DEBUG] answer route: ${route} (${reason}), notices=${noticesEnabled}`,
+      `[DEBUG] answer route: ${route} (${reason}), notices=${noticesEnabled}, web=${webEnabled}`,
     );
     options.signal?.throwIfAborted();
     if (options.diagnostics)
-      Object.assign(options.diagnostics, { route, routeReason: reason });
+      Object.assign(options.diagnostics, {
+        route,
+        routeReason: reason,
+        noticesEnabled,
+        webEnabled,
+      });
     if (route === 'direct') {
       return { ...initial, sources: [], steps: [], route, initial };
     }
@@ -253,13 +268,13 @@ export class ChatOrchestrationService {
           documents: initial.documents,
           usedResources: initial.usedResources,
         },
-        enabledTools: noticesEnabled
-          ? [
-              SEARCH_DOCUMENTS_TOOL_NAME,
-              SEARCH_NOTICES_TOOL_NAME,
-              GET_NOTICE_TOOL_NAME,
-            ]
-          : [SEARCH_DOCUMENTS_TOOL_NAME],
+        enabledTools: [
+          SEARCH_DOCUMENTS_TOOL_NAME,
+          ...(noticesEnabled
+            ? [SEARCH_NOTICES_TOOL_NAME, GET_NOTICE_TOOL_NAME]
+            : []),
+          ...(webEnabled ? [SEARCH_WEB_TOOL_NAME] : []),
+        ],
         onStep: recordStep,
       });
       if (options.diagnostics)
@@ -295,9 +310,16 @@ export class ChatOrchestrationService {
         : agentResult.documents;
       const selectedUrls = new Set(selected.flatMap((d) => d.sourceUrls ?? []));
       return {
-        content: selected
-          .map((doc) => formatRelevantDocument(doc.content))
-          .join('\n'),
+        content:
+          selected
+            .map((doc) => formatRelevantDocument(doc.content))
+            .join('\n') +
+          (selected.length && agentResult.assessment?.outcome === 'partial'
+            ? '\n[조사에서 확인하지 못한 항목 — 답변에서도 확인 불가를 명시하고 추정하지 말 것]\n' +
+              agentResult.assessment.unresolvedQuestions
+                .map((q) => `- ${maskPersonalInfo(q)}`)
+                .join('\n')
+            : ''),
         usedResources: agentResult.usedResources.filter((r) =>
           selected.some(
             (d) => d.path === r.path || d.path.startsWith(r.path + '/'),
@@ -445,10 +467,14 @@ export class ChatOrchestrationService {
     const messages: LlmMessage[] = [
       {
         role: 'system',
-        content: relevantResult.content.includes(NOTICE_MARKER)
-          ? FINAL_RESPONSE_SYSTEM_PROMPT +
-            buildNoticeAnswerRules(formatSeoulDate(new Date()))
-          : FINAL_RESPONSE_SYSTEM_PROMPT,
+        content:
+          FINAL_RESPONSE_SYSTEM_PROMPT +
+          (relevantResult.content.includes(NOTICE_MARKER)
+            ? buildNoticeAnswerRules(formatSeoulDate(new Date()))
+            : '') +
+          (relevantResult.content.includes(WEB_MARKER)
+            ? buildWebAnswerRules()
+            : ''),
       },
       ...historyMessages.map((m) => ({
         ...m,
@@ -523,6 +549,10 @@ export class ChatOrchestrationService {
   }> {
     const perfTurnStart = Date.now();
     const usage = this.createEmptyUsage();
+    if (options.diagnostics) {
+      options.diagnostics.observedUsage = usage;
+      options.diagnostics.scopeModel = this.llmClient.getModel('light');
+    }
 
     try {
       let t0 = Date.now();
@@ -546,13 +576,22 @@ export class ChatOrchestrationService {
 
       options.signal?.throwIfAborted();
       if (this.agentLoopService.isEnabled()) {
+        const scopeDiagnostics: ScopeDiagnostics = {};
         const scope = await new GistScopePolicy(this.llmClient).assess(
           userQuestion,
           historyMessages,
           usage,
           options.signal,
+          scopeDiagnostics,
         );
-        if (options.diagnostics) options.diagnostics.scope = scope.reason;
+        if (options.diagnostics) {
+          options.diagnostics.scope = scope.reason;
+          options.diagnostics.scopeAttempts = scopeDiagnostics.attempts;
+          options.diagnostics.scopeMs = scopeDiagnostics.elapsedMs;
+          options.diagnostics.scopeFailure = scopeDiagnostics.failure;
+          if (scopeDiagnostics.usageIncomplete)
+            options.diagnostics.usageIncomplete = true;
+        }
         if (!scope.allowed) {
           const content =
             scope.reason === 'unavailable' ? SCOPE_UNAVAILABLE : SCOPE_REFUSAL;
@@ -719,6 +758,7 @@ export class ChatOrchestrationService {
     reply.raw.once?.('close', disconnect);
     const diagnostics: TurnDiagnostics = { version: 1 };
     const startedAt = Date.now();
+    let usageRecordAttempted = false;
 
     try {
       this.chatStreamTransport.prepareSse(reply, req);
@@ -756,12 +796,20 @@ export class ChatOrchestrationService {
         );
       } catch {
         // 스트림 에러 시 transport가 이미 응답을 종료함
+        diagnostics.usageIncomplete = true;
         return;
       }
 
       try {
         const totalUsage = { ...reasoningUsage };
         this.addTokenUsage(totalUsage, streamResult.usage);
+        diagnostics.observedUsage = totalUsage;
+        diagnostics.answerModel = streamResult.model || undefined;
+        if (
+          !streamResult.usage &&
+          ['gist', 'followup'].includes(diagnostics.scope ?? '')
+        )
+          diagnostics.usageIncomplete = true;
         const usage = this.hasTokenUsage(totalUsage) ? totalUsage : undefined;
 
         // 검색에 걸린 문서가 있어도 최종 답변이 답변 불가면 참조 문서를 숨기고 미답변으로 본다.
@@ -790,7 +838,9 @@ export class ChatOrchestrationService {
                 ? 'partial'
                 : 'answered';
         const answerResources = answered ? resources : [];
-        const answerSources = answered ? answerOutput.usedSources() : [];
+        const usedSources = answered ? answerOutput.usedSources() : [];
+        const answerSources = usedSources.filter((s) => s.kind === 'notice');
+        const answerWebSources = usedSources.filter((s) => s.kind === 'web');
 
         let answerMessageId: string | null = null;
         if (streamResult.accumulatedContent) {
@@ -805,6 +855,8 @@ export class ChatOrchestrationService {
               resources:
                 answerResources.length > 0 ? answerResources : undefined,
               sources: answerSources.length > 0 ? answerSources : undefined,
+              webSources:
+                answerWebSources.length > 0 ? answerWebSources : undefined,
               // 히스토리에서도 진행 과정을 다시 보여줄 수 있게 최종 상태를 남긴다.
               steps: steps.length > 0 ? steps : undefined,
             },
@@ -813,6 +865,7 @@ export class ChatOrchestrationService {
         }
 
         if (usage?.total_tokens != null) {
+          usageRecordAttempted = true;
           try {
             await this.usageService.recordUsage(sessionId, {
               totalTokens: usage.total_tokens,
@@ -827,6 +880,7 @@ export class ChatOrchestrationService {
 
         this.chatStreamTransport.writeResources(reply, answerResources);
         this.chatStreamTransport.writeSources(reply, answerSources);
+        this.chatStreamTransport.writeWebSources(reply, answerWebSources);
         this.chatStreamTransport.writeDone(reply);
 
         // 응답 종료 후 기록해 SSE 완료 시점을 늦추지 않는다.
@@ -851,6 +905,20 @@ export class ChatOrchestrationService {
     } finally {
       reply.raw.off?.('close', disconnect);
       if (controller.signal.aborted) diagnostics.usageIncomplete = true;
+      if (
+        !usageRecordAttempted &&
+        (diagnostics.observedUsage?.total_tokens ?? 0) > 0
+      ) {
+        try {
+          await this.usageService.recordUsage(sessionId, {
+            totalTokens: diagnostics.observedUsage!.total_tokens,
+          });
+        } catch {
+          this.logger.warn(
+            'Failed to record observed usage for interrupted turn',
+          );
+        }
+      }
       diagnostics.totalMs ??= Date.now() - startedAt;
       this.logger.log(
         `[CHAT_EVALUATION] ${JSON.stringify({ sessionId, ...diagnostics })}`,

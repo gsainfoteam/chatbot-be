@@ -250,10 +250,11 @@ export class ChatController {
       '- `{"type": "step", "id", "kind", "label", "status", "thought"?, "resultCount"?}`: 첫 검색이 비었거나 약해 자료를 다시 찾을 때만 답변 전에 옵니다. 같은 `id`가 `running` → `done`/`failed`로 다시 오면 상태를 갱신합니다. `kind`는 `research`(조사 전체) 또는 도구 이름, `label`은 서버가 만든 진행 문구, `thought`는 모델이 남긴 짧은 설명입니다.',
       '- `{"type": "resources", "resources": [...]}`: 참조 문서. 답변 뒤에 옵니다.',
       '- `{"type": "sources", "sources": [{"kind": "notice", "id", "title", "url"}]}`: 리소스 센터 밖의 출처(Ziggle 공지). `url`은 그대로 여는 외부 링크입니다. 답변 뒤에 옵니다.',
+      '- `{"type": "web_sources", "sources": [{"kind": "web", "id", "title", "url", "official"}]}`: 웹 검색 결과 출처. `title`은 도메인, `official`은 학교 공식 도메인 여부입니다. 답변 뒤에 옵니다.',
       '- `{"error": "..."}`: 오류. 스트림이 끝납니다.',
       '- `[DONE]`: 정상 종료.',
       '',
-      '`step`·`sources` 이벤트에는 `content`·`error` 키가 없어 이를 모르는 클라이언트는 무시합니다. 완료된 단계와 출처는 assistant 메시지 `metadata.steps`, `metadata.sources`에도 저장됩니다.',
+      '`step`·`sources`·`web_sources` 이벤트에는 `content`·`error` 키가 없어 이를 모르는 클라이언트는 무시합니다. 완료된 단계와 출처는 assistant 메시지 `metadata.steps`, `metadata.sources`, `metadata.webSources`에도 저장됩니다.',
     ].join('\n'),
   })
   @ApiResponse({

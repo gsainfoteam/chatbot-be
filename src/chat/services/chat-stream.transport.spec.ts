@@ -126,7 +126,7 @@ describe('ChatStreamTransport', () => {
 
     await expect(consumePromise).rejects.toThrow('upstream timeout');
     expect(reply.raw.write).toHaveBeenCalledWith(
-      `data: ${JSON.stringify({ error: 'upstream timeout' })}\n\n`,
+      `data: ${JSON.stringify({ error: '답변 생성 중 오류가 발생했습니다.' })}\n\n`,
     );
     expect(reply.raw.end).toHaveBeenCalledTimes(1);
   });
@@ -377,6 +377,63 @@ describe('ChatStreamTransport', () => {
 
       expect(result.matched).toBe(false);
       await expect(readAll(result.stream)).resolves.toBe(delta('현재'));
+    });
+  });
+
+  describe('writeWebSources', () => {
+    it('writes web sources with the official flag, without content or error', () => {
+      const transport = createTransport();
+      const reply = { raw: { write: jest.fn(), end: jest.fn() } };
+
+      transport.writeWebSources(reply as never, [
+        {
+          kind: 'web',
+          id: 'https://dorm.gist.ac.kr/guide',
+          title: 'dorm.gist.ac.kr',
+          url: 'https://dorm.gist.ac.kr/guide',
+          opened: false,
+          official: true,
+        },
+        {
+          kind: 'web',
+          id: 'https://blog.example.com/a',
+          title: 'blog.example.com',
+          url: 'https://blog.example.com/a',
+          opened: false,
+        },
+      ]);
+
+      const event = JSON.parse(
+        String(reply.raw.write.mock.calls[0][0]).slice(6),
+      ) as Record<string, unknown>;
+      expect(event).toEqual({
+        type: 'web_sources',
+        sources: [
+          {
+            kind: 'web',
+            id: 'https://dorm.gist.ac.kr/guide',
+            title: 'dorm.gist.ac.kr',
+            url: 'https://dorm.gist.ac.kr/guide',
+            official: true,
+          },
+          {
+            kind: 'web',
+            id: 'https://blog.example.com/a',
+            title: 'blog.example.com',
+            url: 'https://blog.example.com/a',
+            official: false,
+          },
+        ],
+      });
+    });
+
+    it('writes nothing for an empty list', () => {
+      const transport = createTransport();
+      const reply = { raw: { write: jest.fn(), end: jest.fn() } };
+
+      transport.writeWebSources(reply as never, []);
+
+      expect(reply.raw.write).not.toHaveBeenCalled();
     });
   });
 });

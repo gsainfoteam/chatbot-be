@@ -1,8 +1,17 @@
+import type { LlmUsage } from '../types/llm.types';
 import type { ResearchAssessment } from '../agent/research-decision';
 
 export type TurnDiagnostics = {
   version: 1;
+  observedUsage?: LlmUsage;
+  noticesEnabled?: boolean;
+  webEnabled?: boolean;
+  scopeModel?: string;
+  answerModel?: string;
   scope?: string;
+  scopeAttempts?: number;
+  scopeMs?: number;
+  scopeFailure?: string;
   route?: string;
   routeReason?: string;
   rounds?: number;

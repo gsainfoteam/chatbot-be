@@ -145,7 +145,7 @@ export class ChatStreamTransport {
         if (!decided) {
           decided = true;
           out.destroy();
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         } else out.destroy(error);
       });
     });
@@ -247,7 +247,7 @@ export class ChatStreamTransport {
         this.logger.error('Stream error:', error);
         try {
           reply.raw.write(
-            `data: ${JSON.stringify({ error: error.message || 'Stream error' })}\n\n`,
+            `data: ${JSON.stringify({ error: '답변 생성 중 오류가 발생했습니다.' })}\n\n`,
           );
         } catch {
           // Socket may already be unavailable.
@@ -275,7 +275,7 @@ export class ChatStreamTransport {
           }
           resolve({ accumulatedContent, model, usage });
         } catch (error) {
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
       });
     });
@@ -335,13 +335,35 @@ export class ChatStreamTransport {
     );
   }
 
+  /**
+   * 웹 검색 결과 출처. 공지(`sources`)와 같은 형식에 공식 도메인 여부(`official`)를 더해 따로 보낸다.
+   * `title`은 도메인이다. content·error 키는 넣지 않는다.
+   */
+  writeWebSources(reply: FastifyReply, sources: ExternalSource[]): void {
+    if (sources.length === 0) return;
+    reply.raw.write(
+      `data: ${JSON.stringify({
+        type: 'web_sources',
+        sources: sources.map(({ kind, id, title, url, official }) => ({
+          kind,
+          id,
+          title,
+          url,
+          official: official ?? false,
+        })),
+      })}\n\n`,
+    );
+  }
+
   writeDone(reply: FastifyReply): void {
     reply.raw.write('data: [DONE]\n\n');
     reply.raw.end();
   }
 
   writeError(reply: FastifyReply, errorMessage: string): void {
-    reply.raw.write(`data: ${JSON.stringify({ error: errorMessage })}\n\n`);
+    reply.raw.write(
+      `data: ${JSON.stringify({ error: maskPersonalInfo(errorMessage) })}\n\n`,
+    );
     reply.raw.end();
   }
 }

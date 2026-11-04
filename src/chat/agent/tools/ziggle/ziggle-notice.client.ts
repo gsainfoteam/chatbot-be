@@ -75,11 +75,16 @@ export class ZiggleNoticeClient {
   async searchNotices(
     query: string,
     limit: number,
+    signal?: AbortSignal,
   ): Promise<ZiggleNoticeSummary[]> {
-    const result = await this.requireClient().callTool('search_notices', {
-      query,
-      limit,
-    });
+    const result = await this.requireClient().callTool(
+      'search_notices',
+      {
+        query,
+        limit,
+      },
+      signal,
+    );
     if (result.isError) {
       throw new Error(`Ziggle search_notices failed: ${result.text}`);
     }
@@ -105,8 +110,15 @@ export class ZiggleNoticeClient {
   }
 
   /** 공지 원문(크롤링한 HTML). 없는 공지면 null */
-  async getNoticeBody(id: number): Promise<string | null> {
-    const result = await this.requireClient().callTool('get_notice', { id });
+  async getNoticeBody(
+    id: number,
+    signal?: AbortSignal,
+  ): Promise<string | null> {
+    const result = await this.requireClient().callTool(
+      'get_notice',
+      { id },
+      signal,
+    );
     if (result.isError) {
       this.logger.debug(`Ziggle get_notice(${id}) error: ${result.text}`);
       return null;

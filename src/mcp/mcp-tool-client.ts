@@ -33,7 +33,9 @@ export class McpToolClient {
   async callTool(
     name: string,
     args: Record<string, unknown>,
+    signal?: AbortSignal,
   ): Promise<McpToolCallResult> {
+    signal?.throwIfAborted();
     const client = new Client(
       { name: 'GIST Chatbot', version: '1.0.0' },
       { capabilities: {} },
@@ -42,9 +44,13 @@ export class McpToolClient {
       this.logger.debug(`MCP client error: ${String(error)}`);
     const transport = new StreamableHTTPClientTransport(
       new URL(this.config.url),
-      { requestInit: { headers: this.config.headers } },
+      { requestInit: { headers: this.config.headers, signal } },
     );
 
+    const abort = () => {
+      void transport.close().catch(() => undefined);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     const startedAt = Date.now();
     try {
       await client.connect(transport, { timeout: this.config.timeoutMs });
@@ -69,6 +75,7 @@ export class McpToolClient {
       );
       return { text, isError: Boolean(result.isError) };
     } finally {
+      signal?.removeEventListener('abort', abort);
       await transport.close().catch(() => undefined);
       await client.close().catch(() => undefined);
     }

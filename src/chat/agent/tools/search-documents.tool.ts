@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ResourceContentService } from '../../services/resource-content.service';
+import { withRo } from './korean-particle';
 import type {
   AgentDocument,
   AgentStepOutcome,
@@ -65,6 +66,7 @@ export class SearchDocumentsTool implements AgentTool {
         query,
         context.catalog,
         context.usage,
+        context.signal,
       );
 
     return {
@@ -123,15 +125,4 @@ export function describeDocumentsForAgent(
     sections.push(`(이미 확인한 문서 ${repeated}개는 생략)`);
   }
   return sections.join('\n\n');
-}
-
-/**
- * 조사 "로/으로". 받침이 있으면(ㄹ 제외) "으로", 없으면 "로".
- * 한글로 끝나지 않으면 읽는 법을 알 수 없어 "(으)로"를 쓴다.
- */
-export function withRo(word: string): string {
-  const code = word.charCodeAt(word.length - 1) - 0xac00;
-  if (Number.isNaN(code) || code < 0 || code > 11171) return '(으)로';
-  const finalConsonant = code % 28;
-  return finalConsonant === 0 || finalConsonant === 8 ? '로' : '으로';
 }

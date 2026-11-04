@@ -2,23 +2,30 @@ import type { ResearchAssessment } from './research-decision';
 import type { ListResourcesResult } from '../../retrieval/retrieval.types';
 import type { LlmTool, LlmUsage } from '../types/llm.types';
 
-export type AgentDocument = { path: string; content: string };
+export type AgentDocument = {
+  path: string;
+  content: string;
+  sourceUrls?: string[];
+};
 
 export type UsedResource = { path: string; formats: string[] };
 
 /** 내부 문서가 아닌 출처. FE `resources`(리소스 센터 PDF)와 섞지 않고 따로 보낸다. */
 export type ExternalSource = {
-  kind: 'notice';
+  kind: 'notice' | 'web';
   id: string;
   title: string;
   url: string;
   /** 본문까지 읽었는지. 표시 순서를 정할 때 쓴다. */
   opened: boolean;
+  /** 웹 출처가 학교 공식 도메인인지. 공지에는 없다. */
+  official?: boolean;
 };
 
 /** 한 턴 동안 모든 도구가 공유하는 맥락 */
 export type AgentToolContext = {
   catalog: ListResourcesResult;
+  signal?: AbortSignal;
   /** 검색 단계에서 LLM을 쓰면 토큰을 여기에 더한다. */
   usage: LlmUsage;
   /** 이미 에이전트에게 보여준 문서 경로. 같은 본문을 다시 넘기지 않으려고 쓴다. */
@@ -99,4 +106,7 @@ export type AgentRunResult = {
   stopReason: AgentStopReason;
   assessment?: ResearchAssessment;
   elapsedMs?: number;
+  model?: string;
+  maxRounds?: number;
+  timeBudgetEnforced?: boolean;
 };

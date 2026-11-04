@@ -31,6 +31,10 @@ import {
 } from './tools/search-documents.tool';
 import { SearchNoticesTool } from './tools/ziggle/search-notices.tool';
 import { GetNoticeTool } from './tools/ziggle/get-notice.tool';
+import {
+  SEARCH_WEB_TOOL_NAME,
+  SearchWebTool,
+} from './tools/web/search-web.tool';
 
 /** 한 라운드에서 실행할 도구 호출 상한. 넘는 호출은 실행하지 않고 그 사실만 돌려준다. */
 const MAX_TOOL_CALLS_PER_ROUND = 4;
@@ -40,6 +44,7 @@ const AGENT_ROUND_MAX_TOKENS = 2_000;
 
 export type AgentRunInput = {
   question: string;
+  signal?: AbortSignal;
   history: LlmMessage[];
   catalog: ListResourcesResult;
   usage: LlmUsage;
@@ -70,12 +75,14 @@ export class AgentLoopService {
     searchDocumentsTool: SearchDocumentsTool,
     searchNoticesTool: SearchNoticesTool,
     getNoticeTool: GetNoticeTool,
+    searchWebTool: SearchWebTool,
   ) {
     this.config = readAgentConfig(configService);
     const tools: AgentTool[] = [
       searchDocumentsTool,
       searchNoticesTool,
       getNoticeTool,
+      searchWebTool,
     ];
     this.tools = new Map(
       tools.map((tool) => [tool.definition.function.name, tool]),
@@ -87,6 +94,7 @@ export class AgentLoopService {
   }
 
   async run(input: AgentRunInput): Promise<AgentRunResult> {
+    input.signal?.throwIfAborted();
     const startedAt = Date.now();
     const enabledNames = new Set(
       input.enabledTools ?? [SEARCH_DOCUMENTS_TOOL_NAME],
@@ -95,6 +103,14 @@ export class AgentLoopService {
       [...this.tools].filter(([name]) => enabledNames.has(name)),
     );
     const state = new Map<string, unknown>();
+    state.set('agent.enabledTools', new Set(tools.keys()));
+    state.set(
+      'agent.completedTools',
+      new Set<string>(input.seed ? [SEARCH_DOCUMENTS_TOOL_NAME] : []),
+    );
+    const timeBudgetMs = tools.has(SEARCH_WEB_TOOL_NAME)
+      ? Math.max(this.config.timeBudgetMs, this.config.webTimeBudgetMs)
+      : this.config.timeBudgetMs;
     const collected = new DocumentCollector();
     const steps = new Map<string, AgentStep>();
     const executedCalls = new Set<string>();
@@ -169,8 +185,9 @@ export class AgentLoopService {
     let stopReason: AgentStopReason = 'max-rounds';
 
     while (rounds < this.config.maxRounds) {
-      const remainingMs = this.config.timeBudgetMs - (Date.now() - startedAt);
-      if (remainingMs <= 0) {
+      input.signal?.throwIfAborted();
+      const remainingMs = timeBudgetMs - (Date.now() - startedAt);
+      if (this.config.enforceTimeBudget && remainingMs <= 0) {
         stopReason = 'time-budget';
         break;
       }
@@ -184,7 +201,10 @@ export class AgentLoopService {
           parallel_tool_calls: true,
           temperature: 0,
           max_tokens: AGENT_ROUND_MAX_TOKENS,
-          timeoutMs: remainingMs,
+          timeoutMs: this.config.enforceTimeBudget
+            ? Math.min(remainingMs, 15000)
+            : 15000,
+          signal: input.signal,
         });
         addUsage(input.usage, response.usage);
         message = response.choices?.[0]?.message;
@@ -218,7 +238,12 @@ export class AgentLoopService {
             toolCalls[0].function.arguments,
             collected.paths(),
           ) ?? undefined;
-        if (assessment && pendingCandidates.size === 0) {
+        if (
+          assessment &&
+          [...pendingCandidates].every((path) =>
+            assessment?.skippedCandidates?.some((c) => c.path === path),
+          )
+        ) {
           stopReason =
             assessment.outcome === 'complete' ? 'ready' : 'exhausted';
           break;
@@ -243,6 +268,7 @@ export class AgentLoopService {
                 roundCounts,
                 context: {
                   catalog: input.catalog,
+                  signal: input.signal,
                   usage: input.usage,
                   seenPaths: collected.paths(),
                   state,
@@ -279,6 +305,7 @@ export class AgentLoopService {
       // 검색어 변경/본문 조회/다른 도구/구조화된 종료를 선택하도록 다음 라운드를 보장한다.
     }
 
+    input.signal?.throwIfAborted();
     const documentCount = collected.size();
     emit({
       ...researchStep,
@@ -299,6 +326,9 @@ export class AgentLoopService {
       stopReason,
       assessment,
       elapsedMs: Date.now() - startedAt,
+      model,
+      maxRounds: this.config.maxRounds,
+      timeBudgetEnforced: this.config.enforceTimeBudget,
     };
     this.logger.log(
       `[PERF] agent loop: ${Date.now() - startedAt}ms, rounds=${rounds}, stop=${stopReason}, ` +
@@ -333,6 +363,19 @@ export class AgentLoopService {
     const tool = params.tools.get(name);
     if (!tool) {
       return `알 수 없는 도구입니다: ${name}`;
+    }
+
+    // 선행 검색과 동시에 요청된 웹 검색은 실행 횟수나 중복 키를 소비하지 않는다.
+    if (name === SEARCH_WEB_TOOL_NAME) {
+      const completed = params.context.state.get(
+        'agent.completedTools',
+      ) as Set<string>;
+      if (
+        !completed.has(SEARCH_DOCUMENTS_TOOL_NAME) ||
+        (params.tools.has('search_notices') && !completed.has('search_notices'))
+      ) {
+        return '내부 문서와 활성화된 공지 검색이 끝난 다음 라운드에 웹 검색을 요청하세요.';
+      }
     }
 
     let args: Record<string, unknown>;
@@ -376,7 +419,12 @@ export class AgentLoopService {
     params.emit(step);
 
     try {
+      params.context.signal?.throwIfAborted();
       const result = await tool.execute(args, params.context);
+      (params.context.state.get('agent.completedTools') as Set<string>).add(
+        name,
+      );
+      params.context.signal?.throwIfAborted();
       params.emit({
         ...step,
         status: 'done',
@@ -389,6 +437,9 @@ export class AgentLoopService {
       });
       return result;
     } catch (error) {
+      (params.context.state.get('agent.completedTools') as Set<string>).add(
+        name,
+      );
       this.logger.warn(`Agent tool ${name} failed: ${describeError(error)}`);
       params.emit({
         ...step,

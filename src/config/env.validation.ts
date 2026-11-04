@@ -251,6 +251,11 @@ export class EnvironmentVariables {
   @Transform(parseBooleanEnv(false))
   AGENT_ENABLED?: boolean;
 
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  AGENT_ENFORCE_TIME_BUDGET?: boolean;
+
   /** 에이전트 도구 호출 라운드 상한. 기본 3. */
   @IsOptional()
   @IsInt()
@@ -298,6 +303,47 @@ export class EnvironmentVariables {
   @IsOptional()
   @IsString()
   ZIGGLE_NOTICE_URL_BASE?: string;
+
+  // 웹 검색 (에이전트 도구, Gemini 구글 검색 그라운딩). 실험 기능이라 기본값은 꺼짐.
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  WEB_SEARCH_ENABLED?: boolean;
+
+  /** 그라운딩을 쓸 Gemini 모델. lite 모델은 검색을 하지 않는다. 기본 gemini-2.5-flash. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_MODEL?: string;
+
+  /** 웹 검색 한 번의 시간 상한(ms). 기본 15000. */
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(60000)
+  WEB_SEARCH_TIMEOUT_MS?: number;
+
+  /** 웹 검색을 쓸 위젯 키 ID(쉼표 구분). `*`는 모든 위젯. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_WIDGET_KEY_IDS?: string;
+
+  /** 허용 도메인(쉼표 구분). 비우면 모든 도메인을 허용한다. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_ALLOWED_DOMAINS?: string;
+
+  /** 학교 공식 출처로 표시할 도메인(쉼표 구분). 기본 gist.ac.kr. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_OFFICIAL_DOMAINS?: string;
+
+  /** 웹 검색을 켠 조사의 시간 예산(ms). 기본 35000. */
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(120000)
+  AGENT_WEB_TIME_BUDGET_MS?: number;
 
   // Client Domain Configuration
   @IsString()

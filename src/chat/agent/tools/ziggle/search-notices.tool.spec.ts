@@ -21,11 +21,13 @@ const notice = (
 
 function setup(byKeyword: Record<string, ZiggleNoticeSummary[] | Error>) {
   const ziggle = {
-    searchNotices: jest.fn(async (query: string, _limit: number) => {
-      const result = byKeyword[query] ?? [];
-      if (result instanceof Error) throw result;
-      return result;
-    }),
+    searchNotices: jest.fn(
+      async (query: string, _limit: number, _signal?: AbortSignal) => {
+        const result = byKeyword[query] ?? [];
+        if (result instanceof Error) throw result;
+        return result;
+      },
+    ),
     noticeUrl: (id: number) => `https://ziggle.example/notice/${id}`,
   };
   return { tool: new SearchNoticesTool(ziggle as never), ziggle };
@@ -43,8 +45,8 @@ describe('SearchNoticesTool', () => {
       context(),
     );
 
-    expect(ziggle.searchNotices).toHaveBeenCalledWith('장학생', 8);
-    expect(ziggle.searchNotices).toHaveBeenCalledWith('선발', 8);
+    expect(ziggle.searchNotices).toHaveBeenCalledWith('장학생', 8, undefined);
+    expect(ziggle.searchNotices).toHaveBeenCalledWith('선발', 8, undefined);
     expect(result.resultCount).toBe(3);
     expect(result.content.indexOf('[id=10]')).toBeLessThan(
       result.content.indexOf('[id=12]'),
@@ -102,7 +104,9 @@ describe('SearchNoticesTool', () => {
     expect(result.documents).toEqual([
       {
         path: 'ziggle-notice/10/summary',
-        content: '[Ziggle 공지] 장학생 선발\n요약: 장학생 선발 요약',
+        sourceUrls: ['https://ziggle.example/notice/10'],
+        content:
+          '[Ziggle 공지] 장학생 선발\n원문 링크: https://ziggle.example/notice/10\n요약: 장학생 선발 요약',
       },
     ]);
     expect(result.sources).toEqual([

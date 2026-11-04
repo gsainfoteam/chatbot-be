@@ -8,6 +8,8 @@ import type { Readable } from 'stream';
 import { inspect } from 'node:util';
 import type { LlmClient, LlmCallOptions } from './llm-client.interface';
 import type {
+  GoogleSearchGrounding,
+  GroundedSearchResponse,
   LlmMessage,
   LlmModelType,
   LlmRequest,
@@ -103,12 +105,14 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
           .post<LlmResponse>(`${this.baseUrl}/chat/completions`, request, {
             headers: this.buildHeaders(),
             timeout: options?.timeoutMs ?? 15000,
+            signal: options?.signal,
           })
           .pipe(
             catchError((error: AxiosError) => {
               this.logApiError(error, requestLogSummary);
               throw new InternalServerErrorException(
                 `Failed to call ${this.providerLabel} API: ${error.message}`,
+                { cause: error },
               );
             }),
           ),
@@ -125,7 +129,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
     messages: LlmMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: { temperature?: number },
+    options?: Pick<LlmCallOptions, 'temperature' | 'signal'>,
   ): Promise<Readable> {
     const toolMessages: LlmMessage[] = toolResults.map((result) => ({
       role: 'tool',
@@ -165,6 +169,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
             headers: this.buildHeaders(),
             responseType: 'stream',
             timeout: 15000,
+            signal: options?.signal,
           })
           .pipe(
             catchError((error: AxiosError) => {
@@ -181,6 +186,54 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       this.logger.error(`Error calling ${this.providerLabel}: ${error}`);
       throw error;
     }
+  }
+
+  async searchWithGoogle(
+    messages: LlmMessage[],
+    model: string,
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'max_tokens' | 'timeoutMs' | 'signal'
+    >,
+  ): Promise<GroundedSearchResponse> {
+    const request = {
+      model,
+      messages,
+      tools: [{ googleSearch: {} }],
+      temperature: options?.temperature ?? 0,
+      max_tokens: options?.max_tokens ?? 1500,
+    };
+
+    const response = await firstValueFrom(
+      this.httpService
+        .post<LlmResponse & { vertex_ai_grounding_metadata?: unknown }>(
+          `${this.baseUrl}/chat/completions`,
+          request,
+          {
+            headers: this.buildHeaders(),
+            timeout: options?.timeoutMs ?? 15000,
+          },
+        )
+        .pipe(
+          catchError((error: AxiosError) => {
+            this.logApiError(error, {
+              model,
+              googleSearch: true,
+              messages: this.summarizeMessages(messages),
+            });
+            throw new InternalServerErrorException(
+              `Failed to call ${this.providerLabel} API: ${error.message}`,
+            );
+          }),
+        ),
+    );
+
+    const data = response.data;
+    return {
+      content: data.choices?.[0]?.message?.content ?? '',
+      grounding: parseGoogleSearchGrounding(data.vertex_ai_grounding_metadata),
+      usage: data.usage,
+    };
   }
 
   protected buildHeaders(): Record<string, string> {
@@ -273,4 +326,62 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       contentCharsSum,
     };
   }
+}
+
+/**
+ * LiteLLM이 Vertex AI 응답에서 옮겨 주는 그라운딩 메타데이터를 읽는다.
+ * 후보(candidate)별 배열로 오므로 첫 번째만 쓴다. 검색을 하지 않았으면 빈 배열이다.
+ */
+export function parseGoogleSearchGrounding(
+  raw: unknown,
+): GoogleSearchGrounding | null {
+  const meta = (Array.isArray(raw) ? raw[0] : raw) as
+    | Record<string, unknown>
+    | undefined;
+  if (!meta || typeof meta !== 'object') return null;
+
+  const chunks = (
+    Array.isArray(meta.groundingChunks) ? meta.groundingChunks : []
+  ).map((chunk: unknown) => {
+    const web = (chunk as { web?: { uri?: unknown; title?: unknown } })?.web;
+    return {
+      uri: typeof web?.uri === 'string' ? web.uri : '',
+      title: typeof web?.title === 'string' ? web.title : '',
+    };
+  });
+  const supports = (
+    Array.isArray(meta.groundingSupports) ? meta.groundingSupports : []
+  ).flatMap((support: unknown) => {
+    const { segment, groundingChunkIndices } = (support ?? {}) as {
+      segment?: { text?: unknown };
+      groundingChunkIndices?: unknown;
+    };
+    if (typeof segment?.text !== 'string' || !segment.text.trim()) return [];
+    const chunkIndices = Array.isArray(groundingChunkIndices)
+      ? groundingChunkIndices.filter(
+          (index): index is number =>
+            Number.isInteger(index) && index >= 0 && index < chunks.length,
+        )
+      : [];
+    return [{ text: segment.text.trim(), chunkIndices }];
+  });
+  const queries = Array.isArray(meta.webSearchQueries)
+    ? meta.webSearchQueries.filter(
+        (query): query is string => typeof query === 'string',
+      )
+    : [];
+  const entryPoint = (meta.searchEntryPoint as { renderedContent?: unknown })
+    ?.renderedContent;
+
+  if (chunks.length === 0 && supports.length === 0 && queries.length === 0) {
+    return null;
+  }
+  return {
+    queries,
+    chunks,
+    supports,
+    ...(typeof entryPoint === 'string' && entryPoint
+      ? { searchEntryPointHtml: entryPoint }
+      : {}),
+  };
 }

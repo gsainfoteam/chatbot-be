@@ -38,7 +38,7 @@ function createService(options: {
 }) {
   const embeddingService = {
     isEnabled: jest.fn(() => options.embeddingEnabled ?? true),
-    embedText: jest.fn<() => Promise<number[]>>(
+    embedText: jest.fn<(text: string) => Promise<number[]>>(
       options.embedText ?? (() => Promise.resolve([0.1, 0.2])),
     ),
   };
@@ -329,5 +329,22 @@ describe('VectorChunkSelectionService', () => {
       detailPaths: ['학사편람/졸업'],
       confident: true,
     });
+  });
+
+  it('embeds the question without the school name, which every document shares', async () => {
+    const { service, embeddingService } = createService({
+      denseHits: [
+        dense({ path: '캠퍼스맵/건물', resourceName: '캠퍼스맵' }, 0.69),
+      ],
+    });
+
+    const selection = await service.selectRelevantChunkPaths(
+      'GIST 안강훈 교수에 대해 알려줘',
+    );
+
+    expect(embeddingService.embedText).toHaveBeenCalledWith(
+      '안강훈 교수에 대해 알려줘',
+    );
+    expect(selection?.confident).toBe(false);
   });
 });

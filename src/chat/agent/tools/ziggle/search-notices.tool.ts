@@ -80,7 +80,7 @@ export class SearchNoticesTool implements AgentTool {
 
     const settled = await Promise.allSettled(
       keywords.map((keyword) =>
-        this.ziggle.searchNotices(keyword, PER_KEYWORD_LIMIT),
+        this.ziggle.searchNotices(keyword, PER_KEYWORD_LIMIT, context.signal),
       ),
     );
     const lists = settled.flatMap((result) =>
@@ -121,7 +121,8 @@ export class SearchNoticesTool implements AgentTool {
       }
       documents.push({
         path: noticeDocumentPath(notice.id, 'summary'),
-        content: `${NOTICE_MARKER} ${notice.title}\n요약: ${maskPersonalInfo(notice.summary)}`,
+        sourceUrls: [this.ziggle.noticeUrl(notice.id)],
+        content: `${NOTICE_MARKER} ${notice.title}\n원문 링크: ${this.ziggle.noticeUrl(notice.id)}\n요약: ${maskPersonalInfo(notice.summary)}`,
       });
       sources.push({
         kind: 'notice',

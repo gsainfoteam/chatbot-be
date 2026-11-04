@@ -2,8 +2,8 @@ import { describe, expect, it } from '@jest/globals';
 import {
   SearchDocumentsTool,
   describeDocumentsForAgent,
-  withRo,
 } from './search-documents.tool';
+import { withEulReul, withRo } from './korean-particle';
 
 describe('withRo', () => {
   it.each([
@@ -28,6 +28,19 @@ describe('withRo', () => {
   it('treats a final ㄹ like no final consonant', () => {
     expect(withRo('학생회 신청 서류 제출일')).toBe('로');
     expect(withRo('휴학 규정 제출 방법')).toBe('으로');
+  });
+});
+
+describe('withEulReul', () => {
+  it.each([
+    ['GIST 기숙사', '를'],
+    ['기말고사 기간', '을'],
+    ['학사 일정', '을'],
+    ['외박 신청', '을'],
+    ['교환학생 서류', '를'],
+    ['GIST', '을(를)'],
+  ])('%s → %s', (word, particle) => {
+    expect(withEulReul(word)).toBe(particle);
   });
 });
 

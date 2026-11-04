@@ -5,11 +5,15 @@ export type AgentConfig = {
   enabled: boolean;
   maxRounds: number;
   timeBudgetMs: number;
+  /** 웹 검색을 켠 조사의 시간 예산. 검색 한 번에 6~15초가 걸려 따로 둔다. */
+  webTimeBudgetMs: number;
+  enforceTimeBudget: boolean;
   modelTier: LlmModelType;
 };
 
 export const DEFAULT_AGENT_MAX_ROUNDS = 3;
 export const DEFAULT_AGENT_TIME_BUDGET_MS = 20_000;
+export const DEFAULT_AGENT_WEB_TIME_BUDGET_MS = 35_000;
 
 const MODEL_TIERS: readonly LlmModelType[] = ['light', 'normal', 'heavy'];
 
@@ -26,9 +30,16 @@ export function readAgentConfig(configService: ConfigService): AgentConfig {
       configService.get('AGENT_MAX_ROUNDS'),
       DEFAULT_AGENT_MAX_ROUNDS,
     ),
+    enforceTimeBudget:
+      String(configService.get('AGENT_ENFORCE_TIME_BUDGET')).toLowerCase() ===
+      'true',
     timeBudgetMs: positiveInt(
       configService.get('AGENT_TIME_BUDGET_MS'),
       DEFAULT_AGENT_TIME_BUDGET_MS,
+    ),
+    webTimeBudgetMs: positiveInt(
+      configService.get('AGENT_WEB_TIME_BUDGET_MS'),
+      DEFAULT_AGENT_WEB_TIME_BUDGET_MS,
     ),
     modelTier: MODEL_TIERS.includes(tier as LlmModelType)
       ? (tier as LlmModelType)

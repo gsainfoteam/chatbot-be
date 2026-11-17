@@ -6,6 +6,7 @@ import { SuggestedQuestionsModule } from '../suggested-questions.module';
 import { NoticeFeedService } from './notice-feed.service';
 import { NoticeIngestionService } from './notice-ingestion.service';
 import { QuestionGenerationService } from './question-generation.service';
+import { SuggestedQuestionsWorker } from './suggested-questions.worker';
 
 /**
  * 지글 공지를 모아 추천 질문을 만드는 주기 작업.
@@ -22,7 +23,8 @@ import { QuestionGenerationService } from './question-generation.service';
     NoticeFeedService,
     QuestionGenerationService,
     NoticeIngestionService,
+    SuggestedQuestionsWorker,
   ],
-  exports: [NoticeIngestionService],
+  exports: [NoticeIngestionService, SuggestedQuestionsWorker],
 })
 export class SuggestedQuestionsGenerationModule {}

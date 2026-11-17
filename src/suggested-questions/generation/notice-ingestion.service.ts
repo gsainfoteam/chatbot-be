@@ -120,7 +120,11 @@ export class NoticeIngestionService {
       };
     }
 
-    const fresh = notices.filter((notice) => notice.id > cursor);
+    // 오래된 것부터 처리한다. 커서가 MAX(notice_id)라서, 최신부터 처리하면
+    // 한 주기 상한에 걸려 남은 과거 공지가 커서에 추월당해 영영 집히지 않는다.
+    const fresh = notices
+      .filter((notice) => notice.id > cursor)
+      .sort((a, b) => a.id - b.id);
     let claimed = 0;
     let saved = 0;
     let skipped = 0;
@@ -142,13 +146,15 @@ export class NoticeIngestionService {
       } catch (error) {
         if (signal?.aborted) throw error;
         // 네트워크·타임아웃 같은 일시적 실패. 선점을 되돌려 다음 주기에 다시 집게 한다.
-        // 되돌리지 않으면 이 공지는 질문 없이 영영 처리됨으로 남는다.
         failed += 1;
         await this.repo.releaseNotice(widgetKeyId, notice.id);
         this.logger.warn(
           `[${widgetKeyId}] id=${notice.id} 질문 생성 실패, 선점 취소: ` +
             (error instanceof Error ? error.message : String(error)),
         );
+        // 뒤 공지를 계속 처리하면 커서가 이 공지를 넘어가 다시 집지 못한다.
+        // 이번 주기는 여기서 멈추고 다음 주기에 이 공지부터 다시 시작한다.
+        break;
       }
     }
 

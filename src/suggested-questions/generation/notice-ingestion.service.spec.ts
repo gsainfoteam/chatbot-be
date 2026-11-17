@@ -144,7 +144,9 @@ describe('NoticeIngestionService', () => {
       );
     });
 
-    it('caps how many notices one run takes', async () => {
+    it('caps how many notices one run takes, taking the oldest first', async () => {
+      // 피드는 최신순으로 오지만 오래된 것부터 처리해야 한다. 최신부터 처리하면
+      // 커서(MAX(notice_id))가 남은 과거 공지를 추월해 영영 집지 못한다.
       const { service, repo } = build({
         notices: [notice(5), notice(4), notice(3), notice(2)],
         cursor: 1,
@@ -154,7 +156,56 @@ describe('NoticeIngestionService', () => {
       const [result] = await service.run();
 
       expect(repo.claimNotice).toHaveBeenCalledTimes(2);
+      expect(jest.mocked(repo.claimNotice).mock.calls.map((c) => c[1])).toEqual(
+        [2, 3],
+      );
       expect(result).toMatchObject({ claimed: 2, saved: 4, fresh: 4 });
+    });
+
+    it('leaves the rest of a backlog for the next pass', async () => {
+      // 1회차에 2건만 처리하고, 커서가 그 2건까지만 올라가야 나머지가 살아남는다.
+      const notices = [notice(5), notice(4), notice(3), notice(2)];
+      const first = build({ notices, cursor: 1, maxPerRun: 2 });
+      await first.service.run();
+      const firstIds = jest
+        .mocked(first.repo.claimNotice)
+        .mock.calls.map((c) => c[1]);
+
+      // 다음 주기의 커서는 1회차가 기록한 가장 큰 id다.
+      const second = build({
+        notices,
+        cursor: Math.max(...firstIds),
+        maxPerRun: 2,
+      });
+      await second.service.run();
+      const secondIds = jest
+        .mocked(second.repo.claimNotice)
+        .mock.calls.map((c) => c[1]);
+
+      expect(firstIds).toEqual([2, 3]);
+      expect(secondIds).toEqual([4, 5]);
+      expect([...firstIds, ...secondIds]).toEqual([2, 3, 4, 5]);
+    });
+
+    it('stops the pass at a failure so the cursor cannot pass it', async () => {
+      // 실패한 공지 뒤를 계속 처리하면 커서가 그 공지를 넘어가 다시 집지 못한다.
+      const { service, repo } = build({
+        notices: [notice(5), notice(4), notice(3), notice(2)],
+        cursor: 1,
+        maxPerRun: 4,
+        generate: (id) => {
+          if (id === 3) throw new Error('LLM timeout');
+          return { noticeId: id, saved: 1, skipped: false };
+        },
+      });
+
+      const [result] = await service.run();
+
+      expect(jest.mocked(repo.claimNotice).mock.calls.map((c) => c[1])).toEqual(
+        [2, 3],
+      );
+      expect(repo.releaseNotice).toHaveBeenCalledWith(KEY, 3);
+      expect(result).toMatchObject({ claimed: 2, saved: 1, failed: 1 });
     });
 
     it('counts notices whose body could not be read', async () => {
@@ -193,26 +244,6 @@ describe('NoticeIngestionService', () => {
 
       expect(repo.releaseNotice).toHaveBeenCalledWith(KEY, 5);
       expect(result).toMatchObject({ claimed: 1, saved: 0, failed: 1 });
-    });
-
-    it('keeps going after one notice fails', async () => {
-      let first = true;
-      const { service, repo } = build({
-        notices: [notice(5), notice(4)],
-        cursor: 1,
-        generate: (id) => {
-          if (first) {
-            first = false;
-            throw new Error('LLM timeout');
-          }
-          return { noticeId: id, saved: 1, skipped: false };
-        },
-      });
-
-      const [result] = await service.run();
-
-      expect(repo.releaseNotice).toHaveBeenCalledTimes(1);
-      expect(result).toMatchObject({ claimed: 2, saved: 1, failed: 1 });
     });
 
     it('skips widget keys that no longer exist', async () => {

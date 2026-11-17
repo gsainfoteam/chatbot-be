@@ -32,6 +32,22 @@
 - **Database**: PostgreSQL
 - **ORM**: Drizzle ORM
 
+## Architecture
+
+요청·RAG 검색, 문서 업로드·인덱싱, CI/CD 흐름을 정리한 스택 다이어그램입니다.
+2026-11-11의 코드(`f1a8847`)와 배포 워크플로를 기준으로 작성했으며,
+실제 운영 환경에서 확인하지 못한 구성은 다이어그램에 별도로 표시했습니다.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/architecture/stack-diagram-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/architecture/stack-diagram.png">
+  <img alt="chatbot-be의 요청·RAG 검색, 문서 처리, CI/CD 스택 다이어그램" src="./docs/architecture/stack-diagram.png">
+</picture>
+
+- [HTML — 테마 전환 및 분석 근거](./docs/architecture/stack-diagram.html): 다운로드 후 브라우저에서 열면 확인할 수 있습니다.
+- [라이트 PNG](./docs/architecture/stack-diagram.png)
+- [다크 PNG](./docs/architecture/stack-diagram-dark.png)
+
 ## Project setup
 
 ```bash
@@ -329,11 +345,11 @@ Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 업로드 중 API 장애로 누락된 임베딩을 같은 워커가 처리합니다.
 임베딩 작업이나 API 장애는 HTTP 서버 시작을 막지 않습니다.
 
-| 환경 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `EMBEDDING_BACKFILL_ENABLED` | `true` | 자동 복구 활성화. 검색 설정과 독립적입니다. |
+| 환경 변수                        | 기본값   | 설명                                                        |
+| -------------------------------- | -------- | ----------------------------------------------------------- |
+| `EMBEDDING_BACKFILL_ENABLED`     | `true`   | 자동 복구 활성화. 검색 설정과 독립적입니다.                 |
 | `EMBEDDING_BACKFILL_INTERVAL_MS` | `300000` | 한 번의 작업이 끝난 뒤 다음 확인까지 대기 시간. 1초~24시간. |
-| `EMBEDDING_BACKFILL_BATCH_SIZE` | `64` | DB 조회 및 API 요청 배치 크기. 정수 1~64. |
+| `EMBEDDING_BACKFILL_BATCH_SIZE`  | `64`     | DB 조회 및 API 요청 배치 크기. 정수 1~64.                   |
 
 앱과 같은 DB 설정 및 Letsur 또는 OpenRouter의 URL/API 키 쌍을 사용합니다.
 임베딩 설정이 없거나 사용할 수 없는 URL이면 자동 워커는 비활성화됩니다.

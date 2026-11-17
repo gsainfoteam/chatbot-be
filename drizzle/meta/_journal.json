@@ -141,6 +141,13 @@
       "when": 1791336414809,
       "tag": "0019_missing_chunk_embeddings",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1794891243607,
+      "tag": "0020_suggested_questions",
+      "breakpoints": true
     }
   ]
 }

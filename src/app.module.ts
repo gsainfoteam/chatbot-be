@@ -14,6 +14,7 @@ import { UploadModule } from './upload/upload.module';
 import { PdfProcessorModule } from './pdf-processor/pdf-processor.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { UnansweredQuestionsAdminModule } from './unanswered-questions/unanswered-questions-admin.module';
+import { SuggestedQuestionsModule } from './suggested-questions/suggested-questions.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { UnansweredQuestionsAdminModule } from './unanswered-questions/unanswere
     UploadModule,
     EmbeddingBackfillModule,
     UnansweredQuestionsAdminModule,
+    SuggestedQuestionsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

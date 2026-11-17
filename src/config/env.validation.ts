@@ -304,6 +304,53 @@ export class EnvironmentVariables {
   @IsString()
   ZIGGLE_NOTICE_URL_BASE?: string;
 
+  // 추천 질문 생성 주기 작업 (CHA3-21). Ziggle MCP 설정이 있어야 동작한다.
+
+  /** 주기 작업 on/off. 기본 꺼짐. 운영에서 명시적으로 켠다. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  SUGGESTED_QUESTIONS_ENABLED?: boolean;
+
+  /** 수집 주기(ms). 기본 6시간. */
+  @IsOptional()
+  @IsInt()
+  @Min(60000)
+  @Max(86400000)
+  SUGGESTED_QUESTIONS_INTERVAL_MS?: number;
+
+  /**
+   * 공지를 찾을 씨드 키워드(쉼표 구분).
+   * Ziggle search_notices는 query가 필수라 최신 목록을 그대로 받아올 수 없다.
+   * 넓은 키워드 여러 개로 검색해 합친다. 안 잡히는 공지가 보이면 여기에 단어를 추가한다.
+   */
+  @IsOptional()
+  @IsString()
+  SUGGESTED_QUESTIONS_SEED_KEYWORDS?: string;
+
+  /** 키워드 하나당 Ziggle에서 받아 올 공지 수. Ziggle 쪽 상한이 20이다. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(20)
+  SUGGESTED_QUESTIONS_PER_KEYWORD_LIMIT?: number;
+
+  /** 한 번 돌 때 처리할 새 공지 수 상한. 공지가 몰린 날 한꺼번에 돌지 않게 막는다. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  SUGGESTED_QUESTIONS_MAX_NOTICES_PER_RUN?: number;
+
+  /**
+   * 추천 질문을 만들 위젯 키 ID(쉼표 구분). 비우면 아무 데서도 돌지 않는다.
+   * 주기 작업에는 위젯 세션이 없어 ZiggleNoticeClient.isEnabledFor를 쓸 수 없고,
+   * `*`(모든 위젯)도 받지 않는다. 대상이 분명해야 한다.
+   */
+  @IsOptional()
+  @IsString()
+  SUGGESTED_QUESTIONS_WIDGET_KEY_IDS?: string;
+
   // 웹 검색 (에이전트 도구, Gemini 구글 검색 그라운딩). 실험 기능이라 기본값은 꺼짐.
 
   @IsOptional()

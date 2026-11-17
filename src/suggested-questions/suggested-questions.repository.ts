@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { and, count, desc, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import {
   DB_CONNECTION,
+  noticeQuestionIngestions,
   suggestedQuestions,
   widgetKeyCollaborators,
   widgetKeys,
@@ -11,6 +12,7 @@ import {
   type SuggestedQuestionStatus,
 } from '../db';
 import { normalizeQuestion } from '../unanswered-questions/question-normalizer';
+import { max } from 'drizzle-orm';
 
 /** 위젯에 내보낼 수 있는 최소 필드. prompt는 일부러 들어 있지 않다. */
 export interface ApprovedQuestionRecord {
@@ -264,5 +266,56 @@ export class SuggestedQuestionsRepository {
       .where(eq(suggestedQuestions.id, id))
       .returning();
     return row ?? null;
+  }
+
+  // ------------------------------------------------- 공지 처리 장부
+
+  /**
+   * 이 위젯 키로 지금까지 처리한 가장 큰 공지 id. 한 번도 돈 적이 없으면 null.
+   *
+   * Ziggle 검색은 최신순이 아니라 오래된 공지도 섞여 오므로, 이 값을 커서로 써서
+   * "전에 본 것보다 새 공지"만 고른다. null과 0은 뜻이 다르다. null은 첫 실행이라
+   * 씨딩만 하고 질문은 만들지 않는다는 신호다.
+   */
+  async maxIngestedNoticeId(widgetKeyId: string): Promise<number | null> {
+    const [row] = await this.db
+      .select({ value: max(noticeQuestionIngestions.noticeId) })
+      .from(noticeQuestionIngestions)
+      .where(eq(noticeQuestionIngestions.widgetKeyId, widgetKeyId));
+    return row?.value ?? null;
+  }
+
+  /**
+   * 공지 선점. 행을 먼저 만들고, 만드는 데 성공한 쪽만 질문을 생성한다.
+   *
+   * 유니크 기본키 덕분에 "확인하고 나서 쓰기" 사이의 틈이 없다. 인스턴스 두 대가
+   * 같은 순간에 들어와도 한쪽은 반드시 0행을 받는다. 락을 잡지 않으므로 뒤이은
+   * LLM 호출이 길어져도 DB 커넥션을 붙들지 않는다.
+   *
+   * @returns 내가 선점했으면 true, 이미 처리된 공지면 false
+   */
+  async claimNotice(widgetKeyId: string, noticeId: number): Promise<boolean> {
+    const rows = await this.db
+      .insert(noticeQuestionIngestions)
+      .values({ widgetKeyId, noticeId })
+      .onConflictDoNothing()
+      .returning({ noticeId: noticeQuestionIngestions.noticeId });
+    return rows.length > 0;
+  }
+
+  /**
+   * 첫 실행용. 지금 보이는 공지를 "처리함"으로만 기록하고 질문은 만들지 않는다.
+   * 이게 없으면 첫 실행에서 과거 공지 수백 건에 LLM을 돌리게 된다.
+   *
+   * @returns 새로 기록한 공지 수
+   */
+  async seedNotices(widgetKeyId: string, noticeIds: number[]): Promise<number> {
+    if (noticeIds.length === 0) return 0;
+    const rows = await this.db
+      .insert(noticeQuestionIngestions)
+      .values(noticeIds.map((noticeId) => ({ widgetKeyId, noticeId })))
+      .onConflictDoNothing()
+      .returning({ noticeId: noticeQuestionIngestions.noticeId });
+    return rows.length;
   }
 }

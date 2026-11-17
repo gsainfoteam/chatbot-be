@@ -304,6 +304,24 @@ export class SuggestedQuestionsRepository {
   }
 
   /**
+   * 선점 취소. LLM 호출이 네트워크 오류 등으로 실패했을 때만 쓴다.
+   * 장부에서 빼 두면 다음 주기에 다시 집어 간다.
+   *
+   * 응답은 왔는데 만들 질문이 없었던 경우에는 부르지 않는다. 그건 "질문거리 없는 공지"라는
+   * 정상 결과이고, 장부에 남겨 둬야 같은 공지를 매 주기 다시 LLM에 넣지 않는다.
+   */
+  async releaseNotice(widgetKeyId: string, noticeId: number): Promise<void> {
+    await this.db
+      .delete(noticeQuestionIngestions)
+      .where(
+        and(
+          eq(noticeQuestionIngestions.widgetKeyId, widgetKeyId),
+          eq(noticeQuestionIngestions.noticeId, noticeId),
+        ),
+      );
+  }
+
+  /**
    * 첫 실행용. 지금 보이는 공지를 "처리함"으로만 기록하고 질문은 만들지 않는다.
    * 이게 없으면 첫 실행에서 과거 공지 수백 건에 LLM을 돌리게 된다.
    *

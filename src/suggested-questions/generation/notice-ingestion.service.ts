@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { ZiggleNoticeSummary } from '../../chat/agent/tools/ziggle/ziggle-notice.client';
 import { SuggestedQuestionsRepository } from '../suggested-questions.repository';
 import { NoticeFeedService } from './notice-feed.service';
+import { QuestionGenerationService } from './question-generation.service';
 
 export const DEFAULT_MAX_NOTICES_PER_RUN = 10;
 
@@ -12,15 +13,21 @@ export interface NoticeIngestionResult {
   seeded: number;
   /** 커서보다 새로운 공지 수 */
   fresh: number;
-  /** 이번 인스턴스가 선점한 공지. 이 목록만 질문 생성으로 넘어간다 */
-  claimed: ZiggleNoticeSummary[];
+  /** 이번 인스턴스가 선점한 공지 수 */
+  claimed: number;
+  /** 저장된 질문 수(PENDING) */
+  saved: number;
+  /** 본문을 읽지 못해 건너뛴 공지 수 */
+  skipped: number;
+  /** LLM 호출이 실패해 선점을 되돌린 공지 수 */
+  failed: number;
 }
 
 /**
- * 지글 공지를 모아 "아직 처리하지 않은 것"만 골라내는 단계.
+ * 지글 공지를 모아 아직 처리하지 않은 것만 골라 질문 생성으로 넘긴다.
  *
- * 5단계에서 claimed를 LLM에 넘긴다. 지금은 선점까지만 하고 로그를 남긴다.
- * 수집 로직을 고치는 동안 LLM 비용이 나가지 않게 일부러 나눠 두었다.
+ * 선점에 성공한 공지만 LLM에 들어간다. 호출이 실패하면 선점을 되돌려
+ * 다음 주기에 다시 시도하게 한다.
  */
 @Injectable()
 export class NoticeIngestionService {
@@ -32,6 +39,7 @@ export class NoticeIngestionService {
   constructor(
     private readonly feed: NoticeFeedService,
     private readonly repo: SuggestedQuestionsRepository,
+    private readonly generator: QuestionGenerationService,
     configService: ConfigService,
   ) {
     this.enabled =
@@ -78,7 +86,7 @@ export class NoticeIngestionService {
         );
         continue;
       }
-      results.push(await this.runForWidgetKey(widgetKeyId, notices));
+      results.push(await this.runForWidgetKey(widgetKeyId, notices, signal));
     }
     return results;
   }
@@ -86,6 +94,7 @@ export class NoticeIngestionService {
   private async runForWidgetKey(
     widgetKeyId: string,
     notices: ZiggleNoticeSummary[],
+    signal?: AbortSignal,
   ): Promise<NoticeIngestionResult> {
     const cursor = await this.repo.maxIngestedNoticeId(widgetKeyId);
 
@@ -100,28 +109,64 @@ export class NoticeIngestionService {
         `[${widgetKeyId}] 첫 실행: 공지 ${seeded}건을 기준점으로 기록했습니다. ` +
           `다음 주기부터 id > ${notices[0]?.id ?? 0} 인 공지만 처리합니다.`,
       );
-      return { widgetKeyId, seeded, fresh: 0, claimed: [] };
+      return {
+        widgetKeyId,
+        seeded,
+        fresh: 0,
+        claimed: 0,
+        saved: 0,
+        skipped: 0,
+        failed: 0,
+      };
     }
 
     const fresh = notices.filter((notice) => notice.id > cursor);
-    const claimed: ZiggleNoticeSummary[] = [];
+    let claimed = 0;
+    let saved = 0;
+    let skipped = 0;
+    let failed = 0;
+
     for (const notice of fresh.slice(0, this.maxPerRun)) {
-      if (await this.repo.claimNotice(widgetKeyId, notice.id)) {
-        claimed.push(notice);
+      signal?.throwIfAborted();
+      if (!(await this.repo.claimNotice(widgetKeyId, notice.id))) continue;
+      claimed += 1;
+
+      try {
+        const result = await this.generator.generateForNotice(
+          widgetKeyId,
+          notice,
+          signal,
+        );
+        saved += result.saved;
+        if (result.skipped) skipped += 1;
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        // 네트워크·타임아웃 같은 일시적 실패. 선점을 되돌려 다음 주기에 다시 집게 한다.
+        // 되돌리지 않으면 이 공지는 질문 없이 영영 처리됨으로 남는다.
+        failed += 1;
+        await this.repo.releaseNotice(widgetKeyId, notice.id);
+        this.logger.warn(
+          `[${widgetKeyId}] id=${notice.id} 질문 생성 실패, 선점 취소: ` +
+            (error instanceof Error ? error.message : String(error)),
+        );
       }
     }
 
-    const skipped = fresh.length - claimed.length;
     this.logger.log(
-      `[${widgetKeyId}] 커서 ${cursor} 기준 새 공지 ${fresh.length}건, 선점 ${claimed.length}건` +
-        (skipped > 0 ? ` (${skipped}건은 상한 초과이거나 이미 처리됨)` : ''),
+      `[${widgetKeyId}] 커서 ${cursor} 기준 새 공지 ${fresh.length}건 → ` +
+        `선점 ${claimed}건, 질문 ${saved}건 저장` +
+        (skipped > 0 ? `, 본문 없음 ${skipped}건` : '') +
+        (failed > 0 ? `, 실패 ${failed}건` : ''),
     );
-    for (const notice of claimed) {
-      this.logger.debug(
-        `[${widgetKeyId}] 선점 id=${notice.id} 요약=${notice.summary ? '있음' : '없음'} ${notice.title}`,
-      );
-    }
 
-    return { widgetKeyId, seeded: 0, fresh: fresh.length, claimed };
+    return {
+      widgetKeyId,
+      seeded: 0,
+      fresh: fresh.length,
+      claimed,
+      saved,
+      skipped,
+      failed,
+    };
   }
 }

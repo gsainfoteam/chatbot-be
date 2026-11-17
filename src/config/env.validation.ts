@@ -342,6 +342,18 @@ export class EnvironmentVariables {
   @Max(100)
   SUGGESTED_QUESTIONS_MAX_NOTICES_PER_RUN?: number;
 
+  /** 공지 하나당 만들 질문 수. 기본 2. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  SUGGESTED_QUESTIONS_PER_NOTICE?: number;
+
+  /** 질문 생성에 쓸 모델 티어. 기본 normal. */
+  @IsOptional()
+  @IsEnum(AgentModelTier)
+  SUGGESTED_QUESTIONS_MODEL_TIER?: AgentModelTier;
+
   /**
    * 추천 질문을 만들 위젯 키 ID(쉼표 구분). 비우면 아무 데서도 돌지 않는다.
    * 주기 작업에는 위젯 세션이 없어 ZiggleNoticeClient.isEnabledFor를 쓸 수 없고,

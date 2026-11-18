@@ -6,28 +6,17 @@ import {
 import { describe, expect, it, jest } from '@jest/globals';
 import type { ConfigService } from '@nestjs/config';
 import type { SuggestedQuestion } from '../db';
-import type { OrganizationsRepository } from '../organizations/organizations.repository';
-import type { AdminPrincipal } from '../organizations/organization.types';
 import type { SuggestedQuestionsRepository } from './suggested-questions.repository';
 import { SuggestedQuestionsAdminService } from './suggested-questions-admin.service';
 
+const ADMIN = 'admin-1';
 const QUESTION_ID = '00000000-0000-0000-0000-0000000000a1';
-const OWN_KEY_ID = '00000000-0000-0000-0000-0000000000b1';
-const OTHER_KEY_ID = '00000000-0000-0000-0000-0000000000b2';
-
-function principal(overrides: Partial<AdminPrincipal> = {}): AdminPrincipal {
-  return {
-    uuid: 'admin-1',
-    email: 'admin@example.com',
-    role: 'ADMIN',
-    ...overrides,
-  };
-}
+const KEY_ID = '00000000-0000-0000-0000-0000000000b1';
 
 function question(overrides: Partial<SuggestedQuestion> = {}) {
   return {
     id: QUESTION_ID,
-    widgetKeyId: OWN_KEY_ID,
+    widgetKeyId: KEY_ID,
     question: '국가장학금 언제까지 신청해요?',
     normalizedQuestion: '국가장학금 언제까지 신청해요',
     prompt: '답변 지침',
@@ -48,13 +37,9 @@ type RepoOverrides = Partial<{
   [K in keyof SuggestedQuestionsRepository]: unknown;
 }>;
 
-function build(
-  overrides: RepoOverrides = {},
-  { superAdmin = false }: { superAdmin?: boolean } = {},
-) {
+function build(overrides: RepoOverrides = {}) {
   const repo = {
     findWidgetKeyName: jest.fn(async () => 'GIST 위젯'),
-    listAccessibleWidgetKeyIds: jest.fn(async () => [OWN_KEY_ID]),
     create: jest.fn(async () =>
       question({ source: 'ADMIN', status: 'APPROVED' }),
     ),
@@ -67,20 +52,9 @@ function build(
     ...overrides,
   } as unknown as SuggestedQuestionsRepository;
 
-  const organizationsRepo = {
-    isCurrentSuperAdmin: jest.fn(async () => superAdmin),
-  } as unknown as OrganizationsRepository;
-
   const config = { get: () => undefined } as unknown as ConfigService;
 
-  return {
-    service: new SuggestedQuestionsAdminService(
-      repo,
-      organizationsRepo,
-      config,
-    ),
-    repo,
-  };
+  return { service: new SuggestedQuestionsAdminService(repo, config), repo };
 }
 
 describe('SuggestedQuestionsAdminService', () => {
@@ -88,53 +62,43 @@ describe('SuggestedQuestionsAdminService', () => {
     it('stores an admin-authored question as already approved', async () => {
       const { service, repo } = build();
 
-      await service.create(principal(), {
-        widgetKeyId: OWN_KEY_ID,
+      await service.create(ADMIN, {
+        widgetKeyId: KEY_ID,
         question: '기숙사 언제 들어가요?',
         prompt: '입사 지침',
       });
 
       expect(repo.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          widgetKeyId: OWN_KEY_ID,
+          widgetKeyId: KEY_ID,
           source: 'ADMIN',
           status: 'APPROVED',
-          createdByIdpUuid: 'admin-1',
-          reviewedByIdpUuid: 'admin-1',
+          createdByIdpUuid: ADMIN,
+          reviewedByIdpUuid: ADMIN,
         }),
       );
     });
 
-    it('hides widget keys the admin cannot reach behind a 404', async () => {
-      const { service } = build();
+    it('rejects a widget key that does not exist', async () => {
+      const { service } = build({
+        findWidgetKeyName: jest.fn(async () => null),
+      });
 
       await expect(
-        service.create(principal(), {
-          widgetKeyId: OTHER_KEY_ID,
-          question: '남의 위젯 질문',
+        service.create(ADMIN, {
+          widgetKeyId: KEY_ID,
+          question: '질문',
           prompt: '지침',
         }),
       ).rejects.toBeInstanceOf(NotFoundException);
-    });
-
-    it('lets a super admin reach any widget key', async () => {
-      const { service, repo } = build({}, { superAdmin: true });
-
-      await service.create(principal({ role: 'SUPER_ADMIN' }), {
-        widgetKeyId: OTHER_KEY_ID,
-        question: '질문',
-        prompt: '지침',
-      });
-
-      expect(repo.create).toHaveBeenCalled();
     });
 
     it('reports a duplicate question as a conflict', async () => {
       const { service } = build({ create: jest.fn(async () => null) });
 
       await expect(
-        service.create(principal(), {
-          widgetKeyId: OWN_KEY_ID,
+        service.create(ADMIN, {
+          widgetKeyId: KEY_ID,
           question: '이미 있는 질문',
           prompt: '지침',
         }),
@@ -147,20 +111,20 @@ describe('SuggestedQuestionsAdminService', () => {
       const { service } = build();
 
       await expect(
-        service.update(principal(), QUESTION_ID, {}),
+        service.update(ADMIN, QUESTION_ID, {}),
       ).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('records the reviewer when the status changes', async () => {
       const { service, repo } = build();
 
-      await service.update(principal(), QUESTION_ID, { status: 'APPROVED' });
+      await service.update(ADMIN, QUESTION_ID, { status: 'APPROVED' });
 
       expect(repo.update).toHaveBeenCalledWith(
         QUESTION_ID,
         expect.objectContaining({
           status: 'APPROVED',
-          reviewedByIdpUuid: 'admin-1',
+          reviewedByIdpUuid: ADMIN,
         }),
       );
     });
@@ -168,7 +132,7 @@ describe('SuggestedQuestionsAdminService', () => {
     it('does not record a review when only the wording changes', async () => {
       const { service, repo } = build();
 
-      await service.update(principal(), QUESTION_ID, { prompt: '고친 지침' });
+      await service.update(ADMIN, QUESTION_ID, { prompt: '고친 지침' });
 
       const patch = jest.mocked(repo.update).mock.calls[0][1];
       expect(patch).toEqual({ prompt: '고친 지침' });
@@ -180,20 +144,15 @@ describe('SuggestedQuestionsAdminService', () => {
       });
 
       await expect(
-        service.update(principal(), QUESTION_ID, { question: '겹치는 질문' }),
+        service.update(ADMIN, QUESTION_ID, { question: '겹치는 질문' }),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
-    it('hides questions on inaccessible widget keys behind a 404', async () => {
-      const { service } = build({
-        findById: jest.fn(async () => ({
-          question: question({ widgetKeyId: OTHER_KEY_ID }),
-          widgetKeyName: '남의 위젯',
-        })),
-      });
+    it('reports a missing question as a 404', async () => {
+      const { service } = build({ findById: jest.fn(async () => null) });
 
       await expect(
-        service.update(principal(), QUESTION_ID, { status: 'APPROVED' }),
+        service.update(ADMIN, QUESTION_ID, { status: 'APPROVED' }),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
   });
@@ -202,7 +161,7 @@ describe('SuggestedQuestionsAdminService', () => {
     it('exposes the prompt and a link to the source notice', async () => {
       const { service } = build();
 
-      const dto = await service.getDetail(principal(), QUESTION_ID);
+      const dto = await service.getDetail(QUESTION_ID);
 
       expect(dto.prompt).toBe('답변 지침');
       expect(dto.noticeUrl).toBe('https://ziggle.gistory.me/notice/199293');
@@ -216,7 +175,7 @@ describe('SuggestedQuestionsAdminService', () => {
         })),
       });
 
-      const dto = await service.getDetail(principal(), QUESTION_ID);
+      const dto = await service.getDetail(QUESTION_ID);
 
       expect(dto.noticeUrl).toBeNull();
     });

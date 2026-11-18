@@ -1,10 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, desc, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
 import {
   DB_CONNECTION,
   noticeQuestionIngestions,
   suggestedQuestions,
-  widgetKeyCollaborators,
   widgetKeys,
   type Database,
   type SuggestedQuestion,
@@ -27,8 +26,6 @@ export interface AdminQuestionRecord {
 }
 
 export interface AdminQuestionListQuery {
-  /** null이면 전체 위젯 키(SUPER_ADMIN) */
-  widgetKeyIds: string[] | null;
   widgetKeyId?: string;
   page: number;
   size: number;
@@ -92,41 +89,6 @@ export class SuggestedQuestionsRepository {
   }
 
   /**
-   * 관리자가 다룰 수 있는 위젯 키: 본인이 만들었거나 협업자로 수락한 키. 폐기된 키는 뺀다.
-   *
-   * UnansweredQuestionsRepository.listAccessibleWidgetKeyIds와 같은 규칙이다.
-   * 미답변 질문 모듈에 의존을 만들지 않으려고 같은 질의를 여기에 둔다.
-   */
-  async listAccessibleWidgetKeyIds(adminIdpUuid: string): Promise<string[]> {
-    const [owned, shared] = await Promise.all([
-      this.db
-        .select({ id: widgetKeys.id })
-        .from(widgetKeys)
-        .where(
-          and(
-            eq(widgetKeys.createdByIdpUuid, adminIdpUuid),
-            ne(widgetKeys.status, 'REVOKED'),
-          ),
-        ),
-      this.db
-        .select({ id: widgetKeys.id })
-        .from(widgetKeyCollaborators)
-        .innerJoin(
-          widgetKeys,
-          eq(widgetKeyCollaborators.widgetKeyId, widgetKeys.id),
-        )
-        .where(
-          and(
-            eq(widgetKeyCollaborators.inviteeIdpUuid, adminIdpUuid),
-            eq(widgetKeyCollaborators.status, 'ACCEPTED'),
-            ne(widgetKeys.status, 'REVOKED'),
-          ),
-        ),
-    ]);
-    return [...new Set([...owned, ...shared].map((row) => row.id))];
-  }
-
-  /**
    * 질문 등록. 같은 위젯 키에 같은 질문이 이미 있으면 null을 돌려준다.
    * 유니크 위반을 예외로 받지 않고 onConflictDoNothing으로 처리해,
    * 드라이버별 오류 코드에 기대지 않는다.
@@ -157,17 +119,7 @@ export class SuggestedQuestionsRepository {
   async list(
     options: AdminQuestionListQuery,
   ): Promise<{ rows: AdminQuestionRecord[]; filteredTotal: number }> {
-    // 접근 가능한 키가 하나도 없으면 질의 자체를 건너뛴다.
-    if (options.widgetKeyIds?.length === 0) {
-      return { rows: [], filteredTotal: 0 };
-    }
-
     const filters: SQL[] = [];
-    if (options.widgetKeyIds) {
-      filters.push(
-        inArray(suggestedQuestions.widgetKeyId, options.widgetKeyIds),
-      );
-    }
     if (options.widgetKeyId) {
       filters.push(eq(suggestedQuestions.widgetKeyId, options.widgetKeyId));
     }

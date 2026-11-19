@@ -13,6 +13,7 @@ import {
   uniqueIndex,
   check,
   vector,
+  primaryKey,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -65,6 +66,17 @@ export const unansweredQuestionStatusEnum = pgEnum(
   'unanswered_question_status',
   ['open', 'resolved'],
 );
+
+export const suggestedQuestionSourceEnum = pgEnum('suggested_question_source', [
+  'ADMIN',
+  'AI',
+]);
+
+export const suggestedQuestionStatusEnum = pgEnum('suggested_question_status', [
+  'PENDING',
+  'APPROVED',
+  'REJECTED',
+]);
 
 // Tables
 
@@ -592,6 +604,80 @@ export const unansweredQuestions = pgTable(
   }),
 );
 
+/**
+ * 추천 질문 테이블
+ * - 위젯 첫 화면에 버튼으로 노출할 질문과, 그 질문에 매칭된 프롬프트를 저장
+ * - source=AI는 주기 작업이 지글 공지에서 만든 후보, source=ADMIN은 관리자가 직접 등록
+ * - 관리자가 검수해 APPROVED가 된 질문만 위젯에 노출된다
+ */
+export const suggestedQuestions = pgTable(
+  'suggested_questions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    widgetKeyId: uuid('widget_key_id')
+      .notNull()
+      .references(() => widgetKeys.id, { onDelete: 'cascade' }),
+    /** 버튼에 보이는 제목. 누르면 그대로 채팅 입력란에 들어간다. */
+    question: text('question').notNull(),
+    /** 같은 질문의 중복 등록을 막기 위한 키. question-normalizer와 같은 규칙. */
+    normalizedQuestion: text('normalized_question').notNull(),
+    /** 이 질문에 답할 때 쓰는 프롬프트. 위젯 응답에는 절대 내보내지 않는다. */
+    prompt: text('prompt').notNull(),
+    source: suggestedQuestionSourceEnum('source').notNull().default('ADMIN'),
+    status: suggestedQuestionStatusEnum('status').notNull().default('PENDING'),
+    /** 이 질문을 만들어 낸 지글 공지 id. 관리자가 직접 등록했으면 null. */
+    noticeId: integer('notice_id'),
+    /** 검수 화면에서 어떤 공지였는지 보여주기 위한 스냅샷. 공지가 바뀌어도 갱신하지 않는다. */
+    noticeTitle: varchar('notice_title', { length: 500 }),
+    createdByIdpUuid: varchar('created_by_idp_uuid', { length: 255 }),
+    reviewedByIdpUuid: varchar('reviewed_by_idp_uuid', { length: 255 }),
+    reviewedAt: timestamp('reviewed_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    widgetKeyQuestionUnique: uniqueIndex(
+      'suggested_questions_widget_key_id_normalized_question_unique',
+    ).on(table.widgetKeyId, table.normalizedQuestion),
+    servingIdx: index('suggested_questions_serving_idx').on(
+      table.widgetKeyId,
+      table.status,
+      table.createdAt,
+    ),
+    noticeIdIdx: index('suggested_questions_notice_id_idx').on(table.noticeId),
+    questionLength: check(
+      'suggested_questions_question_length',
+      sql`char_length(${table.question}) BETWEEN 1 AND 100`,
+    ),
+  }),
+);
+
+/**
+ * 공지 처리 장부
+ * - 주기 작업이 "이 공지는 이미 처리했다"를 기록하는 용도. 공지 내용은 저장하지 않는다.
+ * - (widget_key_id, notice_id) 기본키로 INSERT ... ON CONFLICT DO NOTHING 선점을 만든다.
+ *   같은 공지에 LLM이 두 번 돌지 않는다.
+ * - MAX(notice_id)가 "어디까지 봤나" 커서 역할도 한다. 지글 검색은 최신순이 아니라
+ *   오래된 공지도 섞여 오므로 커서 없이는 과거 공지를 계속 다시 집는다.
+ * - 질문이 0개 나온 공지도 행이 남아 다시 처리하지 않는다.
+ */
+export const noticeQuestionIngestions = pgTable(
+  'notice_question_ingestions',
+  {
+    widgetKeyId: uuid('widget_key_id')
+      .notNull()
+      .references(() => widgetKeys.id, { onDelete: 'cascade' }),
+    noticeId: integer('notice_id').notNull(),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({
+      name: 'notice_question_ingestions_pkey',
+      columns: [table.widgetKeyId, table.noticeId],
+    }),
+  }),
+);
+
 // Relations
 export const organizationsRelations = relations(organizations, ({ many }) => ({
   memberships: many(organizationMemberships),
@@ -732,6 +818,26 @@ export const unansweredQuestionsRelations = relations(
   }),
 );
 
+export const suggestedQuestionsRelations = relations(
+  suggestedQuestions,
+  ({ one }) => ({
+    widgetKey: one(widgetKeys, {
+      fields: [suggestedQuestions.widgetKeyId],
+      references: [widgetKeys.id],
+    }),
+  }),
+);
+
+export const noticeQuestionIngestionsRelations = relations(
+  noticeQuestionIngestions,
+  ({ one }) => ({
+    widgetKey: one(widgetKeys, {
+      fields: [noticeQuestionIngestions.widgetKeyId],
+      references: [widgetKeys.id],
+    }),
+  }),
+);
+
 // Types
 export type Admin = typeof admins.$inferSelect;
 export type NewAdmin = typeof admins.$inferInsert;
@@ -792,3 +898,15 @@ export type UnansweredQuestion = typeof unansweredQuestions.$inferSelect;
 export type NewUnansweredQuestion = typeof unansweredQuestions.$inferInsert;
 export type UnansweredQuestionStatus =
   (typeof unansweredQuestionStatusEnum.enumValues)[number];
+
+export type SuggestedQuestion = typeof suggestedQuestions.$inferSelect;
+export type NewSuggestedQuestion = typeof suggestedQuestions.$inferInsert;
+export type SuggestedQuestionSource =
+  (typeof suggestedQuestionSourceEnum.enumValues)[number];
+export type SuggestedQuestionStatus =
+  (typeof suggestedQuestionStatusEnum.enumValues)[number];
+
+export type NoticeQuestionIngestion =
+  typeof noticeQuestionIngestions.$inferSelect;
+export type NewNoticeQuestionIngestion =
+  typeof noticeQuestionIngestions.$inferInsert;

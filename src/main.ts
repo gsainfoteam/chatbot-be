@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { EmbeddingBackfillWorker } from './embedding/backfill/embedding-backfill.worker';
+import { SuggestedQuestionsWorker } from './suggested-questions/generation/suggested-questions.worker';
 import {
   initializeMetrics,
   MetricsInterceptor,
@@ -152,6 +153,7 @@ async function bootstrap() {
   app.enableShutdownHooks();
   await app.listen(port, '0.0.0.0');
   app.get(EmbeddingBackfillWorker).start();
+  app.get(SuggestedQuestionsWorker).start();
   console.log(`Application is running on: http://localhost:${port}`);
   console.log(`Swagger documentation: http://localhost:${port}/api/docs`);
 }

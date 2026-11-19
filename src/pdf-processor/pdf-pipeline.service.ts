@@ -3,7 +3,16 @@ import { ConfigService } from '@nestjs/config';
 import { PDF_PROCESSOR_PROMPT } from '../chat/prompts/pdf-processor';
 import { PDF_CHUNKING_PROMPT } from '../chat/prompts/pdf-chunking-prompt';
 import { LLM_CLIENT, type LlmClient } from '../chat/llm/llm-client.interface';
-import { PdfTextService } from './pdf-text.service';
+import type { LlmRequestMessage } from '../chat/types/llm.types';
+import {
+  PAGE_START,
+  appendPageImageReference,
+  hasNoTextLayer,
+  hasPageImageReference,
+  normalizeImageReferences,
+} from './page-image-reference';
+import { isSparseText } from './pdf-page-image';
+import { type PdfPageContent, PdfTextService } from './pdf-text.service';
 import {
   splitMarkdownIntoSections,
   type MarkdownSection,
@@ -31,6 +40,8 @@ export type PipelineResult = {
   chunks: PipelineChunk[];
 };
 
+export type PageImageSink = (pageNumber: number, png: Buffer) => Promise<void>;
+
 type ChunkMetadata = {
   index: number;
   path: string;
@@ -45,7 +56,7 @@ type MetadataBatchResponse = {
 const METADATA_BATCH_SIZE = 15;
 const SNIPPET_CHARS = 1_500;
 const OVERVIEW_CHARS = 2_500;
-/** Fail the whole job when Pass 1 LLM fallbacks exceed this fraction of pages. */
+/** Fail the whole job when more than this fraction of pages fail in Pass 1. */
 const DEFAULT_PASS1_MAX_FAILURE_RATIO = 0.1;
 
 @Trace()
@@ -85,38 +96,49 @@ export class PdfPipelineService {
   async processPdf(
     pdfBytes: Buffer,
     filename: string,
+    onPageImage?: PageImageSink,
   ): Promise<PipelineResult> {
-    const pageTexts = await this.pdfTextService.extractPageTexts(pdfBytes);
-    const totalPages = pageTexts.length;
-    this.logger.log(
-      `Pass 1: Converting ${filename} to markdown (${totalPages} pages)`,
-    );
-
     const pageMarkdowns: string[] = [];
     const failedPages: number[] = [];
     let previousContext = '';
+    let totalPages = 0;
+    let imagePages = 0;
 
-    for (let i = 0; i < totalPages; i += 1) {
-      const currentPage = i + 1;
-      const pageText = pageTexts[i] ?? '';
+    await this.pdfTextService.forEachPage(pdfBytes, async (page, pageCount) => {
+      if (page.pageNumber === 1) {
+        this.logger.log(
+          `Pass 1: Converting ${filename} to markdown (${pageCount} pages)`,
+        );
+      }
+      totalPages = pageCount;
+      if (page.image) imagePages += 1;
+
       const { markdown, usedFallback } = await this.convertPageToMarkdown({
         filename,
         totalPages,
-        currentPage,
-        pageText,
+        currentPage: page.pageNumber,
+        pageText: page.text,
+        pageImage: page.image,
         previousContext,
       });
-      if (usedFallback) failedPages.push(currentPage);
-      pageMarkdowns.push(markdown);
+      if (usedFallback || page.imageFailed) failedPages.push(page.pageNumber);
+      pageMarkdowns.push(
+        await this.storeReferencedImage(markdown, page, onPageImage),
+      );
+      const pageContext = normalizeImageReferences(markdown, null).trim();
       previousContext =
-        markdown.length > this.contextLength
-          ? markdown.slice(-this.contextLength)
-          : markdown;
-    }
+        pageContext.slice(-this.contextLength) || previousContext;
+    });
 
+    this.logger.log(
+      `Pass 1: Sent page images for ${imagePages}/${totalPages} pages`,
+    );
     this.assertPass1FailureWithinLimit(totalPages, failedPages);
 
-    const combinedMarkdown = pageMarkdowns.join('\n\n');
+    const combinedMarkdown = pageMarkdowns
+      .join('\n\n')
+      .trimStart()
+      .replace(new RegExp(`^${PAGE_START}`), '');
     this.logger.log(
       `Pass 2: Labeling server-split sections (${combinedMarkdown.length} chars)`,
     );
@@ -137,6 +159,30 @@ export class PdfPipelineService {
     return this.chunkMarkdownWithMetadata(markdown, `${resourceName}.pdf`);
   }
 
+  /** Stores the image right away so a long document does not pile them up in memory. */
+  private async storeReferencedImage(
+    markdown: string,
+    page: PdfPageContent,
+    onPageImage?: PageImageSink,
+  ): Promise<string> {
+    if (
+      !page.storedImage ||
+      !hasPageImageReference(markdown, page.pageNumber)
+    ) {
+      return markdown;
+    }
+
+    try {
+      await onPageImage?.(page.pageNumber, page.storedImage);
+      return `${PAGE_START}\n${markdown}`;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to store image of page ${page.pageNumber}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return normalizeImageReferences(markdown, null);
+    }
+  }
+
   private assertPass1FailureWithinLimit(
     totalPages: number,
     failedPages: number[],
@@ -148,7 +194,7 @@ export class PdfPipelineService {
 
     const ratio = failedPages.length / totalPages;
     this.logger.warn(
-      `Pass 1 LLM fallbacks: ${failedPages.length}/${totalPages} pages (${(ratio * 100).toFixed(1)}%) pages=[${failedPages.join(',')}]`,
+      `Pass 1 failed pages: ${failedPages.length}/${totalPages} pages (${(ratio * 100).toFixed(1)}%) pages=[${failedPages.join(',')}]`,
     );
 
     if (
@@ -156,7 +202,7 @@ export class PdfPipelineService {
       ratio > this.pass1MaxFailureRatio
     ) {
       throw new Error(
-        `Pass 1 LLM failures exceeded threshold: ${failedPages.length}/${totalPages} pages failed ` +
+        `Pass 1 page failures exceeded threshold: ${failedPages.length}/${totalPages} pages failed ` +
           `(max ratio ${this.pass1MaxFailureRatio}). pages=[${failedPages.join(',')}]`,
       );
     }
@@ -167,24 +213,54 @@ export class PdfPipelineService {
     totalPages: number;
     currentPage: number;
     pageText: string;
+    pageImage: string | null;
     previousContext: string;
   }): Promise<{ markdown: string; usedFallback: boolean }> {
-    const { filename, totalPages, currentPage, pageText, previousContext } =
-      params;
+    const {
+      filename,
+      totalPages,
+      currentPage,
+      pageText,
+      pageImage,
+      previousContext,
+    } = params;
+
+    if (!pageText.trim() && !pageImage) {
+      return { markdown: '', usedFallback: false };
+    }
+
+    // Given the previous page's body next to an image, the LLM repeats it as
+    // content of this page. Headings are enough to keep the hierarchy consistent.
+    const context = pageImage
+      ? (previousContext.match(/^#{1,6} .+$/gm) ?? []).join('\n')
+      : previousContext;
 
     const prompt = PDF_PROCESSOR_PROMPT.replaceAll('{filename}', filename)
       .replaceAll('{total_pages}', String(totalPages))
       .replaceAll('{current_page}', String(currentPage))
-      .replaceAll('{previous_context}', previousContext || '없음 (첫 페이지)');
+      .replaceAll(
+        '{previous_context}',
+        context || (currentPage === 1 ? '없음 (첫 페이지)' : '없음'),
+      );
 
     const userText = pageText.trim()
       ? `${prompt}\n\n페이지 텍스트:\n${pageText}`
-      : `${prompt}\n\n페이지 텍스트를 추출할 수 없었습니다. 추출된 텍스트 없이 가능한 범위에서 변환하세요.`;
+      : `${prompt}\n\n페이지 텍스트를 추출할 수 없었습니다. 아래 페이지 이미지만을 참고하여 변환하세요.`;
+    const content: LlmRequestMessage['content'] = pageImage
+      ? [
+          { type: 'text', text: userText },
+          { type: 'image_url', image_url: { url: pageImage } },
+        ]
+      : userText;
+    const fallback = {
+      markdown: pageText.trim() ? `## Page ${currentPage}\n\n${pageText}` : '',
+      usedFallback: true,
+    };
 
     try {
       const model = this.llm.getModel('normal');
       const response = await this.llm.callLLM(
-        [{ role: 'user', content: userText }],
+        [{ role: 'user', content }],
         model,
         {
           temperature: 0.2,
@@ -192,25 +268,38 @@ export class PdfPipelineService {
           timeoutMs: this.llmTimeoutMs,
         },
       );
-      const markdown = response.choices?.[0]?.message?.content ?? '';
-      if (!markdown.trim() && pageText.trim()) {
+      const choice = response.choices?.[0];
+      let markdown = normalizeImageReferences(
+        choice?.message?.content ?? '',
+        pageImage ? currentPage : null,
+      );
+      // Everything on a page without a text layer came from its image.
+      if (
+        pageImage &&
+        hasNoTextLayer(pageText) &&
+        markdown.trim() &&
+        !hasPageImageReference(markdown, currentPage)
+      ) {
+        markdown = appendPageImageReference(markdown, filename, currentPage);
+      }
+
+      // The prompt tells the LLM to drop pages without information, which an
+      // answer cut off by the token limit or a filter has not done.
+      if (
+        !markdown.trim() &&
+        (choice?.finish_reason !== 'stop' || !isSparseText(pageText))
+      ) {
         this.logger.warn(
-          `Empty LLM markdown for page ${currentPage}; using raw extracted text`,
+          `Empty LLM markdown for page ${currentPage} (finish_reason=${choice?.finish_reason}); using raw extracted text`,
         );
-        return {
-          markdown: `## Page ${currentPage}\n\n${pageText}`,
-          usedFallback: true,
-        };
+        return fallback;
       }
       return { markdown, usedFallback: false };
     } catch (error) {
       this.logger.error(
         `Error calling LLM for page ${currentPage}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return {
-        markdown: `## Page ${currentPage}\n\n${pageText}`,
-        usedFallback: true,
-      };
+      return fallback;
     }
   }
 
@@ -472,7 +561,10 @@ function buildRootOverview(
     .slice(0, 40)
     .map((s, i) => `${i + 1}. ${s.title}`)
     .join('\n');
-  const preface = sections[0]?.content.slice(0, OVERVIEW_CHARS) ?? '';
+  // A reference here would make the image a candidate for every question.
+  const preface = normalizeImageReferences(sections[0]?.content ?? '', null)
+    .replaceAll(PAGE_START, '')
+    .slice(0, OVERVIEW_CHARS);
   return [
     summary ? `# 개요\n\n${summary}` : '# 개요',
     '',

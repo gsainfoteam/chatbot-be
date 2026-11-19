@@ -11,7 +11,10 @@ import {
   RepositoryAuthorizationError,
   type OrganizationsRepository,
 } from '../organizations/organizations.repository';
-import type { AdminPrincipal } from '../organizations/organization.types';
+import type {
+  AdminPrincipal,
+  DocumentAccessDecision,
+} from '../organizations/organization.types';
 import type { DocumentsRepository } from '../pdf-processor/documents.repository';
 import type { GcsStorageService } from '../pdf-processor/gcs-storage.service';
 import { parseExpiresAt, UploadService } from './upload.service';
@@ -151,10 +154,10 @@ function createService() {
       async () => ({ kind: 'ok', document: document() }),
     ),
   };
-  const accessDecision = (row = document()) => ({
+  const accessDecision = (row = document()): DocumentAccessDecision => ({
     document: row,
-    relation: 'OWNER' as const,
-    ownerRole: 'MANAGER' as const,
+    relation: 'OWNER',
+    ownerRole: 'MANAGER',
     canView: true,
     canManage: true,
     canShare: true,
@@ -175,11 +178,21 @@ function createService() {
       createdAt: new Date(),
       updatedAt: new Date(),
     })),
-    requireDocumentView: jest.fn(async () => accessDecision()),
-    requireDocumentManage: jest.fn(async () => accessDecision()),
-    requireDocumentShare: jest.fn(async () => accessDecision()),
-    requireOrganizationMember: jest.fn(async () => null),
-    requireOrganizationManager: jest.fn(async () => null),
+    requireDocumentView: jest.fn<
+      OrganizationAccessService['requireDocumentView']
+    >(async () => accessDecision()),
+    requireDocumentManage: jest.fn<
+      OrganizationAccessService['requireDocumentManage']
+    >(async () => accessDecision()),
+    requireDocumentShare: jest.fn<
+      OrganizationAccessService['requireDocumentShare']
+    >(async () => accessDecision()),
+    requireOrganizationMember: jest.fn<
+      OrganizationAccessService['requireOrganizationMember']
+    >(async () => null),
+    requireOrganizationManager: jest.fn<
+      OrganizationAccessService['requireOrganizationManager']
+    >(async () => null),
   };
   return {
     service: new UploadService(
@@ -448,18 +461,93 @@ describe('UploadService organization-aware transitions', () => {
     ).not.toHaveBeenCalled();
   });
 
-  it('sharing returns the committed result without a second authorization read', async () => {
-    const { service, gcs, organizationsRepo, access } = createService();
-    await service.shareDocument(
-      document().id,
-      '00000000-0000-0000-0000-000000000020',
-      principal(),
-    );
-    expect(organizationsRepo.setShare).toHaveBeenCalled();
-    expect(access.requireDocumentView).not.toHaveBeenCalled();
-    expect(gcs.uploadPdf).not.toHaveBeenCalled();
-    expect(organizationsRepo.enqueueDocumentReprocess).not.toHaveBeenCalled();
-  });
+  it.each(['shareDocument', 'unshareDocument'] as const)(
+    '%s returns the committed document with refreshed permissions after hydration',
+    async (method) => {
+      const { service, gcs, organizationsRepo, access } = createService();
+      const committed = document({ title: 'Committed title' });
+      const mutation = method === 'shareDocument' ? 'setShare' : 'removeShare';
+      organizationsRepo[mutation].mockResolvedValue({
+        kind: 'ok',
+        document: committed,
+      });
+      // Membership changes while response metadata is being loaded.
+      organizationsRepo.hydrateDocuments.mockImplementation(async (rows) => {
+        access.requireDocumentView.mockResolvedValue({
+          document: document({ title: 'Later title' }),
+          relation: 'OWNER',
+          ownerRole: 'MEMBER',
+          canView: true,
+          canManage: false,
+          canShare: false,
+          canTransfer: false,
+        });
+        return rows.map((row) => ({
+          document: row,
+          ownerOrganization: {
+            id: ORGANIZATION_ID,
+            name: 'Owner',
+            slug: 'owner',
+          },
+          uploader: null,
+          sharedOrganizations: [],
+        }));
+      });
+      const result = await service[method](
+        document().id,
+        '00000000-0000-0000-0000-000000000020',
+        principal(),
+      );
+      expect(organizationsRepo[mutation]).toHaveBeenCalledWith({
+        documentId: document().id,
+        expectedOwnerOrganizationId: ORGANIZATION_ID,
+        targetOrganizationId: '00000000-0000-0000-0000-000000000020',
+        actor: principal(),
+      });
+      expect(access.requireDocumentShare).toHaveBeenCalledTimes(1);
+      expect(access.requireDocumentView).toHaveBeenCalledTimes(1);
+      expect(access.requireDocumentView).toHaveBeenCalledWith(
+        document().id,
+        principal(),
+      );
+      expect(result).toMatchObject({
+        id: committed.id,
+        title: committed.title,
+        canManage: false,
+        canShare: false,
+        canTransfer: false,
+      });
+      expect(gcs.uploadPdf).not.toHaveBeenCalled();
+      expect(organizationsRepo.enqueueDocumentReprocess).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['shareDocument', 'unshareDocument'] as const)(
+    '%s rejects the response when view access is revoked during hydration',
+    async (method) => {
+      const { service, organizationsRepo, access } = createService();
+      organizationsRepo.hydrateDocuments.mockImplementation(async () => {
+        access.requireDocumentView.mockRejectedValue(
+          new NotFoundException('Document not found'),
+        );
+        return [];
+      });
+
+      await expect(
+        service[method](
+          document().id,
+          '00000000-0000-0000-0000-000000000020',
+          principal(),
+        ),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      const mutation = method === 'shareDocument' ? 'setShare' : 'removeShare';
+      expect(organizationsRepo[mutation]).toHaveBeenCalledTimes(1);
+      expect(access.requireDocumentView).toHaveBeenCalledWith(
+        document().id,
+        principal(),
+      );
+    },
+  );
 
   it('does not let an unauthorized actor share a document', async () => {
     const { service, organizationsRepo, access } = createService();
@@ -666,9 +754,31 @@ describe('UploadService organization-aware transitions', () => {
 
   it('rejects inaccessible organization filters for accessible listing', async () => {
     const { service, access, organizationsRepo } = createService();
+    const inaccessibleOrganizationId = '00000000-0000-4000-8000-000000000099';
     access.requireOrganizationMember.mockRejectedValue(
       new ForbiddenException('Accepted organization membership required'),
     );
+    await expect(
+      service.listAccessibleDocuments(principal(), {
+        organizationId: inaccessibleOrganizationId,
+        page: 1,
+        size: 20,
+        status: 'all',
+        sort: 'recent',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(access.requireOrganizationMember).toHaveBeenCalledWith(
+      inaccessibleOrganizationId,
+      principal(),
+    );
+    expect(organizationsRepo.listAccessibleDocuments).not.toHaveBeenCalled();
+    expect(
+      organizationsRepo.summarizeAccessibleDocuments,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid UUID organization filters before checking membership', async () => {
+    const { service, access, organizationsRepo } = createService();
     await expect(
       service.listAccessibleDocuments(principal(), {
         organizationId: '00000000-0000-0000-0000-000000000099',
@@ -677,8 +787,12 @@ describe('UploadService organization-aware transitions', () => {
         status: 'all',
         sort: 'recent',
       }),
-    ).rejects.toBeInstanceOf(ForbiddenException);
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(access.requireOrganizationMember).not.toHaveBeenCalled();
     expect(organizationsRepo.listAccessibleDocuments).not.toHaveBeenCalled();
+    expect(
+      organizationsRepo.summarizeAccessibleDocuments,
+    ).not.toHaveBeenCalled();
   });
 
   it('returns the updated document after unshare', async () => {

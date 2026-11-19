@@ -615,9 +615,21 @@ describe('ChatService assistant answer aggregation', () => {
     });
   });
 
+  it('rejects the sixth user message under the session lock', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ id: sessionId }]);
+    db.queueSelect([{ count: 5 }]);
+    await expect(
+      service.createMessage(sessionId, {
+        role: MessageRole.USER,
+        content: 'sixth',
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+  });
   it('does not touch total_answers for user messages', async () => {
-    const { service, usageService } = createService();
-
+    const { service, db, usageService } = createService();
+    db.queueSelect([{ id: sessionId }]);
+    db.queueSelect([{ count: 4 }]);
     await service.createMessage(sessionId, {
       role: MessageRole.USER,
       content: 'question',

@@ -50,6 +50,14 @@ export function tryFixMojibake(text: string): string | null {
 }
 
 /**
+ * Broken font mappings yield lone surrogates. They are never real text, and the
+ * LLM gateway rejects a whole request (400) that contains one.
+ */
+export function removeLoneSurrogates(text: string): string {
+  return text.replace(/\p{Cs}/gu, '');
+}
+
+/**
  * Apply mojibake fix when detected; otherwise return original text.
  * If mojibake is detected but recovery fails, returns empty string (skip bad text).
  */

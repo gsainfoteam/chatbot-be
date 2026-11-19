@@ -30,6 +30,12 @@ enum LlmProvider {
   OpenRouter = 'openrouter',
 }
 
+enum AgentModelTier {
+  Light = 'light',
+  Normal = 'normal',
+  Heavy = 'heavy',
+}
+
 /**
  * "true"/"false"만 불리언으로 변환하고, 그 외 값은 문자열 그대로 남깁니다.
  * 남은 문자열은 `@IsBoolean()`이 거부하므로 `fasle`·`0`·`off` 같은 오타가
@@ -236,6 +242,108 @@ export class EnvironmentVariables {
   @Min(1)
   @Max(10)
   RETRIEVAL_MAX_CHUNKS_PER_DOCUMENT?: number;
+
+  // 에이전트(ReAct) 답변 경로. 기본값은 src/chat/agent/agent.config.ts 참고.
+
+  /** 첫 검색이 비거나 약할 때 에이전트 재탐색을 쓸지. 기본 false. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  AGENT_ENABLED?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  AGENT_ENFORCE_TIME_BUDGET?: boolean;
+
+  /** 에이전트 도구 호출 라운드 상한. 기본 3. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(6)
+  AGENT_MAX_ROUNDS?: number;
+
+  /** 에이전트 재탐색 전체 시간 예산(ms). 넘으면 모은 자료로 답한다. 기본 20000. */
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(120000)
+  AGENT_TIME_BUDGET_MS?: number;
+
+  /** 도구를 고르는 라운드에 쓸 모델 티어. 기본 normal. */
+  @IsOptional()
+  @IsEnum(AgentModelTier)
+  AGENT_MODEL_TIER?: AgentModelTier;
+
+  // Ziggle MCP 공지 검색 (에이전트 도구). URL이 비어 있으면 공지 도구를 쓰지 않는다.
+
+  @IsOptional()
+  @IsString()
+  ZIGGLE_MCP_URL?: string;
+
+  /** Ziggle MCP `x-api-key`. Ziggle 서버가 32자 이상을 요구한다. */
+  @ValidateIf((o: EnvironmentVariables) => Boolean(o.ZIGGLE_MCP_URL))
+  @IsString()
+  @MinLength(32)
+  ZIGGLE_MCP_API_KEY?: string;
+
+  /** Ziggle MCP 연결·도구 호출 각각의 시간 상한(ms). 기본 5000. */
+  @IsOptional()
+  @IsInt()
+  @Min(500)
+  @Max(30000)
+  ZIGGLE_MCP_TIMEOUT_MS?: number;
+
+  /** 공지를 쓸 위젯 키 ID(쉼표 구분). `*`는 모든 위젯. 비우면 아무 위젯에서도 쓰지 않는다. */
+  @IsOptional()
+  @IsString()
+  ZIGGLE_NOTICE_WIDGET_KEY_IDS?: string;
+
+  /** 공지 원문 링크 앞부분. 기본 https://ziggle.gistory.me/notice/ */
+  @IsOptional()
+  @IsString()
+  ZIGGLE_NOTICE_URL_BASE?: string;
+
+  // 웹 검색 (에이전트 도구, Gemini 구글 검색 그라운딩). 실험 기능이라 기본값은 꺼짐.
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  WEB_SEARCH_ENABLED?: boolean;
+
+  /** 그라운딩을 쓸 Gemini 모델. lite 모델은 검색을 하지 않는다. 기본 gemini-2.5-flash. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_MODEL?: string;
+
+  /** 웹 검색 한 번의 시간 상한(ms). 기본 15000. */
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(60000)
+  WEB_SEARCH_TIMEOUT_MS?: number;
+
+  /** 웹 검색을 쓸 위젯 키 ID(쉼표 구분). `*`는 모든 위젯. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_WIDGET_KEY_IDS?: string;
+
+  /** 허용 도메인(쉼표 구분). 비우면 모든 도메인을 허용한다. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_ALLOWED_DOMAINS?: string;
+
+  /** 학교 공식 출처로 표시할 도메인(쉼표 구분). 기본 gist.ac.kr. */
+  @IsOptional()
+  @IsString()
+  WEB_SEARCH_OFFICIAL_DOMAINS?: string;
+
+  /** 웹 검색을 켠 조사의 시간 예산(ms). 기본 35000. */
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(120000)
+  AGENT_WEB_TIME_BUDGET_MS?: number;
 
   // Client Domain Configuration
   @IsString()

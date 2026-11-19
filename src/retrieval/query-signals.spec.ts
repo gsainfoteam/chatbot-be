@@ -5,6 +5,7 @@ import {
   matchExactSignals,
   normalizeForMatch,
   normalizeQuery,
+  stripSchoolName,
 } from './query-signals';
 
 const signalValues = (question: string) =>
@@ -167,5 +168,21 @@ describe('matchExactSignals', () => {
   it('returns nothing for null text or no signals', () => {
     expect(matchExactSignals(null, signals)).toEqual([]);
     expect(matchExactSignals('EC2205', [])).toEqual([]);
+  });
+
+  describe('stripSchoolName', () => {
+    it.each([
+      ['GIST 안강훈 교수에 대해 알려줘', '안강훈 교수에 대해 알려줘'],
+      ['지스트의 총장이 누구야?', '총장이 누구야?'],
+      ['광주과학기술원 중앙도서관 운영 시간', '중앙도서관 운영 시간'],
+      ['gist 셔틀버스 시간표', '셔틀버스 시간표'],
+      ['GIFT 학위연계과정이 뭐야?', 'GIFT 학위연계과정이 뭐야?'],
+    ])('%s → %s', (question, expected) => {
+      expect(stripSchoolName(question)).toBe(expected);
+    });
+
+    it('keeps a question that would lose its meaning', () => {
+      expect(stripSchoolName('GIST 소개')).toBe('GIST 소개');
+    });
   });
 });

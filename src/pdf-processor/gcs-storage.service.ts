@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Storage, Bucket, File } from '@google-cloud/storage';
+import { pageImageObjectPath } from './page-image-reference';
 import { Trace } from '@gsainfoteam/nest-observability';
 
 type GcsServiceAccountCredentials = {
@@ -90,6 +91,17 @@ export class GcsStorageService {
     return buf;
   }
 
+  /** Stored under the document prefix, so artifact deletion removes it too. */
+  async uploadPageImage(
+    resourceName: string,
+    pageNumber: number,
+    png: Buffer,
+  ): Promise<void> {
+    await this.bucket
+      .file(pageImageObjectPath(resourceName, pageNumber))
+      .save(png, { contentType: 'image/png', resumable: false });
+  }
+
   async uploadMarkdown(objectPath: string, content: string): Promise<void> {
     await this.bucket.file(objectPath).save(Buffer.from(content, 'utf-8'), {
       contentType: 'text/markdown; charset=utf-8',
@@ -99,7 +111,6 @@ export class GcsStorageService {
 
   /**
    * Upload processed documents map (path → markdown string).
-   * Binary (image) entries are skipped in phase 1.
    */
   async uploadDocuments(documents: Record<string, string>): Promise<void> {
     for (const [path, content] of Object.entries(documents)) {
@@ -121,7 +132,7 @@ export class GcsStorageService {
   }
 
   /**
-   * Delete generated Markdown while preserving the source PDF for retry.
+   * Delete generated Markdown and page images while preserving the source PDF for retry.
    */
   async deleteProcessedArtifacts(resourceName: string): Promise<void> {
     const toDelete = await this.getProcessedArtifactFiles(resourceName);

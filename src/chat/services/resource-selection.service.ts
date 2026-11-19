@@ -13,6 +13,11 @@ import { Trace } from '@gsainfoteam/nest-observability';
 export type RelevantChunkSelection = {
   rootPaths: string[];
   detailPaths: string[];
+  /**
+   * 선택 결과를 그대로 믿어도 되는지. 벡터 선별만 채우며, LLM 선별은 판단 근거가 없어 비워 둔다.
+   * true = 거리 또는 exact 근거가 강한 후보가 하나 이상 있음.
+   */
+  confident?: boolean;
 };
 
 /**
@@ -45,6 +50,7 @@ export class ResourceSelectionService {
     resources: ListResourceItem[],
     maxResults: number = 5,
     tokenUsage?: LlmUsage,
+    signal?: AbortSignal,
   ): Promise<RelevantChunkSelection> {
     if (!resources?.length) {
       return { rootPaths: [], detailPaths: [] };
@@ -69,7 +75,7 @@ export class ResourceSelectionService {
           { role: 'user', content: userPrompt },
         ],
         this.llmClient.getModel('light'),
-        { temperature: 0.1, max_tokens: 5000 },
+        { temperature: 0.1, max_tokens: 5000, signal },
       );
       this.addTokenUsage(tokenUsage, response.usage);
 

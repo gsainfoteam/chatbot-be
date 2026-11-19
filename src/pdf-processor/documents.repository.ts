@@ -30,6 +30,8 @@ export type ReplaceChunksInput = {
   embedding?: number[] | null;
 };
 
+const REQUEUE_MARK = 'Requeued after stuck processing timeout';
+
 @Injectable()
 export class DocumentsRepository {
   constructor(@Inject(DB_CONNECTION) private readonly db: Database) {}
@@ -126,17 +128,13 @@ export class DocumentsRepository {
           status: 'processing',
           processingToken: sql`gen_random_uuid()`,
           updatedAt: new Date(),
-          errorMessage: null,
         })
         .where(inArray(documents.id, ids))
         .returning();
     });
   }
 
-  async requeueStaleProcessing(
-    staleBefore: Date,
-    excludedDocumentIds: string[] = [],
-  ): Promise<number> {
+  private staleProcessing(staleBefore: Date, excludedDocumentIds: string[]) {
     const conditions = [
       eq(documents.status, 'processing'),
       eq(documents.isActive, true),
@@ -145,16 +143,61 @@ export class DocumentsRepository {
     if (excludedDocumentIds.length > 0) {
       conditions.push(notInArray(documents.id, excludedDocumentIds));
     }
+    return and(...conditions);
+  }
 
+  /**
+   * A document stuck again after its requeue may be what kills the process, so it
+   * fails instead of taking the service down on every retry. claimQueued leaves the
+   * requeue mark in place for this; every other way into the queue clears it.
+   */
+  async failRepeatedlyStuck(
+    staleBefore: Date,
+    excludedDocumentIds: string[] = [],
+  ) {
+    const stuck = await this.db
+      .select({
+        id: documents.id,
+        resourceName: documents.resourceName,
+        processingToken: documents.processingToken,
+      })
+      .from(documents)
+      .where(
+        and(
+          this.staleProcessing(staleBefore, excludedDocumentIds),
+          eq(documents.errorMessage, REQUEUE_MARK),
+        ),
+      );
+
+    const failed: typeof stuck = [];
+    for (const doc of stuck) {
+      if (
+        doc.processingToken &&
+        (await this.markFailed(
+          doc.id,
+          doc.processingToken,
+          'Processing stopped twice before finishing. The document may be too large to process.',
+        ))
+      ) {
+        failed.push(doc);
+      }
+    }
+    return failed;
+  }
+
+  async requeueStaleProcessing(
+    staleBefore: Date,
+    excludedDocumentIds: string[] = [],
+  ): Promise<number> {
     const result = await this.db
       .update(documents)
       .set({
         status: 'queued',
         processingToken: null,
         updatedAt: new Date(),
-        errorMessage: 'Requeued after stuck processing timeout',
+        errorMessage: REQUEUE_MARK,
       })
-      .where(and(...conditions))
+      .where(this.staleProcessing(staleBefore, excludedDocumentIds))
       .returning({ id: documents.id });
     return result.length;
   }

@@ -1,6 +1,7 @@
 name: Build Container And Update Kubernetes Cluster (Dev)
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - development
@@ -8,12 +9,16 @@ on:
 env:
   REGISTRY: ghcr.io
   REPOSITORY: ${{ github.repository }}
-  IMAGE_TAG: dev${{ github.run_number }}
+  IMAGE_TAG: dev${{ github.run_number }}-${{ github.run_attempt }}
 
 jobs:
   build:
     name: Build Docker Image
+    if: github.ref == 'refs/heads/development'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      image_tag: ${{ steps.meta.outputs.version }}
 
     permissions:
       contents: read
@@ -63,6 +68,10 @@ jobs:
     name: Update GitOps Repository
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # A deploy-only retry must use the tag produced by the successful build.
+      IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
     steps:
       - name: Checkout GitOps Repository
         uses: actions/checkout@v4

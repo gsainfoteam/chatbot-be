@@ -1,0 +1,5 @@
+ALTER TABLE "sessions" ADD COLUMN "end_user_key" varchar(64);--> statement-breakpoint
+ALTER TABLE "widget_keys" ADD COLUMN "question_limit" integer;--> statement-breakpoint
+ALTER TABLE "widget_keys" ADD COLUMN "question_limit_window_seconds" integer;--> statement-breakpoint
+CREATE INDEX "sessions_widget_key_end_user_idx" ON "sessions" USING btree ("widget_key_id","end_user_key");--> statement-breakpoint
+ALTER TABLE "widget_keys" ADD CONSTRAINT "widget_keys_question_limit_check" CHECK (("widget_keys"."question_limit" IS NULL AND "widget_keys"."question_limit_window_seconds" IS NULL) OR ("widget_keys"."question_limit" IS NOT NULL AND "widget_keys"."question_limit_window_seconds" IS NOT NULL AND "widget_keys"."question_limit" BETWEEN 1 AND 10000 AND "widget_keys"."question_limit_window_seconds" BETWEEN 60 AND 2592000));

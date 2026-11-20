@@ -181,7 +181,7 @@ paths:
         '401':
           description: 인증 실패
         '429':
-          description: 세션당 질문 횟수 초과 (user 메시지 최대 5회)
+          description: 사용자별 질문 한도 초과 (위젯 키에 한도를 설정한 경우)
           content:
             application/json:
               schema:
@@ -413,6 +413,12 @@ components:
           type: string
           description: "위젯이 실행된 현재 페이지 URL (Origin 검증 보조용)"
           example: "https://www.myshop.com/products/1"
+        clientId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: "선택. 기기 ID 또는 도입 서비스의 사용자 ID. 같은 값이면 세션이 달라도 질문 한도를 함께 셉니다. 원문은 저장하지 않습니다."
+          example: "6f1c2a9e-3b7d-4c11-9a4e-2d5f8b0c7e13"
 
     WidgetSessionResponse:
       type: object
@@ -458,18 +464,26 @@ components:
 
     TooManyQuestionsError:
       type: object
-      description: "세션당 질문 횟수 초과 시 429 응답"
+      description: "사용자별 질문 한도 초과 시 429 응답"
       properties:
         statusCode:
           type: integer
           example: 429
         message:
           type: string
-          example: "이 세션에서는 최대 5개의 질문만 가능합니다."
+          example: "질문 한도를 모두 사용했습니다. 잠시 후 다시 질문해 주세요."
         limit:
           type: integer
-          description: "세션당 최대 질문 횟수"
-          example: 5
+          description: "기간 안에 사용자 한 명이 보낼 수 있는 질문 수"
+          example: 20
+        windowSeconds:
+          type: integer
+          description: "한도를 세는 기간(초)"
+          example: 86400
+        retryAfterSeconds:
+          type: integer
+          description: "다시 질문할 수 있을 때까지 남은 시간(초)"
+          example: 3600
 
     # --- Admin ---
     WidgetKey:

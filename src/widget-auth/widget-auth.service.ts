@@ -5,6 +5,7 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { createHash } from 'crypto';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { DB_CONNECTION, type Database, widgetKeys, sessions } from '../db';
@@ -90,6 +91,12 @@ export class WidgetAuthService {
         widgetKeyId: widgetKey.id,
         sessionToken: '', // 임시값, 아래에서 JWT 생성 후 업데이트
         pageUrl: pageUrlToStore,
+        // 질문 한도를 사용자 단위로 세기 위한 키. 원문 대신 위젯 키별 해시만 저장한다.
+        endUserKey: dto.clientId
+          ? createHash('sha256')
+              .update(`${widgetKey.id}:${dto.clientId}`)
+              .digest('hex')
+          : null,
         expiresAt,
       })
       .returning();

@@ -5,6 +5,7 @@ import {
   IsUrl,
   IsOptional,
   IsIn,
+  Length,
   ValidateIf,
 } from 'class-validator';
 
@@ -51,4 +52,15 @@ export class WidgetSessionRequestDto {
   @IsString()
   @IsNotEmpty({ message: 'appId is required when clientType is app' })
   appId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '사용자 식별값. 위젯·앱이 만든 기기 ID 또는 도입 서비스의 사용자 ID. 같은 값이면 세션이 달라도 질문 한도를 함께 셉니다. 원문은 저장하지 않습니다.',
+    example: '6f1c2a9e-3b7d-4c11-9a4e-2d5f8b0c7e13',
+    maxLength: 128,
+  })
+  @IsOptional()
+  @IsString()
+  @Length(1, 128)
+  clientId?: string;
 }

@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { QuestionLimitDto } from './question-limit.dto';
 
 export enum WidgetKeyStatus {
   ACTIVE = 'ACTIVE',
@@ -44,6 +45,13 @@ export class WidgetKeyDto {
     example: ['com.company.myapp'],
   })
   allowedAppIds: string[];
+
+  @ApiProperty({
+    description: '사용자별 질문 한도. null이면 무제한',
+    type: QuestionLimitDto,
+    nullable: true,
+  })
+  questionLimit: QuestionLimitDto | null;
 
   @ApiProperty({
     description: '생성 일시',

@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Patch,
   Delete,
   Body,
@@ -27,6 +28,7 @@ import { RegisterDomainsDto } from '../common/dto/register-domains.dto';
 import { RegisterAppIdDto } from '../common/dto/register-app-id.dto';
 import { InviteCollaboratorDto } from '../common/dto/invite-collaborator.dto';
 import { WidgetKeyDto } from '../common/dto/widget-key.dto';
+import { QuestionLimitDto } from '../common/dto/question-limit.dto';
 import { CollaboratorDto } from '../common/dto/collaborator.dto';
 import { WidgetKeyStatsDto } from '../common/dto/widget-key-usage.dto';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
@@ -414,6 +416,58 @@ export class AdminController {
     @Param('widgetKeyId') widgetKeyId: string,
   ): Promise<WidgetKeyDto> {
     return this.adminService.revokeWidgetKey(widgetKeyId, admin.uuid);
+  }
+
+  @Put('widget-keys/:widgetKeyId/question-limit')
+  @ApiOperation({
+    summary: '사용자별 질문 한도 설정',
+    description:
+      '위젯 사용자 한 명이 최근 windowSeconds초 동안 보낼 수 있는 질문 수를 정합니다. 세션 발급 때 같은 clientId를 보낸 세션은 함께 셉니다. 키 소유자만 바꿀 수 있습니다.',
+  })
+  @ApiParam({
+    name: 'widgetKeyId',
+    description: '위젯 키의 UUID',
+    type: String,
+  })
+  @ApiResponse({ status: 200, description: '설정 성공', type: WidgetKeyDto })
+  @ApiResponse({ status: 400, description: '허용 범위를 벗어난 값' })
+  @ApiResponse({ status: 401, description: '인증 실패' })
+  @ApiResponse({
+    status: 403,
+    description: '권한 없음 (본인이 만든 키가 아니거나 폐기된 키)',
+  })
+  @ApiResponse({ status: 404, description: '존재하지 않는 Key ID' })
+  async setQuestionLimit(
+    @CurrentAdmin() admin: AdminContext,
+    @Param('widgetKeyId') widgetKeyId: string,
+    @Body() dto: QuestionLimitDto,
+  ): Promise<WidgetKeyDto> {
+    return this.adminService.setQuestionLimit(widgetKeyId, admin.uuid, dto);
+  }
+
+  @Delete('widget-keys/:widgetKeyId/question-limit')
+  @ApiOperation({
+    summary: '사용자별 질문 한도 해제',
+    description:
+      '질문 한도를 없애 무제한으로 되돌립니다. 키 소유자만 바꿀 수 있습니다.',
+  })
+  @ApiParam({
+    name: 'widgetKeyId',
+    description: '위젯 키의 UUID',
+    type: String,
+  })
+  @ApiResponse({ status: 200, description: '해제 성공', type: WidgetKeyDto })
+  @ApiResponse({ status: 401, description: '인증 실패' })
+  @ApiResponse({
+    status: 403,
+    description: '권한 없음 (본인이 만든 키가 아니거나 폐기된 키)',
+  })
+  @ApiResponse({ status: 404, description: '존재하지 않는 Key ID' })
+  async removeQuestionLimit(
+    @CurrentAdmin() admin: AdminContext,
+    @Param('widgetKeyId') widgetKeyId: string,
+  ): Promise<WidgetKeyDto> {
+    return this.adminService.setQuestionLimit(widgetKeyId, admin.uuid, null);
   }
 
   @Post('widget-keys/:widgetKeyId/collaborators')

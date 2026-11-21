@@ -1,24 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsOptional, Matches } from 'class-validator';
+import { TURN_OUTCOMES } from '../../chat/safety/turn-diagnostics';
 
 export class MonthlyReportQueryDto {
   @ApiPropertyOptional({
-    description: '보고서 달(KST, YYYY-MM). 생략하면 지난달',
+    description: '보고서 달(KST, 2000~2099년의 YYYY-MM). 생략하면 지난달',
     example: '2026-10',
   })
   @IsOptional()
-  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'month must be YYYY-MM' })
+  // 0~99년은 Date.UTC가 1900년대로 바꾸고 0년은 PostgreSQL에 없어 연도를 제한한다.
+  @Matches(/^20\d{2}-(0[1-9]|1[0-2])$/, { message: 'month must be YYYY-MM' })
   month?: string;
 }
 
-export const REPORT_OUTCOMES = [
-  'answered',
-  'partial',
-  'source-only',
-  'unanswered',
-  'scope-refused',
-  'unknown',
-] as const;
+export const REPORT_OUTCOMES = [...TURN_OUTCOMES, 'unknown'] as const;
 export type ReportOutcome = (typeof REPORT_OUTCOMES)[number];
 
 export class ReportPeriodDto {
@@ -45,7 +40,10 @@ export class ReportSummaryDto {
   @ApiProperty({ description: '질문한 사용자 수(clientId 기준, 없으면 세션)' })
   users: number;
 
-  @ApiProperty({ description: '답변 토큰 합계' })
+  @ApiProperty({
+    description:
+      '저장된 답변의 토큰 합계. 중단된 답변은 빠지므로 사용량 통계(UTC 일 단위)와 다를 수 있음',
+  })
   tokens: number;
 
   @ApiProperty({
@@ -92,7 +90,8 @@ export class ReportTotalsDto {
 export class ReportOutcomeCountDto {
   @ApiProperty({
     enum: REPORT_OUTCOMES,
-    description: '답변 결과. unknown은 결과 기록이 없는 예전 답변',
+    description:
+      '답변 결과. unknown은 결과 기록이 없는 답변(예전 답변, 위젯 클라이언트가 저장한 답변 등)',
   })
   outcome: ReportOutcome;
 
@@ -137,16 +136,19 @@ export class MonthlyReportDto {
 
   @ApiProperty({
     type: [ReportQuestionCountDto],
-    description: 'BAD 피드백을 받은 질문 상위 10개',
+    description: 'BAD 피드백을 받은 질문 상위 10개(이 달 최근 1만 건 기준)',
   })
   topBadQuestions: ReportQuestionCountDto[];
 
   @ApiProperty({
     type: [ReportQuestionCountDto],
-    description: '참고 자료 없이 답한 질문 상위 10개',
+    description: '참고 자료 없이 답한 질문 상위 10개(이 달 최근 1만 건 기준)',
   })
   topUnansweredQuestions: ReportQuestionCountDto[];
 
-  @ApiProperty({ type: ReportUnansweredDto })
-  unansweredQuestions: ReportUnansweredDto;
+  @ApiProperty({
+    type: ReportUnansweredDto,
+    description: '미답변 질문 관리 목록에서 이 달에 생기거나 해결된 수',
+  })
+  unansweredQuestionCounts: ReportUnansweredDto;
 }

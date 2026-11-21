@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -90,24 +89,23 @@ export class ReportsService {
       })),
       topBadQuestions: topQuestions(bad),
       topUnansweredQuestions: topQuestions(unanswered),
-      unansweredQuestions: unansweredChanges,
+      unansweredQuestionCounts: unansweredChanges,
     };
   }
 
-  /** 키 소유자·수락한 협업자·SUPER_ADMIN만 본다(미답변 질문 API와 같은 규칙). */
+  /**
+   * 키 소유자·수락한 협업자·SUPER_ADMIN만 본다(미답변 질문 API와 같은 규칙).
+   * 볼 수 없는 키도 미답변 질문 API처럼 존재를 드러내지 않고 404로 답한다.
+   */
   private async assertCanView(widgetKeyId: string, principal: AdminPrincipal) {
-    if (!(await this.repo.widgetKeyExists(widgetKeyId))) {
-      throw new NotFoundException('Widget key not found');
-    }
-    if (await this.organizationsRepo.isCurrentSuperAdmin(principal)) return;
-    const accessible = await this.unansweredRepo.listAccessibleWidgetKeyIds(
-      principal.uuid,
-    );
-    if (!accessible.includes(widgetKeyId)) {
-      throw new ForbiddenException(
-        'You do not have permission to view this widget key',
-      );
-    }
+    const visible = (await this.organizationsRepo.isCurrentSuperAdmin(
+      principal,
+    ))
+      ? await this.repo.widgetKeyExists(widgetKeyId)
+      : (
+          await this.unansweredRepo.listAccessibleWidgetKeyIds(principal.uuid)
+        ).includes(widgetKeyId);
+    if (!visible) throw new NotFoundException('Widget key not found');
   }
 }
 

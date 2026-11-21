@@ -29,6 +29,17 @@ const kstStart = (date: string) =>
 const within = (column: PgColumn, period: ReportPeriod): SQL =>
   and(gte(column, kstStart(period.start)), lt(column, kstStart(period.end)))!;
 
+/**
+ * 위젯 클라이언트도 metadata를 저장할 수 있으므로 9자리 이하 정수만 집계한다.
+ * 잘못된 값 하나로 보고서 전체가 캐스트 오류(500)가 나지 않게 하고, int 범위도 지킨다.
+ */
+const metadataInt = (value: SQL) =>
+  sql`case when ${value} ~ '^[0-9]{1,9}$' then (${value})::bigint end`;
+
+// 문제 질문은 JS에서 묶으므로 메모리를 지키려고 최근 건수와 길이를 제한한다.
+const PROBLEM_QUESTION_SCAN_LIMIT = 10_000;
+const QUESTION_PREVIEW_LENGTH = 500;
+
 @Injectable()
 export class ReportsRepository {
   constructor(@Inject(DB_CONNECTION) private readonly db: Database) {}
@@ -49,10 +60,10 @@ export class ReportsRepository {
         questions: sql<number>`(count(*) filter (where ${messages.role} = 'user'))::int`,
         answers: sql<number>`(count(*) filter (where ${messages.role} = 'assistant'))::int`,
         users: sql<number>`(count(distinct coalesce(${sessions.endUserKey}, ${sessions.id}::text)) filter (where ${messages.role} = 'user'))::int`,
-        tokens: sql<number>`coalesce(sum((${messages.metadata}->'usage'->>'total_tokens')::bigint), 0)::float8`,
+        tokens: sql<number>`coalesce(sum(${metadataInt(sql`${messages.metadata}->'usage'->>'total_tokens'`)}), 0)::float8`,
         avgResponseMs: sql<
           number | null
-        >`round(avg((${messages.metadata}->'evaluation'->>'totalMs')::numeric))::int`,
+        >`round(avg(${metadataInt(sql`${messages.metadata}->'evaluation'->>'totalMs'`)}))::int`,
         good: sql<number>`(count(${messageFeedbacks.id}) filter (where ${messageFeedbacks.rating} = 'GOOD'))::int`,
         bad: sql<number>`(count(${messageFeedbacks.id}) filter (where ${messageFeedbacks.rating} = 'BAD'))::int`,
         regenerated: sql<number>`(count(*) filter (where ${messages.metadata}->>'regeneratedFromFeedback' = 'BAD'))::int`,
@@ -91,6 +102,7 @@ export class ReportsRepository {
   /**
    * BAD 피드백을 받았거나(bad) 참고 자료 없이 답한(unanswered) 답변의 질문을 최신순으로 돌려준다.
    * 질문은 답변 시각 이전의 마지막 사용자 질문이며, 재생성 답변은 원래 답변 시각을 기준으로 찾는다.
+   * 최근 PROBLEM_QUESTION_SCAN_LIMIT건, 질문 앞 QUESTION_PREVIEW_LENGTH자까지만 읽는다.
    */
   async listProblemQuestions(
     widgetKeyId: string,
@@ -101,7 +113,7 @@ export class ReportsRepository {
     const rows = await this.db
       .select({
         question: sql<string | null>`(
-          select q.content from messages q
+          select left(q.content, ${QUESTION_PREVIEW_LENGTH}) from messages q
           where q.session_id = ${messages.sessionId} and q.role = 'user'
             and q.created_at <= coalesce(${original.createdAt}, ${messages.createdAt})
           order by q.created_at desc
@@ -112,7 +124,11 @@ export class ReportsRepository {
       .innerJoin(sessions, eq(sessions.id, messages.sessionId))
       .leftJoin(
         original,
-        sql`${original.id} = (${messages.metadata}->>'regeneratedFromMessageId')::uuid`,
+        // uuid로 캐스트하지 않는다. 클라이언트가 쓴 잘못된 값도 그냥 매칭되지 않을 뿐이다.
+        and(
+          eq(original.sessionId, messages.sessionId),
+          sql`${original.id}::text = ${messages.metadata}->>'regeneratedFromMessageId'`,
+        ),
       )
       .leftJoin(messageFeedbacks, eq(messageFeedbacks.messageId, messages.id))
       .where(
@@ -125,7 +141,8 @@ export class ReportsRepository {
             : sql`${messages.metadata}->'evaluation'->>'outcome' = 'unanswered'`,
         ),
       )
-      .orderBy(desc(messages.createdAt));
+      .orderBy(desc(messages.createdAt))
+      .limit(PROBLEM_QUESTION_SCAN_LIMIT);
     return rows.flatMap((row) => (row.question ? [row.question] : []));
   }
 

@@ -1,8 +1,4 @@
-import {
-  BadRequestException,
-  ForbiddenException,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import type { OrganizationsRepository } from '../organizations/organizations.repository';
@@ -62,7 +58,7 @@ describe('report periods', () => {
     });
   });
 
-  it('accepts only YYYY-MM months', async () => {
+  it('accepts only YYYY-MM months of 2000-2099', async () => {
     const errors = (month: string) =>
       validate(plainToInstance(MonthlyReportQueryDto, { month }));
 
@@ -73,6 +69,9 @@ describe('report periods', () => {
       '2026-1',
       '26-10',
       'october',
+      '0000-01', // PostgreSQL에 없는 연도
+      '0099-05', // Date.UTC가 1999년으로 바꾸는 연도
+      '1999-12',
     ]) {
       expect(await errors(invalid)).not.toHaveLength(0);
     }
@@ -112,7 +111,7 @@ describe('ReportsService.getMonthlyReport', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('lets owners, collaborators and super admins view, and no one else', async () => {
+  it('lets owners, collaborators and super admins view, and hides the key from others', async () => {
     const view = (options: Parameters<typeof createService>[0]) =>
       createService(options).service.getMonthlyReport(
         'key-1',
@@ -120,13 +119,13 @@ describe('ReportsService.getMonthlyReport', () => {
         '2026-10',
       );
 
-    await expect(view({ exists: false })).rejects.toBeInstanceOf(
+    await expect(view({ accessible: ['other-key'] })).rejects.toBeInstanceOf(
       NotFoundException,
     );
-    await expect(view({ accessible: ['other-key'] })).rejects.toBeInstanceOf(
-      ForbiddenException,
-    );
     await expect(view({ accessible: ['key-1'] })).resolves.toBeDefined();
+    await expect(
+      view({ superAdmin: true, exists: false, accessible: [] }),
+    ).rejects.toBeInstanceOf(NotFoundException);
     const superAdmin = createService({ superAdmin: true, accessible: [] });
     await expect(
       superAdmin.service.getMonthlyReport('key-1', admin, '2026-10'),

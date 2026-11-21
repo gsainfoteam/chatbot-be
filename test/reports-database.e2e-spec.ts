@@ -34,6 +34,7 @@ describeDatabase('Monthly report queries (database e2e)', () => {
   let repo: ReportsRepository;
   let keyA: string;
   let keyB: string;
+  let keyC: string;
 
   beforeAll(async () => {
     const database = process.env.DB_NAME ?? '';
@@ -53,11 +54,11 @@ describeDatabase('Monthly report queries (database e2e)', () => {
     db = drizzle(client, { schema });
     repo = new ReportsRepository(db as unknown as Database);
 
-    [keyA, keyB] = (
+    [keyA, keyB, keyC] = (
       await db
         .insert(widgetKeys)
         .values(
-          ['a', 'b'].map((name) => ({
+          ['a', 'b', 'c'].map((name) => ({
             name: `${prefix} ${name}`,
             secretKey: `${prefix}-${name}`,
           })),
@@ -65,7 +66,7 @@ describeDatabase('Monthly report queries (database e2e)', () => {
         .returning()
     ).map((key) => key.id);
 
-    const [s1, s2, s3, sB] = (
+    const [s1, s2, s3, sB, sC] = (
       await db
         .insert(sessions)
         .values(
@@ -74,6 +75,7 @@ describeDatabase('Monthly report queries (database e2e)', () => {
             { widgetKeyId: keyA, endUserKey: 'user-1' },
             { widgetKeyId: keyA, endUserKey: null },
             { widgetKeyId: keyB, endUserKey: 'user-1' },
+            { widgetKeyId: keyC, endUserKey: null },
           ].map((s, i) => ({
             ...s,
             sessionToken: `${prefix}-session-${i}`,
@@ -165,12 +167,21 @@ describeDatabase('Monthly report queries (database e2e)', () => {
       evaluation('unanswered', 100, 10),
     );
 
+    // 10월, 키 C: 위젯 클라이언트가 POST /messages로 저장한 잘못된 metadata
+    await message(sC, 'user', '깨진 메타데이터 질문', '2026-10-12 10:00:00');
+    const aC = await message(sC, 'assistant', 'forged', '2026-10-12 10:00:01', {
+      usage: { total_tokens: 'x' },
+      evaluation: { outcome: 'unanswered', totalMs: 1.5 },
+      regeneratedFromMessageId: 'not-a-uuid',
+    });
+
     await db.insert(messageFeedbacks).values([
       { messageId: a1, rating: 'BAD' },
       { messageId: r1, rating: 'BAD' },
       { messageId: a3, rating: 'BAD' },
       { messageId: a2, rating: 'GOOD' },
       { messageId: aB, rating: 'BAD' },
+      { messageId: aC, rating: 'BAD' },
     ]);
 
     const unanswered = (
@@ -203,7 +214,9 @@ describeDatabase('Monthly report queries (database e2e)', () => {
 
   afterAll(async () => {
     if (!db) return;
-    await db.delete(widgetKeys).where(inArray(widgetKeys.id, [keyA, keyB]));
+    await db
+      .delete(widgetKeys)
+      .where(inArray(widgetKeys.id, [keyA, keyB, keyC]));
     await client.end();
   });
 
@@ -260,6 +273,21 @@ describeDatabase('Monthly report queries (database e2e)', () => {
       created: 1,
       resolved: 2,
     });
+  });
+
+  it('skips malformed client-written metadata instead of failing', async () => {
+    await expect(repo.summarize(keyC, october)).resolves.toMatchObject({
+      questions: 1,
+      answers: 1,
+      tokens: 0,
+      avgResponseMs: null,
+      bad: 1,
+    });
+    for (const kind of ['bad', 'unanswered'] as const) {
+      await expect(
+        repo.listProblemQuestions(keyC, october, kind),
+      ).resolves.toEqual(['깨진 메타데이터 질문']);
+    }
   });
 
   it('keeps other widget keys out of the report', async () => {

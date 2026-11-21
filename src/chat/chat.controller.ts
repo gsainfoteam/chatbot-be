@@ -30,10 +30,7 @@ import { McpResourceService } from '../mcp/mcp-resource.service';
 import { WidgetSessionGuard } from '../auth/guards/widget-session.guard';
 import { CurrentSession } from '../auth/decorators/current-session.decorator';
 import type { SessionPayload } from '../auth/decorators/current-session.decorator';
-import {
-  ChatMessageInputDto,
-  MessageRole,
-} from '../common/dto/chat-message-input.dto';
+import { ChatMessageInputDto } from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';
 import { ChatRequestDto } from './dto/chat-request.dto';
@@ -114,9 +111,7 @@ export class ChatController {
     @CurrentSession() session: SessionPayload,
     @Body() dto: ChatMessageInputDto,
   ): Promise<ChatMessageDto> {
-    if (dto.role === MessageRole.USER) {
-      await this.chatService.assertQuestionAllowed(session.sessionId);
-    }
+    // 질문 한도는 createMessage가 저장과 같은 트랜잭션에서 확인한다.
     return this.chatService.createMessage(session.sessionId, dto);
   }
 
@@ -167,7 +162,7 @@ export class ChatController {
   @ApiOperation({
     summary: 'BAD 피드백 답변 1회 재생성',
     description:
-      'BAD 피드백이 저장된 assistant 답변에 대해 직전 사용자 질문으로 답변을 한 번만 재생성합니다. 재생성은 세션 질문 횟수 제한에 포함되지 않습니다. SSE 이벤트 형식은 `POST chat/stream`과 같습니다.',
+      'BAD 피드백이 저장된 assistant 답변에 대해 직전 사용자 질문으로 답변을 한 번만 재생성합니다. 재생성은 질문 한도에 포함되지 않습니다. SSE 이벤트 형식은 `POST chat/stream`과 같습니다.',
   })
   @ApiParam({
     name: 'messageId',

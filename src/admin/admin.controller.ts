@@ -422,7 +422,7 @@ export class AdminController {
   @ApiOperation({
     summary: '사용자별 질문 한도 설정',
     description:
-      '위젯 사용자 한 명이 최근 windowSeconds초 동안 보낼 수 있는 질문 수를 정합니다. 세션 발급 때 같은 clientId를 보낸 세션은 함께 셉니다. 키 소유자만 바꿀 수 있습니다.',
+      '위젯 사용자 한 명이 최근 windowSeconds초 동안 보낼 수 있는 질문 수를 정합니다. 세션 발급 때 같은 clientId를 보낸 세션은 함께 세고, clientId 없이 발급한 세션은 세션마다 따로 셉니다. 키 소유자만 바꿀 수 있습니다.',
   })
   @ApiParam({
     name: 'widgetKeyId',

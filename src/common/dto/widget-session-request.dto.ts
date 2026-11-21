@@ -55,7 +55,7 @@ export class WidgetSessionRequestDto {
 
   @ApiPropertyOptional({
     description:
-      '사용자 식별값. 위젯·앱이 만든 기기 ID 또는 도입 서비스의 사용자 ID. 같은 값이면 세션이 달라도 질문 한도를 함께 셉니다. 원문은 저장하지 않습니다.',
+      '사용자 식별값. 위젯·앱이 기기에 저장해 두는 무작위 ID(UUID 등)를 쓰세요. 학번·이메일처럼 추측할 수 있는 값을 쓰면 다른 사람이 같은 값을 보내 한도를 소진할 수 있습니다. 같은 값이면 세션이 달라도 질문 한도를 함께 셉니다. 원문은 저장하지 않습니다.',
     example: '6f1c2a9e-3b7d-4c11-9a4e-2d5f8b0c7e13',
     maxLength: 128,
   })

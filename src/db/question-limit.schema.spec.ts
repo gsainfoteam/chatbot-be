@@ -1,13 +1,17 @@
-import { readFileSync, readdirSync } from 'fs';
+import { readFileSync } from 'fs';
 import { join } from 'path';
 
 describe('per-user question limit migration', () => {
-  const migrationSql = readdirSync(join(process.cwd(), 'drizzle'))
-    .filter((file) => file.endsWith('.sql'))
-    .map((file) => readFileSync(join(process.cwd(), 'drizzle', file), 'utf8'))
+  // 저널에 등록된(실제로 적용되는) 마이그레이션만 태그로 읽는다. 번호가 바뀌어도 깨지지 않는다.
+  const drizzleDir = join(process.cwd(), 'drizzle');
+  const journal = JSON.parse(
+    readFileSync(join(drizzleDir, 'meta', '_journal.json'), 'utf8'),
+  ) as { entries: { tag: string }[] };
+  const migrationSql = journal.entries
+    .map(({ tag }) => readFileSync(join(drizzleDir, `${tag}.sql`), 'utf8'))
     .join('\n');
 
-  // 번호가 바뀌어도(다른 PR의 마이그레이션이 먼저 들어오는 경우) 깨지지 않도록 모든 SQL에서 찾되, 테이블까지 확인한다.
+  // 열·제약·인덱스는 대상 테이블까지 포함한 문장으로 확인한다.
   it('adds nullable limit columns to widget keys', () => {
     expect(migrationSql).toContain(
       'ALTER TABLE "widget_keys" ADD COLUMN "question_limit" integer;',

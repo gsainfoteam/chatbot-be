@@ -404,15 +404,24 @@ components:
     # --- Widget Auth ---
     WidgetSessionRequest:
       type: object
-      required: [widgetKey, pageUrl]
+      required: [widgetKey]
       properties:
         widgetKey:
           type: string
           example: "wk_live_abc123"
+        clientType:
+          type: string
+          enum: [web, app]
+          description: "클라이언트 종류. web(기본)이면 pageUrl, app이면 appId로 출처를 검증합니다."
+          example: "web"
         pageUrl:
           type: string
-          description: "위젯이 실행된 현재 페이지 URL (Origin 검증 보조용)"
+          description: "위젯이 실행된 현재 페이지 URL. clientType이 web이거나 없을 때 필수"
           example: "https://www.myshop.com/products/1"
+        appId:
+          type: string
+          description: "앱 식별자(Android applicationId / iOS bundle identifier). clientType이 app일 때 필수"
+          example: "com.company.myapp"
         clientId:
           type: string
           minLength: 1

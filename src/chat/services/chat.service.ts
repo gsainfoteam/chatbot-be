@@ -275,6 +275,8 @@ export class ChatService {
             role: dto.role,
             content: dto.content,
             metadata: dto.metadata ?? null,
+            // 한도 판정과 같은 기준으로, 잠금을 기다린 뒤의 시각에 저장한다(now()는 트랜잭션 시작 시각).
+            createdAt: sql`statement_timestamp()`,
           })
           .returning();
         return this.toMessageDto(message);

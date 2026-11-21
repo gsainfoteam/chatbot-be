@@ -179,8 +179,18 @@ describeDatabase('Per-user question limit (database e2e)', () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 100));
 
-      await expect(ask(id)).resolves.toMatchObject({ role: 'user' });
+      const waited = await ask(id);
       await holder;
+
+      // 기다린 질문은 잠금 이후 시각에 저장되고, 바로 다음 질문은 그 질문 때문에 거부된다.
+      const [{ age }] = await db
+        .select({
+          age: sql<number>`extract(epoch from localtimestamp - ${messages.createdAt})::float8`,
+        })
+        .from(messages)
+        .where(inArray(messages.id, [waited.id]));
+      expect(age).toBeLessThan(0.5);
+      expect((await rejection(ask(id)))?.getStatus()).toBe(429);
     } finally {
       await db.delete(widgetKeys).where(inArray(widgetKeys.id, [key.id]));
     }

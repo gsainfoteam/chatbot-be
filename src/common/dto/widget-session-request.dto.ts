@@ -55,12 +55,16 @@ export class WidgetSessionRequestDto {
 
   @ApiPropertyOptional({
     description:
-      '사용자 식별값. 위젯·앱이 기기에 저장해 두는 무작위 ID(UUID 등)를 쓰세요. 학번·이메일처럼 추측할 수 있는 값을 쓰면 다른 사람이 같은 값을 보내 한도를 소진할 수 있습니다. 같은 값이면 세션이 달라도 질문 한도를 함께 셉니다. 원문은 저장하지 않습니다.',
+      '사용자 식별값. 위젯·앱이 기기에 저장해 두는 무작위 ID(UUID 등)를 쓰세요. 학번·이메일처럼 추측할 수 있는 값을 쓰면 다른 사람이 같은 값을 보내 한도를 소진할 수 있습니다. 같은 값이면 세션이 달라도 질문 한도를 함께 셉니다. 원문은 저장하지 않습니다. null이면 보내지 않은 것으로 처리합니다.',
     example: '6f1c2a9e-3b7d-4c11-9a4e-2d5f8b0c7e13',
+    // string | null은 런타임 타입 정보가 Object가 되므로 문서 타입을 직접 적는다.
+    type: String,
+    minLength: 1,
     maxLength: 128,
+    nullable: true,
   })
   @IsOptional()
   @IsString()
   @Length(1, 128)
-  clientId?: string;
+  clientId?: string | null;
 }

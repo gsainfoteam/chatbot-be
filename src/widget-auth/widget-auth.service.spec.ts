@@ -131,14 +131,15 @@ describe('WidgetAuthService.createSession', () => {
     );
   });
 
-  it('leaves the end user key empty without a client id', async () => {
+  it('leaves the end user key empty without a client id or with null', async () => {
     await service.createSession(dto);
+    await service.createSession({ ...dto, clientId: null });
 
-    expect(db.sessionRows[0].endUserKey).toBeNull();
+    expect(db.sessionRows.map((row) => row.endUserKey)).toEqual([null, null]);
   });
 
-  it('accepts an optional client id of 1 to 128 characters', async () => {
-    const errors = (clientId?: string) =>
+  it('accepts an optional client id of 1 to 128 characters or null', async () => {
+    const errors = (clientId?: string | null) =>
       validate(
         plainToInstance(WidgetSessionRequestDto, {
           ...dto,
@@ -147,6 +148,7 @@ describe('WidgetAuthService.createSession', () => {
       );
 
     expect(await errors()).toHaveLength(0);
+    expect(await errors(null)).toHaveLength(0);
     expect(await errors('x'.repeat(128))).toHaveLength(0);
     expect(await errors('')).not.toHaveLength(0);
     expect(await errors('x'.repeat(129))).not.toHaveLength(0);

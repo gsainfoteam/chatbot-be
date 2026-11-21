@@ -167,8 +167,12 @@ describeDatabase('Monthly report queries (database e2e)', () => {
       evaluation('unanswered', 100, 10),
     );
 
-    // 10월, 키 C: 위젯 클라이언트가 POST /messages로 저장한 잘못된 metadata
-    await message(sC, 'user', '깨진 메타데이터 질문', '2026-10-12 10:00:00');
+    // 10월, 키 C: 위젯 클라이언트가 POST /messages로 저장한 잘못된 metadata와 사용자 메시지의 답변 지표
+    await message(sC, 'user', '깨진 메타데이터 질문', '2026-10-12 10:00:00', {
+      usage: { total_tokens: 100 },
+      evaluation: { totalMs: 1000 },
+      regeneratedFromFeedback: 'BAD',
+    });
     const aC = await message(sC, 'assistant', 'forged', '2026-10-12 10:00:01', {
       usage: { total_tokens: 'x' },
       evaluation: { outcome: 'unanswered', totalMs: 1.5 },
@@ -275,13 +279,14 @@ describeDatabase('Monthly report queries (database e2e)', () => {
     });
   });
 
-  it('skips malformed client-written metadata instead of failing', async () => {
+  it('skips client-written metadata that is malformed or on user messages', async () => {
     await expect(repo.summarize(keyC, october)).resolves.toMatchObject({
       questions: 1,
       answers: 1,
       tokens: 0,
       avgResponseMs: null,
       bad: 1,
+      regenerated: 0,
     });
     for (const kind of ['bad', 'unanswered'] as const) {
       await expect(

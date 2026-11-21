@@ -53,20 +53,23 @@ export class ReportsRepository {
     return Boolean(key);
   }
 
-  /** 질문·답변·사용자·토큰·응답 시간과 피드백 수를 한 번에 센다(답변 생성 시각 기준). */
+  /**
+   * 질문·답변·사용자·토큰·응답 시간과 피드백 수를 한 번에 센다(메시지 생성 시각 기준).
+   * 사용자 메시지에도 metadata를 쓸 수 있으므로 토큰·응답 시간·재생성은 답변(assistant)만 센다.
+   */
   async summarize(widgetKeyId: string, period: ReportPeriod) {
     const [row] = await this.db
       .select({
         questions: sql<number>`(count(*) filter (where ${messages.role} = 'user'))::int`,
         answers: sql<number>`(count(*) filter (where ${messages.role} = 'assistant'))::int`,
         users: sql<number>`(count(distinct coalesce(${sessions.endUserKey}, ${sessions.id}::text)) filter (where ${messages.role} = 'user'))::int`,
-        tokens: sql<number>`coalesce(sum(${metadataInt(sql`${messages.metadata}->'usage'->>'total_tokens'`)}), 0)::float8`,
+        tokens: sql<number>`coalesce(sum(${metadataInt(sql`${messages.metadata}->'usage'->>'total_tokens'`)}) filter (where ${messages.role} = 'assistant'), 0)::float8`,
         avgResponseMs: sql<
           number | null
-        >`round(avg(${metadataInt(sql`${messages.metadata}->'evaluation'->>'totalMs'`)}))::int`,
+        >`round(avg(${metadataInt(sql`${messages.metadata}->'evaluation'->>'totalMs'`)}) filter (where ${messages.role} = 'assistant'))::int`,
         good: sql<number>`(count(${messageFeedbacks.id}) filter (where ${messageFeedbacks.rating} = 'GOOD'))::int`,
         bad: sql<number>`(count(${messageFeedbacks.id}) filter (where ${messageFeedbacks.rating} = 'BAD'))::int`,
-        regenerated: sql<number>`(count(*) filter (where ${messages.metadata}->>'regeneratedFromFeedback' = 'BAD'))::int`,
+        regenerated: sql<number>`(count(*) filter (where ${messages.role} = 'assistant' and ${messages.metadata}->>'regeneratedFromFeedback' = 'BAD'))::int`,
       })
       .from(messages)
       .innerJoin(sessions, eq(sessions.id, messages.sessionId))

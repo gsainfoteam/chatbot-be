@@ -24,6 +24,7 @@ describeDatabase('Per-user question limit (database e2e)', () => {
   let service: ChatService;
   let limitedKeyId: string;
   let otherKeyId: string;
+  let windowKeyId: string;
   let sessionCount = 0;
 
   beforeAll(async () => {
@@ -48,23 +49,29 @@ describeDatabase('Per-user question limit (database e2e)', () => {
 
     const keys = await db
       .insert(widgetKeys)
-      .values(
-        ['limited', 'other'].map((name) => ({
+      .values([
+        ...['limited', 'other'].map((name) => ({
           name: `${prefix} ${name}`,
           secretKey: `${prefix}-${name}`,
           questionLimit: 2,
           questionLimitWindowSeconds: 3600,
         })),
-      )
+        {
+          name: `${prefix} window`,
+          secretKey: `${prefix}-window`,
+          questionLimit: 1,
+          questionLimitWindowSeconds: 60,
+        },
+      ])
       .returning();
-    [limitedKeyId, otherKeyId] = keys.map((key) => key.id);
+    [limitedKeyId, otherKeyId, windowKeyId] = keys.map((key) => key.id);
   });
 
   afterAll(async () => {
     if (!db) return;
     await db
       .delete(widgetKeys)
-      .where(inArray(widgetKeys.id, [limitedKeyId, otherKeyId]));
+      .where(inArray(widgetKeys.id, [limitedKeyId, otherKeyId, windowKeyId]));
     await client.end();
   });
 
@@ -153,47 +160,44 @@ describeDatabase('Per-user question limit (database e2e)', () => {
 
   it('measures the window after waiting for the lock, not from the transaction start', async () => {
     // 한도 1·기간 60초에 59.5초 전 질문이 있다. 다른 요청이 같은 사용자 잠금을 1.5초 쥐는 동안
-    // 그 질문이 기간을 벗어나므로, 잠금을 기다린 질문은 허용되어야 한다.
-    const [key] = await db
-      .insert(widgetKeys)
-      .values({
-        name: `${prefix} window`,
-        secretKey: `${prefix}-window`,
-        questionLimit: 1,
-        questionLimitWindowSeconds: 60,
+    // 그 질문이 기간을 벗어나므로, 잠금을 기다린 질문은 허용되고 잠금이 풀린 뒤의 시각으로 저장되어야 한다.
+    const id = await session('user-wait', windowKeyId);
+    await db.insert(messages).values({
+      sessionId: id,
+      role: 'user',
+      content: 'old question',
+      createdAt: sql`localtimestamp - interval '59.5 seconds'`,
+    });
+    let lockTaken = () => {};
+    const taken = new Promise<void>((resolve) => {
+      lockTaken = resolve;
+    });
+    let releasedAt = '';
+    const holder = db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${'user-wait'}, 0))`,
+      );
+      lockTaken();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const [row] = await tx.execute<{ releasedAt: string }>(
+        sql`SELECT clock_timestamp()::timestamp::text AS "releasedAt"`,
+      );
+      releasedAt = row.releasedAt;
+    });
+    // holder가 잠금을 잡기 전에 실패하면 기다리지 않고 바로 실패하게 한다.
+    await Promise.race([taken, holder]);
+
+    const [waited] = await Promise.all([ask(id), holder]);
+
+    // 저장 시각은 잠금이 풀리기 직전의 DB 시각과 비교해 이후 조회 지연과 상관없이 확인한다.
+    const [saved] = await db
+      .select({
+        afterRelease: sql<boolean>`${messages.createdAt} >= ${releasedAt}::timestamp`,
       })
-      .returning();
-    try {
-      const id = await session('user-wait', key.id);
-      await db.insert(messages).values({
-        sessionId: id,
-        role: 'user',
-        content: 'old question',
-        createdAt: sql`localtimestamp - interval '59.5 seconds'`,
-      });
-      const holder = db.transaction(async (tx) => {
-        await tx.execute(
-          sql`SELECT pg_advisory_xact_lock(hashtextextended(${'user-wait'}, 0))`,
-        );
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      });
-      await new Promise((resolve) => setTimeout(resolve, 100));
-
-      const waited = await ask(id);
-      await holder;
-
-      // 기다린 질문은 잠금 이후 시각에 저장되고, 바로 다음 질문은 그 질문 때문에 거부된다.
-      const [{ age }] = await db
-        .select({
-          age: sql<number>`extract(epoch from localtimestamp - ${messages.createdAt})::float8`,
-        })
-        .from(messages)
-        .where(inArray(messages.id, [waited.id]));
-      expect(age).toBeLessThan(0.5);
-      expect((await rejection(ask(id)))?.getStatus()).toBe(429);
-    } finally {
-      await db.delete(widgetKeys).where(inArray(widgetKeys.id, [key.id]));
-    }
+      .from(messages)
+      .where(inArray(messages.id, [waited.id]));
+    expect(saved.afterRelease).toBe(true);
+    expect((await rejection(ask(id)))?.getStatus()).toBe(429);
   });
 
   it('lets exactly the limit through when one user asks concurrently', async () => {

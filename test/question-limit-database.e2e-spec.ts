@@ -151,6 +151,41 @@ describeDatabase('Per-user question limit (database e2e)', () => {
     await expect(ask(id)).resolves.toMatchObject({ role: 'user' });
   });
 
+  it('measures the window after waiting for the lock, not from the transaction start', async () => {
+    // 한도 1·기간 60초에 59.5초 전 질문이 있다. 다른 요청이 같은 사용자 잠금을 1.5초 쥐는 동안
+    // 그 질문이 기간을 벗어나므로, 잠금을 기다린 질문은 허용되어야 한다.
+    const [key] = await db
+      .insert(widgetKeys)
+      .values({
+        name: `${prefix} window`,
+        secretKey: `${prefix}-window`,
+        questionLimit: 1,
+        questionLimitWindowSeconds: 60,
+      })
+      .returning();
+    try {
+      const id = await session('user-wait', key.id);
+      await db.insert(messages).values({
+        sessionId: id,
+        role: 'user',
+        content: 'old question',
+        createdAt: sql`localtimestamp - interval '59.5 seconds'`,
+      });
+      const holder = db.transaction(async (tx) => {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtextextended(${'user-wait'}, 0))`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      await expect(ask(id)).resolves.toMatchObject({ role: 'user' });
+      await holder;
+    } finally {
+      await db.delete(widgetKeys).where(inArray(widgetKeys.id, [key.id]));
+    }
+  });
+
   it('lets exactly the limit through when one user asks concurrently', async () => {
     const ids = await Promise.all(
       [1, 2, 3, 4, 5].map(() => session('user-concurrent')),

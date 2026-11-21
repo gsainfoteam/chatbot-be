@@ -146,9 +146,10 @@ export class ChatService {
       );
     }
     // created_at은 DB 시계(now())로 저장되므로 기간도 DB 시계로 잰다.
+    // 잠금을 기다린 뒤의 시각이어야 하므로 트랜잭션 시작 시각(localtimestamp) 대신 statement_timestamp()를 쓴다.
     const [oldestCounted] = await db
       .select({
-        retryAfterSeconds: sql<number>`ceil(extract(epoch from ${messages.createdAt} + make_interval(secs => ${windowSeconds}) - localtimestamp))::int`,
+        retryAfterSeconds: sql<number>`ceil(extract(epoch from ${messages.createdAt} + make_interval(secs => ${windowSeconds}) - statement_timestamp()::timestamp))::int`,
       })
       .from(messages)
       .innerJoin(sessions, eq(sessions.id, messages.sessionId))
@@ -163,7 +164,7 @@ export class ChatService {
           eq(messages.role, 'user'),
           gt(
             messages.createdAt,
-            sql`localtimestamp - make_interval(secs => ${windowSeconds})`,
+            sql`statement_timestamp()::timestamp - make_interval(secs => ${windowSeconds})`,
           ),
         ),
       )

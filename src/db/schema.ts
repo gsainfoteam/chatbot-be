@@ -183,6 +183,9 @@ export const widgetKeys = pgTable(
       .$type<string[]>()
       .default([]),
     createdByIdpUuid: varchar('created_by_idp_uuid', { length: 255 }),
+    // 사용자 한 명이 최근 window초 동안 보낼 수 있는 질문 수 (둘 다 NULL이면 무제한)
+    questionLimit: integer('question_limit'),
+    questionLimitWindowSeconds: integer('question_limit_window_seconds'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -191,6 +194,11 @@ export const widgetKeys = pgTable(
     statusIdx: index('widget_keys_status_idx').on(table.status),
     createdByIdpUuidIdx: index('widget_keys_created_by_idp_uuid_idx').on(
       table.createdByIdpUuid,
+    ),
+    questionLimitCheck: check(
+      'widget_keys_question_limit_check',
+      // 한쪽만 NULL이면 BETWEEN이 NULL이 되어 CHECK를 통과하므로 IS NOT NULL을 명시한다.
+      sql`(${table.questionLimit} IS NULL AND ${table.questionLimitWindowSeconds} IS NULL) OR (${table.questionLimit} IS NOT NULL AND ${table.questionLimitWindowSeconds} IS NOT NULL AND ${table.questionLimit} BETWEEN 1 AND 10000 AND ${table.questionLimitWindowSeconds} BETWEEN 60 AND 2592000)`,
     ),
   }),
 );
@@ -245,6 +253,8 @@ export const sessions = pgTable(
       .references(() => widgetKeys.id, { onDelete: 'cascade' }),
     sessionToken: text('session_token').notNull().unique(),
     pageUrl: varchar('page_url', { length: 2048 }).notNull(),
+    // 위젯·앱이 보낸 clientId의 해시. 같은 값이면 세션이 달라도 같은 사용자로 센다
+    endUserKey: varchar('end_user_key', { length: 64 }),
     expiresAt: timestamp('expires_at').notNull(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
   },
@@ -252,6 +262,10 @@ export const sessions = pgTable(
     sessionTokenIdx: index('sessions_session_token_idx').on(table.sessionToken),
     widgetKeyIdIdx: index('sessions_widget_key_id_idx').on(table.widgetKeyId),
     expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
+    // clientId를 보낸 세션만 담는다. 해시에 위젯 키가 들어 있어 이 열만으로 찾을 수 있다.
+    endUserKeyIdx: index('sessions_end_user_key_idx')
+      .on(table.endUserKey)
+      .where(sql`${table.endUserKey} IS NOT NULL`),
   }),
 );
 

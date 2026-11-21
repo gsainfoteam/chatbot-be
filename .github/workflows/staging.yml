@@ -12,8 +12,16 @@ env:
   IMAGE_TAG: dev${{ github.run_number }}-${{ github.run_attempt }}
 
 jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+      packages: read
+
   build:
     name: Build Docker Image
+    needs: test
     if: github.ref == 'refs/heads/development'
     runs-on: ubuntu-latest
     timeout-minutes: 20

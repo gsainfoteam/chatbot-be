@@ -262,10 +262,10 @@ export const sessions = pgTable(
     sessionTokenIdx: index('sessions_session_token_idx').on(table.sessionToken),
     widgetKeyIdIdx: index('sessions_widget_key_id_idx').on(table.widgetKeyId),
     expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
-    widgetKeyEndUserIdx: index('sessions_widget_key_end_user_idx').on(
-      table.widgetKeyId,
-      table.endUserKey,
-    ),
+    // clientId를 보낸 세션만 담는다. 해시에 위젯 키가 들어 있어 이 열만으로 찾을 수 있다.
+    endUserKeyIdx: index('sessions_end_user_key_idx')
+      .on(table.endUserKey)
+      .where(sql`${table.endUserKey} IS NOT NULL`),
   }),
 );
 

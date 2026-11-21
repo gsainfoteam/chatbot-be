@@ -23,7 +23,7 @@ describe('per-user question limit migration', () => {
   it('stores the hashed client id on sessions with a lookup index', () => {
     expect(migrationSql).toContain('ADD COLUMN "end_user_key" varchar(64);');
     expect(migrationSql).toContain(
-      'CREATE INDEX "sessions_widget_key_end_user_idx" ON "sessions" USING btree ("widget_key_id","end_user_key");',
+      'CREATE INDEX "sessions_end_user_key_idx" ON "sessions" USING btree ("end_user_key") WHERE "sessions"."end_user_key" IS NOT NULL;',
     );
   });
 });

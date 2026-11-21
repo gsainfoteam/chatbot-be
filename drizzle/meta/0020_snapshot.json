@@ -1,5 +1,5 @@
 {
-  "id": "1c7efbb6-41d7-4ac7-8ce8-8c45ad7cb111",
+  "id": "31c13656-b0a3-4a0e-b137-575d27a7e019",
   "prevId": "1dbd8853-8097-445a-a90a-6881024c1fc5",
   "version": "7",
   "dialect": "postgresql",
@@ -1421,15 +1421,9 @@
           "method": "btree",
           "with": {}
         },
-        "sessions_widget_key_end_user_idx": {
-          "name": "sessions_widget_key_end_user_idx",
+        "sessions_end_user_key_idx": {
+          "name": "sessions_end_user_key_idx",
           "columns": [
-            {
-              "expression": "widget_key_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
             {
               "expression": "end_user_key",
               "isExpression": false,
@@ -1438,6 +1432,7 @@
             }
           ],
           "isUnique": false,
+          "where": "\"sessions\".\"end_user_key\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}

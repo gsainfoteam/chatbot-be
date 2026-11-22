@@ -25,6 +25,8 @@
 
 채팅 위젯의 **인증(Auth)** 및 **대화 내역 저장(History Storage)**을 담당하는 백엔드 API입니다.
 
+자체 플랫폼용 이미지 채팅 API와 브라우저 이력 연동은 [플랫폼 채팅 계약](docs/platform-chat-contract.md)을 참고하세요. 기본 비활성 상태이며, 사용 전 DB 마이그레이션과 환경 변수 설정이 필요합니다.
+
 ## Tech Stack
 
 - **Runtime**: Bun

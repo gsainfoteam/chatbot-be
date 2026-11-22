@@ -47,6 +47,7 @@ export class GistScopePolicy {
     usage: LlmUsage,
     signal?: AbortSignal,
     diagnostics: ScopeDiagnostics = {},
+    imageSummary?: string,
   ): Promise<ScopeDecision> {
     const startedAt = Date.now();
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -61,6 +62,14 @@ export class GistScopePolicy {
               role: 'user',
               content: JSON.stringify({
                 question: maskPersonalInfo(question).slice(0, 4000),
+                ...(imageSummary
+                  ? {
+                      imageSummary: maskPersonalInfo(imageSummary).slice(
+                        0,
+                        6000,
+                      ),
+                    }
+                  : {}),
                 history: history.slice(-4).map((m) => ({
                   role: m.role,
                   content: maskPersonalInfo(m.content ?? '').slice(0, 800),

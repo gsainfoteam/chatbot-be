@@ -29,6 +29,33 @@ function baseEnv(overrides: Record<string, unknown> = {}) {
 }
 
 describe('env validation for LLM_PROVIDER', () => {
+  it('disables platform chat by default and requires its key only when enabled', () => {
+    const env = baseEnv({
+      LETSUR_AI_GATEWAY_BASE_URL: 'https://gw.letsur.ai/v1',
+      LETSUR_AI_GATEWAY_API_KEY: 'test-key',
+    });
+    expect(validate(env).PLATFORM_CHAT_ENABLED).toBe(false);
+    expect(() =>
+      validate({
+        ...env,
+        PLATFORM_CHAT_ENABLED: 'false',
+        PLATFORM_WIDGET_KEY_ID: '',
+      }),
+    ).not.toThrow();
+    expect(() => validate({ ...env, PLATFORM_CHAT_ENABLED: 'true' })).toThrow(
+      /PLATFORM_WIDGET_KEY_ID/,
+    );
+    expect(
+      validate({
+        ...env,
+        PLATFORM_CHAT_ENABLED: 'true',
+        PLATFORM_WIDGET_KEY_ID: '550e8400-e29b-41d4-a716-446655440000',
+      }).PLATFORM_CHAT_ENABLED,
+    ).toBe(true);
+    expect(() => validate({ ...env, PLATFORM_CHAT_ENABLED: 'fasle' })).toThrow(
+      /PLATFORM_CHAT_ENABLED/,
+    );
+  });
   it('requires Letsur credentials by default', () => {
     expect(() =>
       validate(

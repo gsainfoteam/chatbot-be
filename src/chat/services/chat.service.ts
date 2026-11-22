@@ -36,6 +36,7 @@ export interface AnswerRegenerationTarget {
   question: string;
   originalMessageId: string;
   historyBefore: Date;
+  userMetadata?: Record<string, unknown>;
 }
 
 @Trace()
@@ -205,7 +206,7 @@ export class ChatService {
     if (dto.role === MessageRole.USER) {
       return this.db.transaction(async (tx) => {
         const [session] = await tx
-          .select({ id: sessions.id })
+          .select({ id: sessions.id, channel: sessions.channel })
           .from(sessions)
           .where(eq(sessions.id, sessionId))
           .for('update')
@@ -217,7 +218,10 @@ export class ChatService {
           .where(
             and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')),
           );
-        if (Number(row?.count ?? 0) >= MAX_QUESTIONS_PER_SESSION) {
+        if (
+          session.channel !== 'platform' &&
+          Number(row?.count ?? 0) >= MAX_QUESTIONS_PER_SESSION
+        ) {
           throw new HttpException(
             {
               statusCode: 429,
@@ -377,6 +381,7 @@ export class ChatService {
   async getAnswerRegenerationTarget(
     sessionId: string,
     messageId: string,
+    validateOriginal?: (metadata: Record<string, unknown> | null) => void,
   ): Promise<AnswerRegenerationTarget> {
     return this.db.transaction(async (tx) => {
       const target = this.firstRawRow(
@@ -436,7 +441,11 @@ export class ChatService {
         target.created_at ?? target.createdAt,
       );
       const [previousUserMessage] = await tx
-        .select({ content: messages.content, createdAt: messages.createdAt })
+        .select({
+          content: messages.content,
+          createdAt: messages.createdAt,
+          metadata: messages.metadata,
+        })
         .from(messages)
         .where(
           and(
@@ -452,6 +461,9 @@ export class ChatService {
         throw new NotFoundException('Original user question not found');
       }
 
+      const userMetadata = this.toMetadataRecord(previousUserMessage.metadata);
+      validateOriginal?.(userMetadata);
+
       await tx.execute(sql`
         UPDATE messages
         SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
@@ -465,6 +477,7 @@ export class ChatService {
         question: previousUserMessage.content,
         originalMessageId: messageId,
         historyBefore: previousUserMessage.createdAt,
+        ...(userMetadata ? { userMetadata } : {}),
       };
     });
   }

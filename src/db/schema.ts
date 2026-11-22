@@ -244,6 +244,7 @@ export const sessions = pgTable(
       .notNull()
       .references(() => widgetKeys.id, { onDelete: 'cascade' }),
     sessionToken: text('session_token').notNull().unique(),
+    channel: varchar('channel', { length: 16 }).notNull().default('widget'),
     pageUrl: varchar('page_url', { length: 2048 }).notNull(),
     expiresAt: timestamp('expires_at').notNull(),
     createdAt: timestamp('created_at').notNull().defaultNow(),
@@ -252,6 +253,10 @@ export const sessions = pgTable(
     sessionTokenIdx: index('sessions_session_token_idx').on(table.sessionToken),
     widgetKeyIdIdx: index('sessions_widget_key_id_idx').on(table.widgetKeyId),
     expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
+    channelCheck: check(
+      'sessions_channel_check',
+      sql`${table.channel} IN ('widget', 'platform')`,
+    ),
   }),
 );
 

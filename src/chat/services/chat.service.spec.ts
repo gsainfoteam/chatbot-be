@@ -626,6 +626,29 @@ describe('ChatService assistant answer aggregation', () => {
       }),
     ).rejects.toMatchObject({ status: 429 });
   });
+  it('allows the sixth platform message only when the stored session channel is platform', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ id: sessionId, channel: 'platform' }]);
+    db.queueSelect([{ count: 5 }]);
+    await expect(
+      service.createMessage(sessionId, {
+        role: MessageRole.USER,
+        content: 'sixth',
+      }),
+    ).resolves.toMatchObject({ content: 'sixth' });
+  });
+  it('does not let user metadata bypass the widget question limit', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ id: sessionId, channel: 'widget' }]);
+    db.queueSelect([{ count: 5 }]);
+    await expect(
+      service.createMessage(sessionId, {
+        role: MessageRole.USER,
+        content: 'sixth',
+        metadata: { channel: 'platform' },
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+  });
   it('does not touch total_answers for user messages', async () => {
     const { service, db, usageService } = createService();
     db.queueSelect([{ id: sessionId }]);

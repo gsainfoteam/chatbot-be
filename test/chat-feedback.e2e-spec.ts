@@ -216,6 +216,7 @@ describe('Chat feedback API (e2e)', () => {
       {
         persistUserMessage: false,
         historyBefore: createdAt,
+        widgetKeyId: 'widget-key-1',
         assistantMetadata: {
           regeneratedFromMessageId: messageId,
           regeneratedFromFeedback: FeedbackRating.BAD,

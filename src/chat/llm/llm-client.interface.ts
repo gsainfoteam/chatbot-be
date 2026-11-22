@@ -39,10 +39,13 @@ export interface LlmClient {
   ): Promise<LlmResponse>;
 
   generateFinalResponseStream(
-    messages: LlmMessage[],
+    messages: LlmRequestMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: Pick<LlmCallOptions, 'temperature' | 'signal'>,
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'signal' | 'max_tokens' | 'timeoutMs'
+    >,
   ): Promise<Readable>;
 
   /**

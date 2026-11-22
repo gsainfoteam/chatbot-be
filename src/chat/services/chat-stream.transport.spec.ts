@@ -103,6 +103,7 @@ describe('ChatStreamTransport', () => {
     await expect(consumePromise).resolves.toEqual({
       accumulatedContent: '안녕',
       model: 'heavy-model',
+      completed: false,
       usage: {
         prompt_tokens: 1,
         completion_tokens: 2,
@@ -130,6 +131,32 @@ describe('ChatStreamTransport', () => {
     );
     expect(reply.raw.end).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ['stop', false, true],
+    ['length', false, false],
+    ['stop', true, false],
+  ])(
+    'reports completion for finish=%s and error=%s',
+    async (finish, error, completed) => {
+      const transport = createTransport();
+      const stream = new PassThrough();
+      const pending = transport.consumeAndForward(stream, {
+        raw: { write: jest.fn() },
+      } as never);
+      stream.write(
+        'data: ' +
+          JSON.stringify({
+            choices: [{ delta: { content: '답변' }, finish_reason: finish }],
+          }) +
+          '\n\n',
+      );
+      if (error)
+        stream.write('data: {"error":{"message":"provider failure"}}\n\n');
+      stream.end('data: [DONE]\n\n');
+      expect((await pending).completed).toBe(completed);
+    },
+  );
 
   it('does not swallow SSE write failures as JSON parse failures', async () => {
     const transport = createTransport();

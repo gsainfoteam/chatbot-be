@@ -50,6 +50,7 @@ export interface LlmRequest {
   parallel_tool_calls?: boolean;
   temperature?: number;
   max_tokens?: number;
+  max_completion_tokens?: number;
   stream?: boolean;
   stream_options?: {
     include_usage?: boolean;

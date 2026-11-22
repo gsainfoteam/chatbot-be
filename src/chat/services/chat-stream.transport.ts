@@ -24,6 +24,7 @@ export type StreamConsumeResult = {
   accumulatedContent: string;
   model: string;
   usage: LlmUsage | null;
+  completed: boolean;
 };
 
 /**
@@ -165,6 +166,8 @@ export class ChatStreamTransport {
       let buffer = '';
       const decoder = new StringDecoder('utf8');
       let settled = false;
+      let sawDone = false;
+      let incompleteFinish = false;
       const cleanup = () => signal?.removeEventListener('abort', abort);
       const abort = () => {
         if (settled) return;
@@ -193,12 +196,20 @@ export class ChatStreamTransport {
           if (!line.startsWith('data: ')) continue;
 
           const data = line.slice(6).trim();
-          if (!data || data === '[DONE]') continue;
+          if (data === '[DONE]') {
+            sawDone = true;
+            continue;
+          }
+          if (!data) continue;
 
           let parsed: {
-            choices?: Array<{ delta?: { content?: string } }>;
+            choices?: Array<{
+              delta?: { content?: string };
+              finish_reason?: string | null;
+            }>;
             model?: string;
             usage?: LlmUsage;
+            error?: unknown;
           };
           try {
             parsed = JSON.parse(data) as typeof parsed;
@@ -208,6 +219,9 @@ export class ChatStreamTransport {
           }
 
           const delta = parsed.choices?.[0]?.delta?.content;
+          const finish = parsed.choices?.[0]?.finish_reason;
+          if (parsed.error) incompleteFinish = true;
+          if (finish && finish !== 'stop') incompleteFinish = true;
           const content = delta ? (output ? output.push(delta) : delta) : '';
           if (content) {
             onFirstContent?.();
@@ -273,7 +287,12 @@ export class ChatStreamTransport {
             accumulatedContent += content;
             reply.raw.write(`data: ${JSON.stringify({ content })}\n\n`);
           }
-          resolve({ accumulatedContent, model, usage });
+          resolve({
+            accumulatedContent,
+            model,
+            usage,
+            completed: sawDone && !incompleteFinish,
+          });
         } catch (error) {
           reject(error instanceof Error ? error : new Error(String(error)));
         }

@@ -91,6 +91,8 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       }
     }
 
+    this.applyModelParameters(request);
+
     const requestLogSummary = {
       model: request.model,
       stream: false,
@@ -127,10 +129,13 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   }
 
   async generateFinalResponseStream(
-    messages: LlmMessage[],
+    messages: LlmRequestMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: Pick<LlmCallOptions, 'temperature' | 'signal'>,
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'signal' | 'max_tokens' | 'timeoutMs'
+    >,
   ): Promise<Readable> {
     const toolMessages: LlmMessage[] = toolResults.map((result) => ({
       role: 'tool',
@@ -145,11 +150,12 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       model: model || this.defaultModel,
       messages: updatedMessages,
       temperature: options?.temperature ?? 0.7,
-      max_tokens: 2000,
+      max_tokens: options?.max_tokens ?? 2000,
       stream: true,
       stream_options: { include_usage: true },
     };
 
+    this.applyModelParameters(request);
     const requestLogSummary = {
       model: request.model,
       stream: request.stream,
@@ -169,7 +175,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
           .post<Readable>(`${this.baseUrl}/chat/completions`, request, {
             headers: this.buildHeaders(),
             responseType: 'stream',
-            timeout: 15000,
+            timeout: options?.timeoutMs ?? 15000,
             signal: options?.signal,
           })
           .pipe(
@@ -249,11 +255,14 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   protected logApiError(error: AxiosError, requestLogSummary: unknown): void {
     const statusCode = error.response?.status;
     const responseData = error.response?.data;
+    const hasImages = (
+      requestLogSummary as { messages?: { imageCount?: number } }
+    )?.messages?.imageCount;
     this.logger.error(
       `${this.providerLabel} API error (status ${statusCode}): ${error.message}`,
       error instanceof Error ? error.stack : undefined,
     );
-    if (responseData != null) {
+    if (responseData != null && !hasImages) {
       this.logger.error(
         `${this.providerLabel} error response body: ${this.safeStringify(responseData)}`,
       );
@@ -264,33 +273,56 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   }
 
   protected safeStringify(value: unknown, maxLen: number = 2000): string {
+    const redact = (text: string) =>
+      text.replace(
+        /data:image\/[^;,\s]+;base64,[A-Za-z0-9+/=_-]+/g,
+        '[image omitted]',
+      );
     try {
       if (typeof value === 'string') {
-        return value.length > maxLen
-          ? value.slice(0, maxLen) + '...(truncated)'
-          : value;
+        value = redact(value);
+        return (value as string).length > maxLen
+          ? (value as string).slice(0, maxLen) + '...(truncated)'
+          : (value as string);
       }
 
       if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value as Buffer)) {
-        const str = (value as Buffer).toString('utf8');
+        const str = redact((value as Buffer).toString('utf8'));
         return str.length > maxLen
           ? str.slice(0, maxLen) + '...(truncated)'
           : str;
       }
 
-      const str = JSON.stringify(value, null, 2);
+      const str =
+        JSON.stringify(
+          value,
+          (_key, item: unknown) =>
+            typeof item === 'string' ? redact(item) : item,
+          2,
+        ) ?? '';
       return str.length > maxLen
         ? str.slice(0, maxLen) + '...(truncated)'
         : str;
     } catch {
-      const str = inspect(value, {
-        depth: 5,
-        maxArrayLength: 50,
-        breakLength: 120,
-      });
+      const str = redact(
+        inspect(value, {
+          depth: 5,
+          maxArrayLength: 50,
+          breakLength: 120,
+        }),
+      );
       return str.length > maxLen
         ? str.slice(0, maxLen) + '...(truncated)'
         : str;
+    }
+  }
+
+  /** Reasoning-model Chat Completions uses a completion budget and no temperature. */
+  private applyModelParameters(request: LlmRequest): void {
+    if (/^(?:openai\/)?gpt-(?:5|6)(?:[.-]|$)/i.test(request.model)) {
+      request.max_completion_tokens = request.max_tokens;
+      delete request.max_tokens;
+      delete request.temperature;
     }
   }
 
@@ -301,6 +333,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
     let toolRoleHasNameField = 0;
     let contentNullCount = 0;
     let contentCharsSum = 0;
+    let imageCount = 0;
 
     for (const m of messages) {
       roleCounts[m.role] = (roleCounts[m.role] ?? 0) + 1;
@@ -315,6 +348,15 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       }
       if (m.content === null) contentNullCount += 1;
       if (typeof m.content === 'string') contentCharsSum += m.content.length;
+      if (Array.isArray(m.content)) {
+        imageCount += m.content.filter(
+          (part) => part.type === 'image_url',
+        ).length;
+        contentCharsSum += m.content.reduce(
+          (sum, part) => sum + (part.type === 'text' ? part.text.length : 0),
+          0,
+        );
+      }
     }
 
     return {
@@ -325,6 +367,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       toolRoleHasNameField,
       contentNullCount,
       contentCharsSum,
+      imageCount,
     };
   }
 }

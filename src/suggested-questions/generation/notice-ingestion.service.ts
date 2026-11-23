@@ -9,25 +9,24 @@ export const DEFAULT_MAX_NOTICES_PER_RUN = 10;
 
 export interface NoticeIngestionResult {
   widgetKeyId: string;
-  /** 첫 실행이라 질문을 만들지 않고 장부에만 기록한 공지 수 */
-  seeded: number;
-  /** 커서보다 새로운 공지 수 */
-  fresh: number;
-  /** 이번 인스턴스가 선점한 공지 수 */
-  claimed: number;
+  /** 수집된 공지 중 장부에 없던 수 */
+  pending: number;
+  /** 처리를 끝내고 장부에 기록한 공지 수 */
+  processed: number;
   /** 저장된 질문 수(PENDING) */
   saved: number;
-  /** 본문을 읽지 못해 건너뛴 공지 수 */
+  /** 본문을 읽지 못해 질문을 만들지 못한 공지 수 */
   skipped: number;
-  /** LLM 호출이 실패해 선점을 되돌린 공지 수 */
+  /** 예외로 끊겨 장부에 기록하지 않은 공지 수. 다음 주기에 다시 시도한다 */
   failed: number;
 }
 
 /**
- * 지글 공지를 모아 아직 처리하지 않은 것만 골라 질문 생성으로 넘긴다.
+ * 지글 공지를 모아 장부에 없는 것만 골라 질문 생성으로 넘긴다.
  *
- * 선점에 성공한 공지만 LLM에 들어간다. 호출이 실패하면 선점을 되돌려
- * 다음 주기에 다시 시도하게 한다.
+ * 장부 기록은 생성이 끝난 뒤에 한다. 그래서 예외로 끊긴 공지는 기록되지 않고
+ * 다음 주기에 다시 집힌다. 질문을 못 만든 공지(본문이 이미지뿐, 물어볼 게 없음)는
+ * 확정된 결론이므로 기록해 두고 다시 읽지 않는다.
  */
 @Injectable()
 export class NoticeIngestionService {
@@ -67,7 +66,7 @@ export class NoticeIngestionService {
 
   /**
    * 한 주기 분량의 수집.
-   * 공지 목록은 한 번만 받아 와서 모든 위젯 키가 나눠 쓴다. 커서와 장부는 위젯 키마다 따로다.
+   * 공지 목록은 한 번만 받아 와서 모든 위젯 키가 나눠 쓴다. 장부는 위젯 키마다 따로다.
    */
   async run(signal?: AbortSignal): Promise<NoticeIngestionResult[]> {
     const notices = await this.feed.fetchRecent(signal);
@@ -96,44 +95,22 @@ export class NoticeIngestionService {
     notices: ZiggleNoticeSummary[],
     signal?: AbortSignal,
   ): Promise<NoticeIngestionResult> {
-    const cursor = await this.repo.maxIngestedNoticeId(widgetKeyId);
+    const ingested = await this.repo.ingestedNoticeIds(
+      widgetKeyId,
+      notices.map((notice) => notice.id),
+    );
 
-    // 첫 실행: 지금 보이는 공지는 전부 "이미 지나간 것"으로 접어 둔다.
-    // 과거 공지로 질문을 만들 이유가 없고, 안 그러면 첫 주기에 수백 번 LLM을 부른다.
-    if (cursor === null) {
-      const seeded = await this.repo.seedNotices(
-        widgetKeyId,
-        notices.map((notice) => notice.id),
-      );
-      this.logger.log(
-        `[${widgetKeyId}] 첫 실행: 공지 ${seeded}건을 기준점으로 기록했습니다. ` +
-          `다음 주기부터 id > ${notices[0]?.id ?? 0} 인 공지만 처리합니다.`,
-      );
-      return {
-        widgetKeyId,
-        seeded,
-        fresh: 0,
-        claimed: 0,
-        saved: 0,
-        skipped: 0,
-        failed: 0,
-      };
-    }
+    // 피드가 이미 최신순이라 따로 정렬하지 않는다. 상한에 걸려 남은 공지는
+    // 장부에 들어가지 않았으므로 다음 주기에 그대로 다시 집힌다.
+    const pending = notices.filter((notice) => !ingested.has(notice.id));
 
-    // 오래된 것부터 처리한다. 커서가 MAX(notice_id)라서, 최신부터 처리하면
-    // 한 주기 상한에 걸려 남은 과거 공지가 커서에 추월당해 영영 집히지 않는다.
-    const fresh = notices
-      .filter((notice) => notice.id > cursor)
-      .sort((a, b) => a.id - b.id);
-    let claimed = 0;
+    let processed = 0;
     let saved = 0;
     let skipped = 0;
     let failed = 0;
 
-    for (const notice of fresh.slice(0, this.maxPerRun)) {
+    for (const notice of pending.slice(0, this.maxPerRun)) {
       signal?.throwIfAborted();
-      if (!(await this.repo.claimNotice(widgetKeyId, notice.id))) continue;
-      claimed += 1;
 
       try {
         const result = await this.generator.generateForNotice(
@@ -145,31 +122,31 @@ export class NoticeIngestionService {
         if (result.skipped) skipped += 1;
       } catch (error) {
         if (signal?.aborted) throw error;
-        // 네트워크·타임아웃 같은 일시적 실패. 선점을 되돌려 다음 주기에 다시 집게 한다.
+        // 네트워크·타임아웃 같은 일시적 실패. 장부에 기록하지 않아 다음 주기에
+        // 다시 집힌다. 뒤 공지는 계속 처리한다.
         failed += 1;
-        await this.repo.releaseNotice(widgetKeyId, notice.id);
         this.logger.warn(
-          `[${widgetKeyId}] id=${notice.id} 질문 생성 실패, 선점 취소: ` +
+          `[${widgetKeyId}] id=${notice.id} 질문 생성 실패, 다음 주기에 재시도: ` +
             (error instanceof Error ? error.message : String(error)),
         );
-        // 뒤 공지를 계속 처리하면 커서가 이 공지를 넘어가 다시 집지 못한다.
-        // 이번 주기는 여기서 멈추고 다음 주기에 이 공지부터 다시 시작한다.
-        break;
+        continue;
       }
+
+      await this.repo.recordNotice(widgetKeyId, notice.id);
+      processed += 1;
     }
 
     this.logger.log(
-      `[${widgetKeyId}] 커서 ${cursor} 기준 새 공지 ${fresh.length}건 → ` +
-        `선점 ${claimed}건, 질문 ${saved}건 저장` +
+      `[${widgetKeyId}] 장부에 없는 공지 ${pending.length}건 → ` +
+        `처리 ${processed}건, 질문 ${saved}건 저장` +
         (skipped > 0 ? `, 본문 없음 ${skipped}건` : '') +
         (failed > 0 ? `, 실패 ${failed}건` : ''),
     );
 
     return {
       widgetKeyId,
-      seeded: 0,
-      fresh: fresh.length,
-      claimed,
+      pending: pending.length,
+      processed,
       saved,
       skipped,
       failed,

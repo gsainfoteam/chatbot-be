@@ -66,16 +66,15 @@ export class SuggestedQuestionsWorker implements OnModuleDestroy {
       const results = await this.ingestion.run(this.abort.signal);
       const total = results.reduce(
         (sum, result) => ({
-          seeded: sum.seeded + result.seeded,
-          claimed: sum.claimed + result.claimed,
+          processed: sum.processed + result.processed,
           saved: sum.saved + result.saved,
           failed: sum.failed + result.failed,
         }),
-        { seeded: 0, claimed: 0, saved: 0, failed: 0 },
+        { processed: 0, saved: 0, failed: 0 },
       );
       this.logger.log(
-        `주기 작업 완료 — 위젯 키 ${results.length}개, 기준점 ${total.seeded}건, ` +
-          `공지 ${total.claimed}건, 질문 ${total.saved}건 저장, 실패 ${total.failed}건`,
+        `주기 작업 완료 — 위젯 키 ${results.length}개, ` +
+          `공지 ${total.processed}건 처리, 질문 ${total.saved}건 저장, 실패 ${total.failed}건`,
       );
       this.failures = 0;
     } catch (error) {

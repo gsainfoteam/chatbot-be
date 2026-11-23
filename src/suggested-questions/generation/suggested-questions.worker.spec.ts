@@ -19,9 +19,8 @@ function fixture(
   const run = jest.fn(async () => [
     {
       widgetKeyId: 'w1',
-      seeded: 0,
-      fresh: 1,
-      claimed: 1,
+      pending: 1,
+      processed: 1,
       saved: 2,
       skipped: 0,
       failed: 0,

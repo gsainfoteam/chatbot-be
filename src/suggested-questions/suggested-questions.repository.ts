@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, desc, eq, ne, sql, type SQL } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import {
   DB_CONNECTION,
   noticeQuestionIngestions,
@@ -11,7 +11,6 @@ import {
   type SuggestedQuestionStatus,
 } from '../db';
 import { normalizeQuestion } from '../unanswered-questions/question-normalizer';
-import { max } from 'drizzle-orm';
 
 /** 위젯에 내보낼 수 있는 최소 필드. prompt는 일부러 들어 있지 않다. */
 export interface ApprovedQuestionRecord {
@@ -223,69 +222,44 @@ export class SuggestedQuestionsRepository {
   // ------------------------------------------------- 공지 처리 장부
 
   /**
-   * 이 위젯 키로 지금까지 처리한 가장 큰 공지 id. 한 번도 돈 적이 없으면 null.
+   * 이 위젯 키로 이미 처리한 공지 id. 주어진 후보 중에서만 찾는다.
    *
-   * Ziggle 검색은 최신순이 아니라 오래된 공지도 섞여 오므로, 이 값을 커서로 써서
-   * "전에 본 것보다 새 공지"만 고른다. null과 0은 뜻이 다르다. null은 첫 실행이라
-   * 씨딩만 하고 질문은 만들지 않는다는 신호다.
+   * 커서(MAX(notice_id))는 쓰지 않는다. Ziggle 검색은 최신순이 아니라 오래된 공지도
+   * 섞여 오기 때문에, 커서 방식이면 한 주기 상한에 걸려 남은 공지가 커서에 추월당해
+   * 영영 집히지 않았다. 후보를 장부와 직접 맞춰 보면 그 문제가 생기지 않는다.
    */
-  async maxIngestedNoticeId(widgetKeyId: string): Promise<number | null> {
-    const [row] = await this.db
-      .select({ value: max(noticeQuestionIngestions.noticeId) })
-      .from(noticeQuestionIngestions)
-      .where(eq(noticeQuestionIngestions.widgetKeyId, widgetKeyId));
-    return row?.value ?? null;
-  }
-
-  /**
-   * 공지 선점. 행을 먼저 만들고, 만드는 데 성공한 쪽만 질문을 생성한다.
-   *
-   * 유니크 기본키 덕분에 "확인하고 나서 쓰기" 사이의 틈이 없다. 인스턴스 두 대가
-   * 같은 순간에 들어와도 한쪽은 반드시 0행을 받는다. 락을 잡지 않으므로 뒤이은
-   * LLM 호출이 길어져도 DB 커넥션을 붙들지 않는다.
-   *
-   * @returns 내가 선점했으면 true, 이미 처리된 공지면 false
-   */
-  async claimNotice(widgetKeyId: string, noticeId: number): Promise<boolean> {
+  async ingestedNoticeIds(
+    widgetKeyId: string,
+    noticeIds: number[],
+  ): Promise<Set<number>> {
+    if (noticeIds.length === 0) return new Set();
     const rows = await this.db
-      .insert(noticeQuestionIngestions)
-      .values({ widgetKeyId, noticeId })
-      .onConflictDoNothing()
-      .returning({ noticeId: noticeQuestionIngestions.noticeId });
-    return rows.length > 0;
-  }
-
-  /**
-   * 선점 취소. LLM 호출이 네트워크 오류 등으로 실패했을 때만 쓴다.
-   * 장부에서 빼 두면 다음 주기에 다시 집어 간다.
-   *
-   * 응답은 왔는데 만들 질문이 없었던 경우에는 부르지 않는다. 그건 "질문거리 없는 공지"라는
-   * 정상 결과이고, 장부에 남겨 둬야 같은 공지를 매 주기 다시 LLM에 넣지 않는다.
-   */
-  async releaseNotice(widgetKeyId: string, noticeId: number): Promise<void> {
-    await this.db
-      .delete(noticeQuestionIngestions)
+      .select({ noticeId: noticeQuestionIngestions.noticeId })
+      .from(noticeQuestionIngestions)
       .where(
         and(
           eq(noticeQuestionIngestions.widgetKeyId, widgetKeyId),
-          eq(noticeQuestionIngestions.noticeId, noticeId),
+          inArray(noticeQuestionIngestions.noticeId, noticeIds),
         ),
       );
+    return new Set(rows.map((row) => row.noticeId));
   }
 
   /**
-   * 첫 실행용. 지금 보이는 공지를 "처리함"으로만 기록하고 질문은 만들지 않는다.
-   * 이게 없으면 첫 실행에서 과거 공지 수백 건에 LLM을 돌리게 된다.
+   * 처리한 공지를 장부에 기록한다. 질문 생성이 **끝난 뒤에만** 부른다.
    *
-   * @returns 새로 기록한 공지 수
+   * 질문을 못 만든 경우(본문이 이미지뿐이거나 모델이 물어볼 게 없다고 판단한 경우)에도
+   * 기록한다. 다시 돌려도 결과가 같은 확정된 결론이라, 매 주기 같은 공지를 또 읽을
+   * 이유가 없다. 반대로 네트워크 오류처럼 예외로 끊긴 공지는 기록하지 않아 다음
+   * 주기에 다시 집어 간다.
+   *
+   * 배포가 겹쳐 pod 두 대가 같은 공지를 동시에 처리하면 LLM이 두 번 돌 수 있다.
+   * 기본키 충돌을 무시하므로 장부는 깨지지 않고, 중복 질문은 유니크 인덱스가 막는다.
    */
-  async seedNotices(widgetKeyId: string, noticeIds: number[]): Promise<number> {
-    if (noticeIds.length === 0) return 0;
-    const rows = await this.db
+  async recordNotice(widgetKeyId: string, noticeId: number): Promise<void> {
+    await this.db
       .insert(noticeQuestionIngestions)
-      .values(noticeIds.map((noticeId) => ({ widgetKeyId, noticeId })))
-      .onConflictDoNothing()
-      .returning({ noticeId: noticeQuestionIngestions.noticeId });
-    return rows.length;
+      .values({ widgetKeyId, noticeId })
+      .onConflictDoNothing();
   }
 }

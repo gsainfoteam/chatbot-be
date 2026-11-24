@@ -36,9 +36,11 @@
     "db:migrate:safe": "bash scripts/migrate.sh",
     "db:backfill:answers": "bun src/scripts/backfill-usage-answers.ts",
     "db:backfill:embeddings": "bun src/scripts/backfill-chunk-embeddings.ts",
+    "db:backfill:questions": "bun src/scripts/backfill-suggested-questions.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:backfill:embeddings:prod": "bun dist/backfill-chunk-embeddings.js"
+    "db:backfill:embeddings:prod": "bun dist/backfill-chunk-embeddings.js",
+    "db:backfill:questions:prod": "node dist/backfill-suggested-questions.js"
   },
   "dependencies": {
     "@fastify/multipart": "^9.0.1",

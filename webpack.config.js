@@ -16,6 +16,10 @@ module.exports = function (options, webpackInstance) {
         __dirname,
         'src/scripts/backfill-chunk-embeddings.ts',
       ),
+      'backfill-suggested-questions': path.resolve(
+        __dirname,
+        'src/scripts/backfill-suggested-questions.ts',
+      ),
     },
     output: {
       filename: '[name].js',

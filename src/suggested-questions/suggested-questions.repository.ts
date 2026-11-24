@@ -71,20 +71,34 @@ export class SuggestedQuestionsRepository {
     widgetKeyId: string,
     limit: number,
   ): Promise<ApprovedQuestionRecord[]> {
-    return this.db
-      .select({
-        id: suggestedQuestions.id,
-        question: suggestedQuestions.question,
-      })
-      .from(suggestedQuestions)
-      .where(
-        and(
-          eq(suggestedQuestions.widgetKeyId, widgetKeyId),
-          eq(suggestedQuestions.status, 'APPROVED'),
-        ),
-      )
-      .orderBy(desc(suggestedQuestions.createdAt), desc(suggestedQuestions.id))
-      .limit(limit);
+    return (
+      this.db
+        .select({
+          id: suggestedQuestions.id,
+          question: suggestedQuestions.question,
+        })
+        .from(suggestedQuestions)
+        .where(
+          and(
+            eq(suggestedQuestions.widgetKeyId, widgetKeyId),
+            eq(suggestedQuestions.status, 'APPROVED'),
+          ),
+        )
+        // 최신 공지의 질문을 먼저 보여준다.
+        //
+        // created_at으로 정렬하면 안 된다. 백필은 최신 공지부터 처리하므로 오래된 공지의
+        // 질문일수록 created_at이 늦고, 결국 가장 오래된 공지가 첫 화면에 뜬다.
+        // 한 번에 만들어진 질문들은 created_at이 몇 초 안에 몰려 있어 순서가 의미도 없다.
+        //
+        // notice_id가 없는 질문(관리자가 직접 등록한 것)은 Postgres의 DESC 기본값인
+        // NULLS FIRST로 맨 앞에 온다. 사람이 일부러 넣은 질문이라 그게 맞다.
+        .orderBy(
+          desc(suggestedQuestions.noticeId),
+          desc(suggestedQuestions.createdAt),
+          desc(suggestedQuestions.id),
+        )
+        .limit(limit)
+    );
   }
 
   /**

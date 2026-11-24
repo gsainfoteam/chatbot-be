@@ -5,7 +5,20 @@ import { SuggestedQuestionsRepository } from '../suggested-questions.repository'
 import { NoticeFeedService } from './notice-feed.service';
 import { QuestionGenerationService } from './question-generation.service';
 
-export const DEFAULT_MAX_NOTICES_PER_RUN = 10;
+/**
+ * 정기 작업이 한 번에 볼 최신 공지 건수.
+ *
+ * 이 중 장부에 이미 있는 공지는 LLM도 본문 조회도 타지 않고 장부 조회 한 번으로
+ * 걸러진다. 그래서 새 공지가 없는 주기는 수집만 하고 끝난다.
+ *
+ * 밀린 공지를 이 작업이 기어서 처리하지 않는다. 기존 공지는 백필 스크립트
+ * (`src/scripts/backfill-suggested-questions.ts`)가 한 번에 돌린다. 그래서 이 값은
+ * "한 주기(6시간) 사이에 올라올 수 있는 공지 수"만 덮으면 된다.
+ *
+ * 지글 공지는 하루 몇 건 수준이라 10건이면 며칠분이다. 생성이 며칠 멈춰도
+ * 그 사이 공지가 창 밖으로 밀려나지 않는다.
+ */
+export const RECENT_NOTICE_WINDOW = 10;
 
 export interface NoticeIngestionResult {
   widgetKeyId: string;
@@ -32,7 +45,6 @@ export interface NoticeIngestionResult {
 export class NoticeIngestionService {
   private readonly logger = new Logger(NoticeIngestionService.name);
   private readonly widgetKeyIds: string[];
-  private readonly maxPerRun: number;
   private readonly enabled: boolean;
 
   constructor(
@@ -51,12 +63,6 @@ export class NoticeIngestionService {
       .split(',')
       .map((id) => id.trim())
       .filter((id) => id.length > 0 && id !== '*');
-
-    const max = Number(
-      configService.get('SUGGESTED_QUESTIONS_MAX_NOTICES_PER_RUN'),
-    );
-    this.maxPerRun =
-      Number.isInteger(max) && max > 0 ? max : DEFAULT_MAX_NOTICES_PER_RUN;
   }
 
   /** 켜져 있고 대상 위젯 키가 지정됐는지 */
@@ -68,8 +74,11 @@ export class NoticeIngestionService {
    * 한 주기 분량의 수집.
    * 공지 목록은 한 번만 받아 와서 모든 위젯 키가 나눠 쓴다. 장부는 위젯 키마다 따로다.
    */
-  async run(signal?: AbortSignal): Promise<NoticeIngestionResult[]> {
-    const notices = await this.feed.fetchRecent(signal);
+  async run(
+    signal?: AbortSignal,
+    limit: number = RECENT_NOTICE_WINDOW,
+  ): Promise<NoticeIngestionResult[]> {
+    const notices = await this.feed.fetchRecent(limit, signal);
     this.logger.log(
       `Ziggle에서 공지 ${notices.length}건 수집 (최신 id=${notices[0]?.id ?? '-'})`,
     );
@@ -95,13 +104,11 @@ export class NoticeIngestionService {
     notices: ZiggleNoticeSummary[],
     signal?: AbortSignal,
   ): Promise<NoticeIngestionResult> {
+    // 피드가 이미 최신순으로 limit건만 주므로 여기서 더 자르지 않는다.
     const ingested = await this.repo.ingestedNoticeIds(
       widgetKeyId,
       notices.map((notice) => notice.id),
     );
-
-    // 피드가 이미 최신순이라 따로 정렬하지 않는다. 상한에 걸려 남은 공지는
-    // 장부에 들어가지 않았으므로 다음 주기에 그대로 다시 집힌다.
     const pending = notices.filter((notice) => !ingested.has(notice.id));
 
     let processed = 0;
@@ -109,7 +116,7 @@ export class NoticeIngestionService {
     let skipped = 0;
     let failed = 0;
 
-    for (const notice of pending.slice(0, this.maxPerRun)) {
+    for (const notice of pending) {
       signal?.throwIfAborted();
 
       try {

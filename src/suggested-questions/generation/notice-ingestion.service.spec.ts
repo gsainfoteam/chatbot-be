@@ -7,8 +7,10 @@ import type {
   QuestionGenerationService,
 } from './question-generation.service';
 import type { NoticeFeedService } from './notice-feed.service';
-import { dedupeByIdDesc } from './notice-feed.service';
-import { NoticeIngestionService } from './notice-ingestion.service';
+import {
+  NoticeIngestionService,
+  RECENT_NOTICE_WINDOW,
+} from './notice-ingestion.service';
 
 const KEY = '00000000-0000-0000-0000-0000000000b1';
 
@@ -30,7 +32,6 @@ function build(options: {
   generate?: (noticeId: number) => NoticeGenerationResult;
   generateThrows?: boolean;
   widgetKeyIds?: string;
-  maxPerRun?: number;
   widgetKeyExists?: boolean;
 }) {
   const feed = {
@@ -69,26 +70,10 @@ function build(options: {
     config({
       SUGGESTED_QUESTIONS_ENABLED: true,
       SUGGESTED_QUESTIONS_WIDGET_KEY_IDS: options.widgetKeyIds ?? KEY,
-      SUGGESTED_QUESTIONS_MAX_NOTICES_PER_RUN: options.maxPerRun,
     }),
   );
-  return { service, repo, generator };
+  return { service, repo, generator, feed };
 }
-
-describe('dedupeByIdDesc', () => {
-  it('keeps one row per notice and puts the newest first', () => {
-    const merged = dedupeByIdDesc([
-      [notice(100), notice(88)],
-      [notice(199293), notice(100)],
-    ]);
-
-    expect(merged.map((n) => n.id)).toEqual([199293, 100, 88]);
-  });
-
-  it('returns an empty list when every keyword came back empty', () => {
-    expect(dedupeByIdDesc([[], []])).toEqual([]);
-  });
-});
 
 describe('NoticeIngestionService', () => {
   describe('장부에 없는 공지만 처리한다', () => {
@@ -110,38 +95,37 @@ describe('NoticeIngestionService', () => {
       expect(repo.recordNotice).toHaveBeenCalledWith(KEY, 199293);
     });
 
-    it('caps how many notices one run takes, newest first', async () => {
-      const { service, repo } = build({
-        notices: [notice(5), notice(4), notice(3), notice(2)],
-        maxPerRun: 2,
-      });
+    it('asks the feed for exactly the recent window', async () => {
+      // 자르는 일은 피드가 한다. 여기서는 몇 건을 달라고 했는지만 본다.
+      const { service, feed } = build({ notices: [notice(5)] });
+
+      await service.run();
+
+      expect(feed.fetchRecent).toHaveBeenCalledWith(
+        RECENT_NOTICE_WINDOW,
+        undefined,
+      );
+    });
+
+    it('lets a caller widen the window for a backfill', async () => {
+      const { service, feed } = build({ notices: [notice(5)] });
+
+      await service.run(undefined, 300);
+
+      expect(feed.fetchRecent).toHaveBeenCalledWith(300, undefined);
+    });
+
+    it('processes every pending notice inside the window in one pass', async () => {
+      // 주기당 처리 상한을 따로 두지 않는다. 창 크기가 이미 상한이다.
+      const notices = [notice(5), notice(4), notice(3), notice(2)];
+      const { service, repo } = build({ notices, ingested: [4, 2] });
 
       const [result] = await service.run();
 
       expect(
         jest.mocked(repo.recordNotice).mock.calls.map((c) => c[1]),
-      ).toEqual([5, 4]);
-      expect(result).toMatchObject({ pending: 4, processed: 2, saved: 4 });
-    });
-
-    it('leaves the rest of a backlog for the next pass', async () => {
-      // 상한에 걸려 남은 공지는 장부에 들어가지 않았으므로 다음 주기에 그대로 집힌다.
-      const notices = [notice(5), notice(4), notice(3), notice(2)];
-      const first = build({ notices, maxPerRun: 2 });
-      await first.service.run();
-      const firstIds = jest
-        .mocked(first.repo.recordNotice)
-        .mock.calls.map((c) => c[1]);
-
-      const second = build({ notices, ingested: firstIds, maxPerRun: 2 });
-      await second.service.run();
-      const secondIds = jest
-        .mocked(second.repo.recordNotice)
-        .mock.calls.map((c) => c[1]);
-
-      expect(firstIds).toEqual([5, 4]);
-      expect(secondIds).toEqual([3, 2]);
-      expect([...firstIds, ...secondIds]).toEqual([5, 4, 3, 2]);
+      ).toEqual([5, 3]);
+      expect(result).toMatchObject({ pending: 2, processed: 2 });
     });
 
     it('skips widget keys that no longer exist', async () => {
@@ -174,7 +158,6 @@ describe('NoticeIngestionService', () => {
       // 커서가 없으니 실패한 공지 뒤를 멈출 이유가 없다.
       const { service, repo } = build({
         notices: [notice(5), notice(4), notice(3)],
-        maxPerRun: 3,
         generate: (id) => {
           if (id === 4) throw new Error('LLM timeout');
           return { noticeId: id, saved: 1, skipped: false };

@@ -1,5 +1,4 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import {
   LLM_CLIENT,
   type LlmClient,
@@ -22,10 +21,22 @@ import {
   getQuestionGenerationUserPrompt,
 } from './question-generation.prompt';
 
-export const DEFAULT_QUESTIONS_PER_NOTICE = 2;
+/**
+ * 공지 하나에서 만들 질문 수 상한.
+ *
+ * 많이 만드는 것이 목적이 아니다. 한 공지에서 학생이 실제로 물어볼 만한 것은
+ * 보통 마감일과 신청 방법 둘이고, 셋째부터는 같은 내용을 말만 바꾼 것이 나온다.
+ */
+export const QUESTIONS_PER_NOTICE = 2;
+
 /** LLM에 넘기는 본문 길이 상한. 공지는 보통 2천 자 안팎이다. */
 export const MAX_BODY_CHARS = 6000;
-const DEFAULT_MODEL_TIER: LlmModelType = 'normal';
+
+/**
+ * 공지 한 건을 읽고 질문 두 개를 만드는 일에는 normal이면 충분하다.
+ * light는 자기완결적인 질문을 못 만들고, heavy는 하루 몇 건에 쓸 이유가 없다.
+ */
+export const MODEL_TIER: LlmModelType = 'normal';
 
 export interface GeneratedQuestion {
   question: string;
@@ -47,29 +58,12 @@ export interface NoticeGenerationResult {
 @Injectable()
 export class QuestionGenerationService {
   private readonly logger = new Logger(QuestionGenerationService.name);
-  private readonly perNotice: number;
-  private readonly modelTier: LlmModelType;
 
   constructor(
     @Inject(LLM_CLIENT) private readonly llm: LlmClient,
     private readonly ziggle: ZiggleNoticeClient,
     private readonly repo: SuggestedQuestionsRepository,
-    configService: ConfigService,
-  ) {
-    const perNotice = Number(
-      configService.get('SUGGESTED_QUESTIONS_PER_NOTICE'),
-    );
-    this.perNotice =
-      Number.isInteger(perNotice) && perNotice > 0
-        ? perNotice
-        : DEFAULT_QUESTIONS_PER_NOTICE;
-
-    const tier = configService.get<string>('SUGGESTED_QUESTIONS_MODEL_TIER');
-    this.modelTier =
-      tier === 'light' || tier === 'normal' || tier === 'heavy'
-        ? tier
-        : DEFAULT_MODEL_TIER;
-  }
+  ) {}
 
   /**
    * 공지 하나 처리.
@@ -95,19 +89,23 @@ export class QuestionGenerationService {
         {
           role: 'user',
           content: getQuestionGenerationUserPrompt({
+            today: todayInSeoul(),
             noticeTitle: maskPersonalInfo(notice.title),
             noticeBody: body,
             noticeUrl: this.ziggle.noticeUrl(notice.id),
-            maxQuestions: this.perNotice,
+            maxQuestions: QUESTIONS_PER_NOTICE,
           }),
         },
       ],
-      this.llm.getModel(this.modelTier),
+      this.llm.getModel(MODEL_TIER),
       { temperature: 0.4, max_tokens: 2000, signal },
     );
 
     const raw = response.choices[0]?.message?.content ?? '';
-    const candidates = parseGeneratedQuestions(raw).slice(0, this.perNotice);
+    const candidates = parseGeneratedQuestions(raw).slice(
+      0,
+      QUESTIONS_PER_NOTICE,
+    );
     if (candidates.length === 0) {
       this.logger.debug(`id=${notice.id} 만들 질문이 없습니다`);
       return { noticeId: notice.id, saved: 0, skipped: false };
@@ -200,4 +198,14 @@ export function parseGeneratedQuestions(raw: string): GeneratedQuestion[] {
     questions.push({ question: trimmedQuestion, prompt: trimmedPrompt });
   }
   return questions;
+}
+
+/** 한국 시간 기준 오늘. 컨테이너가 UTC라 타임존을 명시한다. */
+export function todayInSeoul(now: Date = new Date()): string {
+  return now.toLocaleDateString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
 }

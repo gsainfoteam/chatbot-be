@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  IsDateString,
+  IsDefined,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -10,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import type {
   SuggestedQuestionSource,
@@ -25,9 +28,11 @@ export const SUGGESTED_QUESTION_MAX_LENGTH = 100;
 /** 프롬프트 길이 상한. 답변 지침이라 질문보다 길지만 무제한은 막는다. */
 export const SUGGESTED_QUESTION_PROMPT_MAX_LENGTH = 4000;
 
-/** 위젯 첫 화면에 한 번에 노출할 수 있는 최대 개수 */
-export const SUGGESTED_QUESTION_MAX_LIMIT = 20;
-export const SUGGESTED_QUESTION_DEFAULT_LIMIT = 5;
+/**
+ * 위젯 첫 화면에 출처별로 띄우는 개수. 카드가 2×2라 위 2개는 관리자가 직접 쓴 질문,
+ * 아래 2개는 지글 공지에서 나온 질문이다. 요청마다 각 출처에서 무작위로 고른다.
+ */
+export const SUGGESTED_QUESTIONS_PER_SOURCE = 2;
 
 export const SUGGESTED_QUESTION_STATUSES: SuggestedQuestionStatus[] = [
   'PENDING',
@@ -42,6 +47,13 @@ export const SUGGESTED_QUESTION_SOURCES: SuggestedQuestionSource[] = [
 const STATUS_FILTERS = [...SUGGESTED_QUESTION_STATUSES, 'all'] as const;
 const SOURCE_FILTERS = [...SUGGESTED_QUESTION_SOURCES, 'all'] as const;
 
+/** active: 무기한이거나 기한 전, expired: 기한이 지남 */
+export const EXPIRY_FILTERS = ['all', 'active', 'expired'] as const;
+export type SuggestedQuestionExpiryFilter = (typeof EXPIRY_FILTERS)[number];
+
+const EXPIRES_AT_DESCRIPTION =
+  '첫 화면에 띄울 수 있는 마지막 시각(ISO-8601). null이면 무기한. 과거 시각은 받지 않습니다.';
+
 const trimToDefault =
   (fallback: string) =>
   ({ value }: { value: unknown }) =>
@@ -52,34 +64,41 @@ const trimOrUndefined = ({ value }: { value: unknown }) =>
 
 // ---------------------------------------------------------------- 위젯
 
-export class ListSuggestedQuestionsQueryDto {
-  @ApiPropertyOptional({
-    description: '받아올 질문 수',
-    minimum: 1,
-    maximum: SUGGESTED_QUESTION_MAX_LIMIT,
-    default: SUGGESTED_QUESTION_DEFAULT_LIMIT,
-  })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(SUGGESTED_QUESTION_MAX_LIMIT)
-  limit: number = SUGGESTED_QUESTION_DEFAULT_LIMIT;
-}
-
 /**
  * 위젯에 내보내는 추천 질문.
- * 답변 생성에 쓰는 prompt는 포함하지 않는다. 노출되면 프롬프트를 그대로 흉내 낼 수 있다.
+ *
+ * 버튼에 보일 question과, 눌렀을 때 질문 대신 챗봇에 보낼 prompt를 한 쌍으로 준다.
+ * 답변 경로는 바꾸지 않고 FE가 prompt를 보내는 것으로 정했다. prompt는 공지 번호·검색어·
+ * 확인할 내용을 담은 요청문이라 브라우저에 노출돼도 문제가 없다.
  */
 export class SuggestedQuestionDto {
   @ApiProperty({ description: '추천 질문 ID', format: 'uuid' })
   id: string;
 
   @ApiProperty({
-    description: '버튼에 표시할 질문. 누르면 그대로 채팅 입력란에 들어간다.',
+    description:
+      '버튼과 대화 말풍선에 보여줄 질문. 학생에게 보이는 문장은 이것이다.',
     maxLength: SUGGESTED_QUESTION_MAX_LENGTH,
-    example: '국가장학금 언제까지 신청해요?',
+    example: '2026 겨울행사 지네마는 언제 어디서 열리나요?',
   })
   question: string;
+
+  @ApiProperty({
+    description:
+      '버튼을 눌렀을 때 question 대신 채팅 요청에 보낼 문장. 화면에는 보여주지 않는다. null이면(관리자 질문) question을 그대로 보낸다.',
+    type: String,
+    nullable: true,
+    example:
+      'GIST 지글 공지 #200986 「[하우스연합회] 2026 겨울행사」에 대한 질문입니다.\nsearch_notices로 "지네마", "겨울행사"를 검색하면 이 공지(#200986)가 나옵니다. 그 공지의 본문을 읽고 답해 주세요.\n확인할 내용: 지네마 상영 일시와 상영관 위치\n질문: 2026 겨울행사 지네마는 언제 어디서 열리나요?',
+  })
+  prompt: string | null;
+
+  @ApiProperty({
+    description:
+      'ADMIN: 관리자가 직접 쓴 질문(위 칸), AI: 지글 공지에서 만든 질문(아래 칸)',
+    enum: SUGGESTED_QUESTION_SOURCES,
+  })
+  source: SuggestedQuestionSource;
 }
 
 // ---------------------------------------------------------------- 관리자
@@ -100,18 +119,34 @@ export class CreateSuggestedQuestionDto {
   @MaxLength(SUGGESTED_QUESTION_MAX_LENGTH)
   question: string;
 
-  @ApiProperty({
-    description: '이 질문에 답할 때 쓰는 프롬프트',
+  @ApiPropertyOptional({
+    description:
+      '버튼을 눌렀을 때 질문 대신 보낼 문장. 학교 문서에 있는 내용이면 비워 두면 된다(질문을 그대로 보냄).',
     maxLength: SUGGESTED_QUESTION_PROMPT_MAX_LENGTH,
   })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(trimOrUndefined)
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(SUGGESTED_QUESTION_PROMPT_MAX_LENGTH)
-  prompt: string;
+  prompt?: string;
+
+  @ApiProperty({
+    description: `${EXPIRES_AT_DESCRIPTION} 반드시 보내야 합니다(무기한이면 null).`,
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: '2026-12-31T23:59:59.000Z',
+  })
+  @IsDefined({ message: 'expiresAt is required (use null for no expiry)' })
+  @ValidateIf((_, value) => value !== null)
+  @IsDateString()
+  expiresAt: string | null;
 }
 
-/** 승인·거절과 내용 수정을 함께 받는다. 최소 한 필드는 있어야 한다(서비스에서 검사). */
+/**
+ * 승인·거절과 내용·기한 수정을 함께 받는다. 최소 한 필드는 있어야 한다(서비스에서 검사).
+ * APPROVED로 바꿀 때는 expiresAt도 같이 보내야 한다(서비스에서 검사).
+ */
 export class UpdateSuggestedQuestionDto {
   @ApiPropertyOptional({
     description: 'APPROVED: 위젯에 노출, REJECTED: 숨김, PENDING: 검수 대기',
@@ -129,13 +164,29 @@ export class UpdateSuggestedQuestionDto {
   @MaxLength(SUGGESTED_QUESTION_MAX_LENGTH)
   question?: string;
 
-  @ApiPropertyOptional({ maxLength: SUGGESTED_QUESTION_PROMPT_MAX_LENGTH })
+  @ApiPropertyOptional({
+    description: 'null을 보내면 prompt를 지운다(질문을 그대로 보내게 됨).',
+    maxLength: SUGGESTED_QUESTION_PROMPT_MAX_LENGTH,
+    type: String,
+    nullable: true,
+  })
   @Transform(trimOrUndefined)
   @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(SUGGESTED_QUESTION_PROMPT_MAX_LENGTH)
-  prompt?: string;
+  prompt?: string | null;
+
+  @ApiPropertyOptional({
+    description: `${EXPIRES_AT_DESCRIPTION} 빠지면 기한을 바꾸지 않습니다. status=APPROVED와 함께라면 필수입니다.`,
+    type: String,
+    format: 'date-time',
+    nullable: true,
+    example: '2026-12-31T23:59:59.000Z',
+  })
+  @ValidateIf((_, value) => value !== undefined && value !== null)
+  @IsDateString()
+  expiresAt?: string | null;
 }
 
 export class ListAdminSuggestedQuestionsQueryDto {
@@ -163,6 +214,15 @@ export class ListAdminSuggestedQuestionsQueryDto {
   source: SuggestedQuestionSource | 'all' = 'all';
 
   @ApiPropertyOptional({
+    description: 'active: 무기한이거나 기한 전, expired: 기한이 지남',
+    enum: EXPIRY_FILTERS,
+    default: 'all',
+  })
+  @Transform(trimToDefault('all'))
+  @IsIn(EXPIRY_FILTERS)
+  expiry: SuggestedQuestionExpiryFilter = 'all';
+
+  @ApiPropertyOptional({
     description: '특정 위젯 키로 제한 (접근 가능한 키만)',
     format: 'uuid',
   })
@@ -185,8 +245,13 @@ export class AdminSuggestedQuestionDto {
   @ApiProperty({ maxLength: SUGGESTED_QUESTION_MAX_LENGTH })
   question: string;
 
-  @ApiProperty({ maxLength: SUGGESTED_QUESTION_PROMPT_MAX_LENGTH })
-  prompt: string;
+  @ApiProperty({
+    description: '질문 대신 보낼 문장. 관리자 질문은 대개 null',
+    maxLength: SUGGESTED_QUESTION_PROMPT_MAX_LENGTH,
+    type: String,
+    nullable: true,
+  })
+  prompt: string | null;
 
   @ApiProperty({ enum: SUGGESTED_QUESTION_SOURCES })
   source: SuggestedQuestionSource;
@@ -218,6 +283,20 @@ export class AdminSuggestedQuestionDto {
 
   @ApiPropertyOptional({ type: String, format: 'date-time', nullable: true })
   reviewedAt: Date | null;
+
+  @ApiPropertyOptional({
+    description:
+      '첫 화면에 띄울 수 있는 마지막 시각. null이면 무기한(승인 전 후보도 null)',
+    type: String,
+    format: 'date-time',
+    nullable: true,
+  })
+  expiresAt: Date | null;
+
+  @ApiProperty({
+    description: '기한이 지났는지. 지난 질문은 첫 화면에 뜨지 않는다',
+  })
+  expired: boolean;
 
   @ApiProperty({ type: String, format: 'date-time' })
   createdAt: Date;

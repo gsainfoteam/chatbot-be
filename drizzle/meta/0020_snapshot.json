@@ -1532,7 +1532,7 @@
           "name": "prompt",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
         "source": {
           "name": "source",
@@ -1576,6 +1576,12 @@
         },
         "reviewed_at": {
           "name": "reviewed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
           "type": "timestamp",
           "primaryKey": false,
           "notNull": false
@@ -1633,7 +1639,7 @@
               "nulls": "last"
             },
             {
-              "expression": "created_at",
+              "expression": "source",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

@@ -621,8 +621,12 @@ export const suggestedQuestions = pgTable(
     question: text('question').notNull(),
     /** 같은 질문의 중복 등록을 막기 위한 키. question-normalizer와 같은 규칙. */
     normalizedQuestion: text('normalized_question').notNull(),
-    /** 이 질문에 답할 때 쓰는 프롬프트. 위젯 응답에는 절대 내보내지 않는다. */
-    prompt: text('prompt').notNull(),
+    /**
+     * 버튼을 눌렀을 때 질문 대신 챗봇에 보낼 문장. 위젯에 질문과 한 쌍으로 내려간다.
+     * AI 질문은 항상 있다(공지 번호·검색어로 에이전트를 그 공지로 유도한다).
+     * 관리자 질문은 대개 학교 문서에 있는 내용이라 비워 둔다(null). 그러면 질문을 그대로 보낸다.
+     */
+    prompt: text('prompt'),
     source: suggestedQuestionSourceEnum('source').notNull().default('ADMIN'),
     status: suggestedQuestionStatusEnum('status').notNull().default('PENDING'),
     /** 이 질문을 만들어 낸 지글 공지 id. 관리자가 직접 등록했으면 null. */
@@ -632,6 +636,12 @@ export const suggestedQuestions = pgTable(
     createdByIdpUuid: varchar('created_by_idp_uuid', { length: 255 }),
     reviewedByIdpUuid: varchar('reviewed_by_idp_uuid', { length: 255 }),
     reviewedAt: timestamp('reviewed_at'),
+    /**
+     * 첫 화면에 띄울 수 있는 마지막 시각. null이면 무기한.
+     * 관리자가 직접 등록할 때와 승인할 때 반드시 정한다(무기한도 명시적으로 고른다).
+     * 승인 전 후보(PENDING)는 아직 정하지 않았으므로 null이다.
+     */
+    expiresAt: timestamp('expires_at'),
     createdAt: timestamp('created_at').notNull().defaultNow(),
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
@@ -639,10 +649,11 @@ export const suggestedQuestions = pgTable(
     widgetKeyQuestionUnique: uniqueIndex(
       'suggested_questions_widget_key_id_normalized_question_unique',
     ).on(table.widgetKeyId, table.normalizedQuestion),
+    // 위젯 조회는 위젯 키·승인 상태·출처(관리자/AI)별로 나눠 뽑는다.
     servingIdx: index('suggested_questions_serving_idx').on(
       table.widgetKeyId,
       table.status,
-      table.createdAt,
+      table.source,
     ),
     noticeIdIdx: index('suggested_questions_notice_id_idx').on(table.noticeId),
     questionLength: check(
@@ -655,11 +666,9 @@ export const suggestedQuestions = pgTable(
 /**
  * 공지 처리 장부
  * - 주기 작업이 "이 공지는 이미 처리했다"를 기록하는 용도. 공지 내용은 저장하지 않는다.
- * - (widget_key_id, notice_id) 기본키로 INSERT ... ON CONFLICT DO NOTHING 선점을 만든다.
- *   같은 공지에 LLM이 두 번 돌지 않는다.
- * - MAX(notice_id)가 "어디까지 봤나" 커서 역할도 한다. 지글 검색은 최신순이 아니라
- *   오래된 공지도 섞여 오므로 커서 없이는 과거 공지를 계속 다시 집는다.
+ * - 질문 생성이 끝난 공지만 기록한다. 예외로 끊긴 공지는 기록하지 않아 다음 주기에 다시 집는다.
  * - 질문이 0개 나온 공지도 행이 남아 다시 처리하지 않는다.
+ * - (widget_key_id, notice_id) 기본키 + ON CONFLICT DO NOTHING이라 배포 중 pod가 겹쳐도 깨지지 않는다.
  */
 export const noticeQuestionIngestions = pgTable(
   'notice_question_ingestions',

@@ -1,5 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, count, desc, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNull,
+  lte,
+  ne,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import {
   DB_CONNECTION,
   noticeQuestionIngestions,
@@ -12,10 +25,21 @@ import {
 } from '../db';
 import { normalizeQuestion } from '../unanswered-questions/question-normalizer';
 
-/** 위젯에 내보낼 수 있는 최소 필드. prompt는 일부러 들어 있지 않다. */
-export interface ApprovedQuestionRecord {
+/** 위젯에 내보내는 필드. 검수 정보(공지 제목·검수자 등)는 넣지 않는다. */
+export interface ActiveQuestionRecord {
   id: string;
   question: string;
+  /** 관리자 질문은 null일 수 있다. */
+  prompt: string | null;
+  source: SuggestedQuestionSource;
+}
+
+/** 첫 화면에 띄울 수 있는 기한인지. null은 무기한이다. 문서 기한(retrieval)과 같은 규칙. */
+function notExpired(now: Date): SQL {
+  return or(
+    isNull(suggestedQuestions.expiresAt),
+    gt(suggestedQuestions.expiresAt, now),
+  ) as SQL;
 }
 
 /** 관리자 화면용. 어느 위젯 키인지 이름까지 같이 보여준다. */
@@ -30,12 +54,13 @@ export interface AdminQuestionListQuery {
   size: number;
   status: SuggestedQuestionStatus | 'all';
   source: SuggestedQuestionSource | 'all';
+  expiry: 'all' | 'active' | 'expired';
 }
 
 export interface CreateSuggestedQuestionInput {
   widgetKeyId: string;
   question: string;
-  prompt: string;
+  prompt: string | null;
   source: SuggestedQuestionSource;
   status: SuggestedQuestionStatus;
   createdByIdpUuid: string | null;
@@ -43,14 +68,19 @@ export interface CreateSuggestedQuestionInput {
   reviewedAt: Date | null;
   noticeId?: number | null;
   noticeTitle?: string | null;
+  /** 승인 전 후보는 아직 기한이 없다(null). */
+  expiresAt?: Date | null;
 }
 
 export interface UpdateSuggestedQuestionInput {
   question?: string;
-  prompt?: string;
+  /** null은 prompt를 지우는 것이다. */
+  prompt?: string | null;
   status?: SuggestedQuestionStatus;
   reviewedByIdpUuid?: string;
   reviewedAt?: Date;
+  /** null은 무기한으로 바꾸는 것이다. 빠지면 그대로 둔다. */
+  expiresAt?: Date | null;
 }
 
 @Injectable()
@@ -58,47 +88,38 @@ export class SuggestedQuestionsRepository {
   constructor(@Inject(DB_CONNECTION) private readonly db: Database) {}
 
   /**
-   * 위젯 첫 화면에 노출할 질문 목록.
+   * 위젯 첫 화면에 띄울 질문을 한 출처에서 무작위로 고른다.
    *
-   * - 승인된(APPROVED) 질문만 내보낸다. 검수 전(PENDING)이나 거절된 질문은 보이지 않는다.
+   * - 승인(APPROVED)됐고 기한 전(또는 무기한)인 질문만. 검수 전·거절·기한 지난 질문은 보이지 않는다.
    * - 위젯 키로 범위를 좁혀 다른 위젯의 질문이 섞이지 않게 한다.
-   * - prompt를 select 하지 않는다. 조회 단계에서 빼야 위에서 실수로 흘려보낼 수 없다.
-   * - 최신 공지에서 나온 질문이 위로 오도록 created_at 내림차순.
-   *   한 번의 주기 작업이 같은 시각에 여러 건을 넣으므로 id를 보조 정렬 키로 둬
-   *   호출할 때마다 순서가 흔들리지 않게 한다.
+   * - 필요한 열만 select 한다. 검수 정보가 위젯 응답으로 흘러가지 않게 조회 단계에서 막는다.
+   * - 우선순위 없이 ORDER BY random()이다. 새로고침할 때마다 다른 질문이 뜨게 하려는 것.
+   *   위젯 키 하나에 활성 질문은 많아야 수십 건이라 random() 정렬 비용은 문제가 안 된다.
    */
-  async listApproved(
+  async pickActive(
     widgetKeyId: string,
+    source: SuggestedQuestionSource,
     limit: number,
-  ): Promise<ApprovedQuestionRecord[]> {
-    return (
-      this.db
-        .select({
-          id: suggestedQuestions.id,
-          question: suggestedQuestions.question,
-        })
-        .from(suggestedQuestions)
-        .where(
-          and(
-            eq(suggestedQuestions.widgetKeyId, widgetKeyId),
-            eq(suggestedQuestions.status, 'APPROVED'),
-          ),
-        )
-        // 최신 공지의 질문을 먼저 보여준다.
-        //
-        // created_at으로 정렬하면 안 된다. 백필은 최신 공지부터 처리하므로 오래된 공지의
-        // 질문일수록 created_at이 늦고, 결국 가장 오래된 공지가 첫 화면에 뜬다.
-        // 한 번에 만들어진 질문들은 created_at이 몇 초 안에 몰려 있어 순서가 의미도 없다.
-        //
-        // notice_id가 없는 질문(관리자가 직접 등록한 것)은 Postgres의 DESC 기본값인
-        // NULLS FIRST로 맨 앞에 온다. 사람이 일부러 넣은 질문이라 그게 맞다.
-        .orderBy(
-          desc(suggestedQuestions.noticeId),
-          desc(suggestedQuestions.createdAt),
-          desc(suggestedQuestions.id),
-        )
-        .limit(limit)
-    );
+    now: Date = new Date(),
+  ): Promise<ActiveQuestionRecord[]> {
+    return this.db
+      .select({
+        id: suggestedQuestions.id,
+        question: suggestedQuestions.question,
+        prompt: suggestedQuestions.prompt,
+        source: suggestedQuestions.source,
+      })
+      .from(suggestedQuestions)
+      .where(
+        and(
+          eq(suggestedQuestions.widgetKeyId, widgetKeyId),
+          eq(suggestedQuestions.status, 'APPROVED'),
+          eq(suggestedQuestions.source, source),
+          notExpired(now),
+        ),
+      )
+      .orderBy(sql`random()`)
+      .limit(limit);
   }
 
   /**
@@ -123,6 +144,7 @@ export class SuggestedQuestionsRepository {
         reviewedAt: input.reviewedAt,
         noticeId: input.noticeId ?? null,
         noticeTitle: input.noticeTitle ?? null,
+        expiresAt: input.expiresAt ?? null,
       })
       .onConflictDoNothing()
       .returning();
@@ -141,6 +163,12 @@ export class SuggestedQuestionsRepository {
     }
     if (options.source !== 'all') {
       filters.push(eq(suggestedQuestions.source, options.source));
+    }
+    const now = new Date();
+    if (options.expiry === 'active') {
+      filters.push(notExpired(now));
+    } else if (options.expiry === 'expired') {
+      filters.push(lte(suggestedQuestions.expiresAt, now));
     }
     const where = filters.length > 0 ? and(...filters) : undefined;
 

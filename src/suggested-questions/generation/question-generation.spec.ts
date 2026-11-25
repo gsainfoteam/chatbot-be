@@ -1,14 +1,24 @@
 import { describe, expect, it } from '@jest/globals';
 import { SUGGESTED_QUESTION_MAX_LENGTH } from '../dto/suggested-question.dto';
-import { parseGeneratedQuestions } from './question-generation.service';
+import {
+  MAX_KEYWORDS,
+  MAX_KEYWORD_CHARS,
+  keywordsFoundInBody,
+  parseGeneratedQuestions,
+} from './question-generation.service';
+import { buildAnswerPrompt } from './question-generation.prompt';
 
 const ONE =
-  '[{"question":"국가장학금 언제까지 신청해요?","prompt":"기간을 안내한다"}]';
+  '[{"question":"국가장학금 언제까지 신청해요?","need":"신청 마감일","keywords":["국가장학금"]}]';
 
 describe('parseGeneratedQuestions', () => {
   it('reads a plain JSON array', () => {
     expect(parseGeneratedQuestions(ONE)).toEqual([
-      { question: '국가장학금 언제까지 신청해요?', prompt: '기간을 안내한다' },
+      {
+        question: '국가장학금 언제까지 신청해요?',
+        need: '신청 마감일',
+        keywords: ['국가장학금'],
+      },
     ]);
   });
 
@@ -36,42 +46,56 @@ describe('parseGeneratedQuestions', () => {
   });
 
   it('ignores a JSON value that is not an array', () => {
-    expect(parseGeneratedQuestions('{"question":"x","prompt":"y"}')).toEqual(
-      [],
-    );
+    expect(parseGeneratedQuestions('{"question":"x","need":"y"}')).toEqual([]);
   });
 
-  it('drops items with a missing or non-string field', () => {
+  it('drops items with a missing or non-string question or need', () => {
     const raw = JSON.stringify([
-      { question: '정상 질문이에요?', prompt: '지침' },
-      { question: '프롬프트 없음' },
-      { prompt: '질문 없음' },
-      { question: 123, prompt: '지침' },
+      { question: '정상 질문이에요?', need: '마감일', keywords: ['장학'] },
+      { question: 'need 없음', keywords: ['장학'] },
+      { need: '질문 없음' },
+      { question: 123, need: '마감일' },
       null,
       '문자열 항목',
     ]);
 
     expect(parseGeneratedQuestions(raw)).toEqual([
-      { question: '정상 질문이에요?', prompt: '지침' },
+      { question: '정상 질문이에요?', need: '마감일', keywords: ['장학'] },
+    ]);
+  });
+
+  it('keeps an item without keywords so the body check can drop it later', () => {
+    const raw = JSON.stringify([
+      { question: '질문이에요?', need: '마감일' },
+      { question: '다른 질문이에요?', need: '장소', keywords: 'C동' },
+    ]);
+
+    expect(parseGeneratedQuestions(raw).map((q) => q.keywords)).toEqual([
+      [],
+      [],
     ]);
   });
 
   it('drops blank and whitespace-only fields', () => {
     const raw = JSON.stringify([
-      { question: '   ', prompt: '지침' },
-      { question: '질문', prompt: '   ' },
+      { question: '   ', need: '마감일' },
+      { question: '질문', need: '   ' },
     ]);
 
     expect(parseGeneratedQuestions(raw)).toEqual([]);
   });
 
-  it('trims surrounding whitespace', () => {
+  it('trims surrounding whitespace and non-string keywords', () => {
     const raw = JSON.stringify([
-      { question: '  질문이에요?  ', prompt: ' 지침 ' },
+      {
+        question: '  질문이에요?  ',
+        need: ' 마감일 ',
+        keywords: [' 지네마 ', '', 3, null],
+      },
     ]);
 
     expect(parseGeneratedQuestions(raw)).toEqual([
-      { question: '질문이에요?', prompt: '지침' },
+      { question: '질문이에요?', need: '마감일', keywords: ['지네마'] },
     ]);
   });
 
@@ -80,9 +104,9 @@ describe('parseGeneratedQuestions', () => {
     const raw = JSON.stringify([
       {
         question: '가'.repeat(SUGGESTED_QUESTION_MAX_LENGTH + 1),
-        prompt: '지침',
+        need: '마감일',
       },
-      { question: '가'.repeat(SUGGESTED_QUESTION_MAX_LENGTH), prompt: '지침' },
+      { question: '가'.repeat(SUGGESTED_QUESTION_MAX_LENGTH), need: '마감일' },
     ]);
 
     const parsed = parseGeneratedQuestions(raw);
@@ -93,12 +117,85 @@ describe('parseGeneratedQuestions', () => {
 
   it('keeps only the first of two questions that differ by punctuation', () => {
     const raw = JSON.stringify([
-      { question: '장학금 언제 신청해요?', prompt: '첫 번째' },
-      { question: '장학금 언제 신청해요', prompt: '두 번째' },
+      { question: '장학금 언제 신청해요?', need: '첫 번째' },
+      { question: '장학금 언제 신청해요', need: '두 번째' },
     ]);
 
-    expect(parseGeneratedQuestions(raw)).toEqual([
-      { question: '장학금 언제 신청해요?', prompt: '첫 번째' },
+    expect(parseGeneratedQuestions(raw).map((q) => q.need)).toEqual([
+      '첫 번째',
     ]);
+  });
+});
+
+describe('keywordsFoundInBody', () => {
+  const BODY =
+    '2026 겨울행사 지네마를 진행합니다. 일시: 11월 27일 오후 8시, 장소: 대학 C동 104호. HRL 세미나도 함께';
+
+  it('keeps only keywords that appear in the body verbatim', () => {
+    // 지글 검색은 본문 부분일치라 띄어쓰기 하나만 달라도 걸리지 않는다.
+    expect(
+      keywordsFoundInBody(
+        ['지네마', '겨울 행사', '겨울행사', '크리스마스'],
+        BODY,
+      ),
+    ).toEqual(['지네마', '겨울행사']);
+  });
+
+  it('matches case-insensitively like the Ziggle search', () => {
+    expect(keywordsFoundInBody(['hrl', 'c동'], BODY)).toEqual(['hrl', 'c동']);
+  });
+
+  it('drops duplicates and caps the count', () => {
+    expect(
+      keywordsFoundInBody(
+        ['지네마', '지네마', '겨울행사', 'C동', '104호'],
+        BODY,
+      ),
+    ).toHaveLength(MAX_KEYWORDS);
+    expect(keywordsFoundInBody(['지네마', '지네마'], BODY)).toEqual(['지네마']);
+  });
+
+  it('drops a keyword longer than the search tool accepts', () => {
+    const long = BODY.slice(0, MAX_KEYWORD_CHARS + 1);
+
+    expect(keywordsFoundInBody([long], BODY)).toEqual([]);
+  });
+
+  it('returns nothing when no keyword is in the body', () => {
+    expect(keywordsFoundInBody(['장학금'], BODY)).toEqual([]);
+  });
+});
+
+describe('buildAnswerPrompt', () => {
+  const params = {
+    noticeId: 200986,
+    noticeTitle: '[하우스연합회] 2026 겨울행사',
+    keywords: ['지네마', '겨울행사'],
+    need: '지네마 상영 일시와 상영관 위치',
+    question: '2026 겨울행사 지네마는 언제 어디서 열리나요?',
+  };
+
+  it('reads like a student question carrying the notice and its words', () => {
+    expect(buildAnswerPrompt(params)).toBe(
+      [
+        "GIST 지글 공지 「[하우스연합회] 2026 겨울행사」(공지 번호 200986)에 대해 궁금해요. 공지 본문에 '지네마', '겨울행사'라는 말이 나와요.",
+        '2026 겨울행사 지네마는 언제 어디서 열리나요? (알고 싶은 것: 지네마 상영 일시와 상영관 위치)',
+      ].join('\n'),
+    );
+  });
+
+  it('does not instruct the agent to call tools', () => {
+    // 범위 판정이 도구를 시키는 문장을 조작 시도로 보고 거절한다.
+    const prompt = buildAnswerPrompt(params);
+
+    expect(prompt).not.toMatch(/search_notices|get_notice|검색하면|읽고 답해/);
+  });
+
+  it('leaves out the title when the notice has none', () => {
+    const prompt = buildAnswerPrompt({ ...params, noticeTitle: '  ' });
+
+    expect(prompt.split('\n')[0]).toBe(
+      "GIST 지글 공지(공지 번호 200986)에 대해 궁금해요. 공지 본문에 '지네마', '겨울행사'라는 말이 나와요.",
+    );
   });
 });

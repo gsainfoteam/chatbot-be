@@ -18,6 +18,7 @@ import { SUGGESTED_QUESTION_MAX_LENGTH } from '../dto/suggested-question.dto';
 import { normalizeQuestion } from '../../unanswered-questions/question-normalizer';
 import {
   QUESTION_GENERATION_SYSTEM_PROMPT,
+  buildAnswerPrompt,
   getQuestionGenerationUserPrompt,
 } from './question-generation.prompt';
 
@@ -38,9 +39,19 @@ export const MAX_BODY_CHARS = 6000;
  */
 export const MODEL_TIER: LlmModelType = 'normal';
 
+/**
+ * 검색어 개수와 길이 상한. 에이전트의 search_notices가 키워드 하나를 20자까지만 받는다.
+ */
+export const MAX_KEYWORDS = 3;
+export const MAX_KEYWORD_CHARS = 20;
+
+/** LLM이 돌려준 한 건. 답변용 prompt는 이걸로 코드가 조립한다. */
 export interface GeneratedQuestion {
   question: string;
-  prompt: string;
+  /** 답하려면 공지에서 확인해야 할 것 */
+  need: string;
+  /** 모델이 고른 검색어. 본문에 실제로 있는지는 아직 확인 전이다. */
+  keywords: string[];
 }
 
 export interface NoticeGenerationResult {
@@ -111,19 +122,36 @@ export class QuestionGenerationService {
       return { noticeId: notice.id, saved: 0, skipped: false };
     }
 
+    const noticeTitle = maskPersonalInfo(notice.title).slice(0, 500);
     let saved = 0;
     for (const candidate of candidates) {
+      // 본문에 없는 검색어로는 이 공지가 검색되지 않는다. 하나도 남지 않으면 챗봇이
+      // 공지를 찾지 못하는 질문이라 버린다.
+      const keywords = keywordsFoundInBody(candidate.keywords, body);
+      if (keywords.length === 0) {
+        this.logger.debug(
+          `id=${notice.id} 본문에 있는 검색어가 없어 버립니다: ${candidate.question}`,
+        );
+        continue;
+      }
+
       const row = await this.repo.create({
         widgetKeyId,
         question: candidate.question,
-        prompt: candidate.prompt,
+        prompt: buildAnswerPrompt({
+          noticeId: notice.id,
+          noticeTitle,
+          keywords,
+          need: candidate.need,
+          question: candidate.question,
+        }),
         source: 'AI',
         status: 'PENDING',
         createdByIdpUuid: null,
         reviewedByIdpUuid: null,
         reviewedAt: null,
         noticeId: notice.id,
-        noticeTitle: maskPersonalInfo(notice.title).slice(0, 500),
+        noticeTitle,
       });
       // null이면 같은 질문이 이미 있다는 뜻. 공지가 겹치면 흔한 일이라 넘어간다.
       if (row) saved += 1;
@@ -135,15 +163,20 @@ export class QuestionGenerationService {
     return { noticeId: notice.id, saved, skipped: false };
   }
 
-  /** 요약이 있으면 그걸 쓰고, 없으면 본문을 받아 평문으로 바꾼다. */
+  /**
+   * 공지 본문을 평문으로 읽는다.
+   *
+   * 요약이 있어도 본문을 읽는다. 검색어는 지글 검색이 보는 본문(plainBody)에 있어야
+   * 해서, 요약에서 고른 단어는 검색에 안 걸릴 수 있다. 새 공지는 하루 몇 건이라
+   * 공지당 MCP 호출 하나는 부담이 아니다.
+   *
+   * 평문 본문이 없으면(이미지만 있는 공지) 건너뛴다. 요약이 있어도 그렇다. 지글 검색은
+   * 본문만 보므로 이런 공지는 챗봇이 검색으로 찾을 수 없고, 질문을 만들어도 답하지 못한다.
+   */
   private async readBody(
     notice: ZiggleNoticeSummary,
     signal?: AbortSignal,
   ): Promise<string | null> {
-    if (notice.summary?.trim()) {
-      return maskPersonalInfo(notice.summary).slice(0, MAX_BODY_CHARS);
-    }
-
     const html = await this.ziggle.getNoticeBody(notice.id, signal);
     if (html == null) return null;
 
@@ -183,21 +216,53 @@ export function parseGeneratedQuestions(raw: string): GeneratedQuestion[] {
   const questions: GeneratedQuestion[] = [];
   for (const item of parsed) {
     if (!item || typeof item !== 'object') continue;
-    const { question, prompt } = item as Record<string, unknown>;
-    if (typeof question !== 'string' || typeof prompt !== 'string') continue;
+    const { question, need, keywords } = item as Record<string, unknown>;
+    if (typeof question !== 'string' || typeof need !== 'string') continue;
 
     const trimmedQuestion = question.trim();
-    const trimmedPrompt = prompt.trim();
-    if (!trimmedQuestion || !trimmedPrompt) continue;
+    const trimmedNeed = need.trim();
+    if (!trimmedQuestion || !trimmedNeed) continue;
     // DB의 길이 제약에 걸리면 삽입이 통째로 실패하므로 여기서 버린다.
     if (trimmedQuestion.length > SUGGESTED_QUESTION_MAX_LENGTH) continue;
 
     const key = normalizeQuestion(trimmedQuestion);
     if (!key || seen.has(key)) continue;
     seen.add(key);
-    questions.push({ question: trimmedQuestion, prompt: trimmedPrompt });
+    questions.push({
+      question: trimmedQuestion,
+      need: trimmedNeed,
+      keywords: Array.isArray(keywords)
+        ? keywords
+            .filter((k): k is string => typeof k === 'string')
+            .map((k) => k.trim())
+            .filter(Boolean)
+        : [],
+    });
   }
   return questions;
+}
+
+/**
+ * 모델이 고른 검색어 중 본문에 그대로 들어 있는 것만 남긴다.
+ *
+ * 지글 검색은 본문 부분일치(대소문자 무시)라 한 글자만 달라도 걸리지 않는다.
+ * 모델은 "겨울행사"를 "겨울 행사"로 옮기는 식으로 자주 바꿔 쓰므로 믿지 않고 확인한다.
+ */
+export function keywordsFoundInBody(
+  keywords: string[],
+  body: string,
+): string[] {
+  const haystack = body.toLowerCase();
+  const found: string[] = [];
+  for (const keyword of keywords) {
+    if (keyword.length > MAX_KEYWORD_CHARS) continue;
+    const needle = keyword.toLowerCase();
+    if (!haystack.includes(needle)) continue;
+    if (found.some((k) => k.toLowerCase() === needle)) continue;
+    found.push(keyword);
+    if (found.length === MAX_KEYWORDS) break;
+  }
+  return found;
 }
 
 /** 한국 시간 기준 오늘. 컨테이너가 UTC라 타임존을 명시한다. */

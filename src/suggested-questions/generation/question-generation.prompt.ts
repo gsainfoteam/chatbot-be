@@ -108,18 +108,69 @@ export const QUESTION_GENERATION_SYSTEM_PROMPT = `
 
 **판단이 애매하면 만들지 마세요.** 쓸 만한 질문 하나가 애매한 질문 세 개보다 낫습니다.
 
-## 프롬프트 규칙
+## 답변용 정보 (need, keywords)
 
-prompt는 그 질문에 답할 때 챗봇이 따를 지침입니다.
-- 공지의 핵심 사실(기간, 대상, 금액, 제출처 등)을 본문에 적힌 그대로 담습니다.
-- 공지 원문 링크를 안내하도록 적습니다.
-- 공지에 없는 내용은 모른다고 답하게 적습니다.
+학생이 버튼을 누르면 챗봇은 지글 공지를 **검색해서** 답을 찾습니다. 질문마다 챗봇이
+이 공지를 찾아 답할 수 있도록 두 가지를 같이 적습니다. 답 자체는 적지 않습니다.
+
+need: 이 질문에 답하려면 공지에서 무엇을 확인해야 하는지 한 줄로 적습니다.
+- 좋음: "지네마 상영 일시와 상영관 위치", "교내장학금 신청 마감일과 제출 방법"
+- 나쁨: "공지 내용", "일정" (무엇을 확인할지 알 수 없음)
+- 나쁨: "11월 27일 오후 8시, C동 104호" (답을 적었음. 답은 챗봇이 원문에서 찾습니다)
+
+keywords: 공지 검색에 쓸 단어 1~3개. 검색은 **본문에 그 글자가 그대로 있어야** 걸립니다.
+- 본문에 있는 글자를 한 글자도 바꾸지 말고 그대로 옮기세요. 띄어쓰기도 본문과 같게.
+- 1~2단어, 10자 안팎. 문장이나 조사가 붙은 표현은 안 됩니다.
+- 이 공지에만 나오는 이름을 고르세요. 행사명·사업명·단체명이 좋습니다.
+  "신청", "안내", "학생"처럼 어느 공지에나 있는 단어는 다른 공지가 먼저 걸립니다.
+- 좋음: ["지네마", "겨울행사"], ["HRL", "출판 세미나"]
+- 나쁨: ["겨울 행사"] (본문은 "겨울행사"), ["신청 기간"] (흔한 표현)
 
 ## 출력 형식
 
 JSON 배열만 출력합니다. 설명도, 코드블록 표시도 붙이지 마세요.
-[{"question": "...", "prompt": "..."}]
+[{"question": "...", "need": "...", "keywords": ["...", "..."]}]
 `.trim();
+
+export interface AnswerPromptParams {
+  noticeId: number;
+  /** 검색 결과에서 고를 수 있게 넣는다. 제목을 받지 못한 공지는 빈 문자열이다. */
+  noticeTitle: string;
+  /** 본문에 그대로 들어 있는 것을 확인한 검색어 */
+  keywords: string[];
+  need: string;
+  question: string;
+}
+
+/**
+ * 학생이 추천 질문을 눌렀을 때 질문 대신 챗봇에 들어갈 문장(suggested_questions.prompt).
+ *
+ * 답변 로직은 그대로 두고 이 문장으로 에이전트를 유도한다.
+ * - 에이전트는 search_notices로 본 공지만 열 수 있고, 지글 검색은 본문 부분일치다.
+ *   그래서 본문에 그대로 있는 단어(생성 단계에서 확인한 것)를 문장에 넣어, 에이전트가
+ *   그 단어로 검색하게 한다.
+ * - "GIST 지글 공지"로 시작해 범위 판정이 학교와 무관한 질문으로 보지 않게 한다.
+ *   동아리 공연명만 있는 질문은 범위 밖으로 거절된 적이 있다.
+ * - 도구 이름이나 "~로 검색해서 읽어라" 같은 지시는 쓰지 않는다. 범위 판정이 도구를
+ *   시키는 문장을 조작 시도로 보고 거절한다(실제로 26개 중 16개가 거절됐다).
+ *   학생이 맥락을 붙여 묻는 질문처럼 쓴다.
+ *
+ * LLM이 쓴 것은 need와 keywords뿐이고 공지 번호·제목은 코드가 넣는다. 번호를 모델에
+ * 맡기면 틀리게 옮길 수 있다.
+ */
+export function buildAnswerPrompt(params: AnswerPromptParams): string {
+  const { noticeId, noticeTitle, keywords, need, question } = params;
+  const title = noticeTitle.trim();
+  const notice = title
+    ? `GIST 지글 공지 「${title}」(공지 번호 ${noticeId})`
+    : `GIST 지글 공지(공지 번호 ${noticeId})`;
+  const words = keywords.map((k) => `'${k}'`).join(', ');
+
+  return [
+    `${notice}에 대해 궁금해요. 공지 본문에 ${words}라는 말이 나와요.`,
+    `${question} (알고 싶은 것: ${need})`,
+  ].join('\n');
+}
 
 export function getQuestionGenerationUserPrompt(
   params: QuestionGenerationPromptParams,
@@ -158,5 +209,6 @@ ${titleLine}
 ${noticeBody}
 
 질문에는 이 공지를 특정하는 이름을 반드시 넣으세요. 제목을 그대로 옮기지는 마세요.
+keywords는 위 본문에 있는 글자를 그대로 옮기세요.
 `.trim();
 }

@@ -6,6 +6,9 @@
 yarn.lock
 /build
 
+# Local experiment output
+/output
+
 # Logs
 logs
 *.log

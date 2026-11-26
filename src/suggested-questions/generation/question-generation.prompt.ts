@@ -4,7 +4,6 @@ export interface QuestionGenerationPromptParams {
   /** 검색으로 제목을 얻지 못한 공지가 있다. 그때는 빈 문자열이 온다. */
   noticeTitle: string;
   noticeBody: string;
-  noticeUrl: string;
   maxQuestions: number;
   /** 한국 시간 기준 오늘. 마감이 지난 공지를 거르는 데 쓴다. */
   today: string;
@@ -15,8 +14,8 @@ export const QUESTION_GENERATION_SYSTEM_PROMPT = `
 학교 공지를 읽고, 그 공지를 본 학생이 챗봇에 실제로 입력할 법한 질문을 만듭니다.
 
 만들어진 질문은 챗봇 첫 화면에 버튼으로 뜹니다. 학생은 **공지를 읽지 않은 상태에서
-그 버튼 문장만 보고** 자기가 궁금한 것인지 판단합니다. 누르면 그 문장이 그대로
-입력란에 들어갑니다.
+그 버튼 문장만 보고** 자기가 궁금한 것인지 판단합니다. 누르면 이 질문에 공지를
+찾을 검색어를 붙인 요청문이 챗봇에 보내집니다.
 
 ## 가장 중요한 규칙 — 질문이 혼자 서야 합니다
 
@@ -108,15 +107,10 @@ export const QUESTION_GENERATION_SYSTEM_PROMPT = `
 
 **판단이 애매하면 만들지 마세요.** 쓸 만한 질문 하나가 애매한 질문 세 개보다 낫습니다.
 
-## 답변용 정보 (need, keywords)
+## 답변용 정보 (keywords)
 
 학생이 버튼을 누르면 챗봇은 지글 공지를 **검색해서** 답을 찾습니다. 질문마다 챗봇이
-이 공지를 찾아 답할 수 있도록 두 가지를 같이 적습니다. 답 자체는 적지 않습니다.
-
-need: 이 질문에 답하려면 공지에서 무엇을 확인해야 하는지 한 줄로 적습니다.
-- 좋음: "지네마 상영 일시와 상영관 위치", "교내장학금 신청 마감일과 제출 방법"
-- 나쁨: "공지 내용", "일정" (무엇을 확인할지 알 수 없음)
-- 나쁨: "11월 27일 오후 8시, C동 104호" (답을 적었음. 답은 챗봇이 원문에서 찾습니다)
+이 공지를 찾을 수 있도록 검색어를 같이 적습니다. 답 자체는 적지 않습니다.
 
 keywords: 공지 검색에 쓸 단어 1~3개. 검색은 **본문에 그 글자가 그대로 있어야** 걸립니다.
 - 본문에 있는 글자를 한 글자도 바꾸지 말고 그대로 옮기세요. 띄어쓰기도 본문과 같게.
@@ -129,7 +123,7 @@ keywords: 공지 검색에 쓸 단어 1~3개. 검색은 **본문에 그 글자�
 ## 출력 형식
 
 JSON 배열만 출력합니다. 설명도, 코드블록 표시도 붙이지 마세요.
-[{"question": "...", "need": "...", "keywords": ["...", "..."]}]
+[{"question": "...", "keywords": ["...", "..."]}]
 `.trim();
 
 export interface AnswerPromptParams {
@@ -138,28 +132,27 @@ export interface AnswerPromptParams {
   noticeTitle: string;
   /** 본문에 그대로 들어 있는 것을 확인한 검색어 */
   keywords: string[];
-  need: string;
   question: string;
 }
 
 /**
- * 학생이 추천 질문을 눌렀을 때 질문 대신 챗봇에 들어갈 문장(suggested_questions.prompt).
+ * 학생이 추천 질문을 눌렀을 때 챗봇에 들어갈 문장(suggested_questions.prompt).
+ *
+ * 카드에 마우스를 올리면 이 문장이 보이고, 누르면 그대로 보내진다. 그래서 사용자가
+ * 챗봇에게 부탁하는 말투로, 질문을 먼저 쓴다.
  *
  * 답변 로직은 그대로 두고 이 문장으로 에이전트를 유도한다.
  * - 에이전트는 search_notices로 본 공지만 열 수 있고, 지글 검색은 본문 부분일치다.
- *   그래서 본문에 그대로 있는 단어(생성 단계에서 확인한 것)를 문장에 넣어, 에이전트가
- *   그 단어로 검색하게 한다.
- * - "GIST 지글 공지"로 시작해 범위 판정이 학교와 무관한 질문으로 보지 않게 한다.
+ *   그래서 본문에 그대로 있는 단어(생성 단계에서 확인한 것)를 키워드로 넣는다.
+ * - "GIST 지글 공지"를 넣어 범위 판정이 학교와 무관한 질문으로 보지 않게 한다.
  *   동아리 공연명만 있는 질문은 범위 밖으로 거절된 적이 있다.
  * - 도구 이름이나 "~로 검색해서 읽어라" 같은 지시는 쓰지 않는다. 범위 판정이 도구를
  *   시키는 문장을 조작 시도로 보고 거절한다(실제로 26개 중 16개가 거절됐다).
- *   학생이 맥락을 붙여 묻는 질문처럼 쓴다.
  *
- * LLM이 쓴 것은 need와 keywords뿐이고 공지 번호·제목은 코드가 넣는다. 번호를 모델에
- * 맡기면 틀리게 옮길 수 있다.
+ * 공지 번호·제목은 LLM이 아니라 코드가 넣는다. 번호를 모델에 맡기면 틀리게 옮길 수 있다.
  */
 export function buildAnswerPrompt(params: AnswerPromptParams): string {
-  const { noticeId, noticeTitle, keywords, need, question } = params;
+  const { noticeId, noticeTitle, keywords, question } = params;
   const title = noticeTitle.trim();
   const notice = title
     ? `GIST 지글 공지 「${title}」(공지 번호 ${noticeId})`
@@ -167,15 +160,16 @@ export function buildAnswerPrompt(params: AnswerPromptParams): string {
   const words = keywords.map((k) => `'${k}'`).join(', ');
 
   return [
-    `${notice}에 대해 궁금해요. 공지 본문에 ${words}라는 말이 나와요.`,
-    `${question} (알고 싶은 것: ${need})`,
+    question,
+    '',
+    `${notice}에서 ${words} 키워드를 기반으로 찾아주세요.`,
   ].join('\n');
 }
 
 export function getQuestionGenerationUserPrompt(
   params: QuestionGenerationPromptParams,
 ): string {
-  const { noticeTitle, noticeBody, noticeUrl, maxQuestions, today } = params;
+  const { noticeTitle, noticeBody, maxQuestions, today } = params;
   // 제목을 못 얻는 경우가 있다(검색 결과에 없는 오래된 공지). 그때는 본문에서
   // 이름을 찾게 하고, 본문에도 없으면 억지로 만들지 말고 빈 배열을 돌려주게 한다.
   // 본문 첫 줄은 대개 "안녕하세요 OOO입니다" 같은 인사말이라 제목 대신 쓰지 않는다.
@@ -203,7 +197,6 @@ export function getQuestionGenerationUserPrompt(
 신청 기간이나 행사 일시가 오늘보다 이미 지났으면 빈 배열 []을 돌려주세요.
 
 ${titleLine}
-원문 링크: ${noticeUrl}
 
 본문:
 ${noticeBody}

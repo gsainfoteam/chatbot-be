@@ -48,8 +48,6 @@ export const MAX_KEYWORD_CHARS = 20;
 /** LLM이 돌려준 한 건. 답변용 prompt는 이걸로 코드가 조립한다. */
 export interface GeneratedQuestion {
   question: string;
-  /** 답하려면 공지에서 확인해야 할 것 */
-  need: string;
   /** 모델이 고른 검색어. 본문에 실제로 있는지는 아직 확인 전이다. */
   keywords: string[];
 }
@@ -102,7 +100,6 @@ export class QuestionGenerationService {
             today: todayInSeoul(),
             noticeTitle: maskPersonalInfo(notice.title),
             noticeBody: body,
-            noticeUrl: this.ziggle.noticeUrl(notice.id),
             maxQuestions: QUESTIONS_PER_NOTICE,
           }),
         },
@@ -140,7 +137,6 @@ export class QuestionGenerationService {
           noticeId: notice.id,
           noticeTitle,
           keywords,
-          need: candidate.need,
           question: candidate.question,
         }),
         source: 'AI',
@@ -214,12 +210,11 @@ export function parseGeneratedQuestions(raw: string): GeneratedQuestion[] {
   const questions: GeneratedQuestion[] = [];
   for (const item of parsed) {
     if (!item || typeof item !== 'object') continue;
-    const { question, need, keywords } = item as Record<string, unknown>;
-    if (typeof question !== 'string' || typeof need !== 'string') continue;
+    const { question, keywords } = item as Record<string, unknown>;
+    if (typeof question !== 'string') continue;
 
     const trimmedQuestion = question.trim();
-    const trimmedNeed = need.trim();
-    if (!trimmedQuestion || !trimmedNeed) continue;
+    if (!trimmedQuestion) continue;
     // DB의 길이 제약에 걸리면 삽입이 통째로 실패하므로 여기서 버린다.
     if (trimmedQuestion.length > SUGGESTED_QUESTION_MAX_LENGTH) continue;
 
@@ -228,7 +223,6 @@ export function parseGeneratedQuestions(raw: string): GeneratedQuestion[] {
     seen.add(key);
     questions.push({
       question: trimmedQuestion,
-      need: trimmedNeed,
       keywords: Array.isArray(keywords)
         ? keywords
             .filter((k): k is string => typeof k === 'string')

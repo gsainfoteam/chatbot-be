@@ -13,7 +13,6 @@ import {
   uniqueIndex,
   check,
   vector,
-  primaryKey,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -606,17 +605,16 @@ export const unansweredQuestions = pgTable(
 
 /**
  * 추천 질문 테이블
- * - 위젯 첫 화면에 버튼으로 노출할 질문과, 그 질문에 매칭된 프롬프트를 저장
+ * - 첫 화면에 버튼으로 노출할 질문과, 그 질문에 매칭된 프롬프트를 저장
  * - source=AI는 주기 작업이 지글 공지에서 만든 후보, source=ADMIN은 관리자가 직접 등록
- * - 관리자가 검수해 APPROVED가 된 질문만 위젯에 노출된다
+ * - 관리자가 검수해 APPROVED가 된 질문만 노출된다
+ * - 위젯 키와 묶지 않는다. 추천 질문은 chatbot.gistory.me 한 곳에서만 쓰고, 위젯마다
+ *   질문을 따로 둘 계획이 없다. 어느 화면에 띄울지는 FE가 정한다.
  */
 export const suggestedQuestions = pgTable(
   'suggested_questions',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    widgetKeyId: uuid('widget_key_id')
-      .notNull()
-      .references(() => widgetKeys.id, { onDelete: 'cascade' }),
     /** 버튼에 보이는 제목. 누르면 그대로 채팅 입력란에 들어간다. */
     question: text('question').notNull(),
     /** 같은 질문의 중복 등록을 막기 위한 키. question-normalizer와 같은 규칙. */
@@ -646,12 +644,11 @@ export const suggestedQuestions = pgTable(
     updatedAt: timestamp('updated_at').notNull().defaultNow(),
   },
   (table) => ({
-    widgetKeyQuestionUnique: uniqueIndex(
-      'suggested_questions_widget_key_id_normalized_question_unique',
-    ).on(table.widgetKeyId, table.normalizedQuestion),
-    // 위젯 조회는 위젯 키·승인 상태·출처(관리자/AI)별로 나눠 뽑는다.
+    normalizedQuestionUnique: uniqueIndex(
+      'suggested_questions_normalized_question_unique',
+    ).on(table.normalizedQuestion),
+    // 첫 화면 조회는 승인 상태·출처(관리자/AI)별로 나눠 뽑는다.
     servingIdx: index('suggested_questions_serving_idx').on(
-      table.widgetKeyId,
       table.status,
       table.source,
     ),
@@ -668,24 +665,12 @@ export const suggestedQuestions = pgTable(
  * - 주기 작업이 "이 공지는 이미 처리했다"를 기록하는 용도. 공지 내용은 저장하지 않는다.
  * - 질문 생성이 끝난 공지만 기록한다. 예외로 끊긴 공지는 기록하지 않아 다음 주기에 다시 집는다.
  * - 질문이 0개 나온 공지도 행이 남아 다시 처리하지 않는다.
- * - (widget_key_id, notice_id) 기본키 + ON CONFLICT DO NOTHING이라 배포 중 pod가 겹쳐도 깨지지 않는다.
+ * - notice_id 기본키 + ON CONFLICT DO NOTHING이라 배포 중 pod가 겹쳐도 깨지지 않는다.
  */
-export const noticeQuestionIngestions = pgTable(
-  'notice_question_ingestions',
-  {
-    widgetKeyId: uuid('widget_key_id')
-      .notNull()
-      .references(() => widgetKeys.id, { onDelete: 'cascade' }),
-    noticeId: integer('notice_id').notNull(),
-    createdAt: timestamp('created_at').notNull().defaultNow(),
-  },
-  (table) => ({
-    pk: primaryKey({
-      name: 'notice_question_ingestions_pkey',
-      columns: [table.widgetKeyId, table.noticeId],
-    }),
-  }),
-);
+export const noticeQuestionIngestions = pgTable('notice_question_ingestions', {
+  noticeId: integer('notice_id').primaryKey(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
 
 // Relations
 export const organizationsRelations = relations(organizations, ({ many }) => ({
@@ -823,26 +808,6 @@ export const unansweredQuestionsRelations = relations(
     resolvedDocument: one(documents, {
       fields: [unansweredQuestions.resolvedDocumentId],
       references: [documents.id],
-    }),
-  }),
-);
-
-export const suggestedQuestionsRelations = relations(
-  suggestedQuestions,
-  ({ one }) => ({
-    widgetKey: one(widgetKeys, {
-      fields: [suggestedQuestions.widgetKeyId],
-      references: [widgetKeys.id],
-    }),
-  }),
-);
-
-export const noticeQuestionIngestionsRelations = relations(
-  noticeQuestionIngestions,
-  ({ one }) => ({
-    widgetKey: one(widgetKeys, {
-      fields: [noticeQuestionIngestions.widgetKeyId],
-      references: [widgetKeys.id],
     }),
   }),
 );

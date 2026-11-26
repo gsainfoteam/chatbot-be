@@ -17,14 +17,12 @@ import {
 
 const ADMIN = 'admin-1';
 const QUESTION_ID = '00000000-0000-0000-0000-0000000000a1';
-const KEY_ID = '00000000-0000-0000-0000-0000000000b1';
 const FUTURE = '2099-12-31T23:59:59.000Z';
 const PAST = '2020-01-01T00:00:00.000Z';
 
 function question(overrides: Partial<SuggestedQuestion> = {}) {
   return {
     id: QUESTION_ID,
-    widgetKeyId: KEY_ID,
     question: '국가장학금 언제까지 신청해요?',
     normalizedQuestion: '국가장학금 언제까지 신청해요',
     prompt: '답변 지침',
@@ -48,14 +46,10 @@ type RepoOverrides = Partial<{
 
 function build(overrides: RepoOverrides = {}) {
   const repo = {
-    findWidgetKeyName: jest.fn(async () => 'GIST 위젯'),
     create: jest.fn(async () =>
       question({ source: 'ADMIN', status: 'APPROVED' }),
     ),
-    findById: jest.fn(async () => ({
-      question: question(),
-      widgetKeyName: 'GIST 위젯',
-    })),
+    findById: jest.fn(async () => question()),
     existsSameQuestion: jest.fn(async () => false),
     update: jest.fn(async () => question()),
     ...overrides,
@@ -72,7 +66,6 @@ describe('SuggestedQuestionsAdminService', () => {
       const { service, repo } = build();
 
       await service.create(ADMIN, {
-        widgetKeyId: KEY_ID,
         question: '기숙사 언제 들어가요?',
         prompt: '입사 지침',
         expiresAt: FUTURE,
@@ -80,7 +73,6 @@ describe('SuggestedQuestionsAdminService', () => {
 
       expect(repo.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          widgetKeyId: KEY_ID,
           source: 'ADMIN',
           status: 'APPROVED',
           createdByIdpUuid: ADMIN,
@@ -94,7 +86,6 @@ describe('SuggestedQuestionsAdminService', () => {
       const { service, repo } = build();
 
       await service.create(ADMIN, {
-        widgetKeyId: KEY_ID,
         question: '학교 Wi-Fi는 어떻게 설정하나요?',
         prompt: '와이파이 지침',
         expiresAt: null,
@@ -110,7 +101,6 @@ describe('SuggestedQuestionsAdminService', () => {
       const { service, repo } = build();
 
       await service.create(ADMIN, {
-        widgetKeyId: KEY_ID,
         question: '학교 Wi-Fi는 어떻게 설정하나요?',
         expiresAt: null,
       });
@@ -134,7 +124,6 @@ describe('SuggestedQuestionsAdminService', () => {
 
       await expect(
         service.create(ADMIN, {
-          widgetKeyId: KEY_ID,
           question: '질문',
           prompt: '지침',
           expiresAt: PAST,
@@ -143,27 +132,11 @@ describe('SuggestedQuestionsAdminService', () => {
       expect(repo.create).not.toHaveBeenCalled();
     });
 
-    it('rejects a widget key that does not exist', async () => {
-      const { service } = build({
-        findWidgetKeyName: jest.fn(async () => null),
-      });
-
-      await expect(
-        service.create(ADMIN, {
-          widgetKeyId: KEY_ID,
-          question: '질문',
-          prompt: '지침',
-          expiresAt: null,
-        }),
-      ).rejects.toBeInstanceOf(NotFoundException);
-    });
-
     it('reports a duplicate question as a conflict', async () => {
       const { service } = build({ create: jest.fn(async () => null) });
 
       await expect(
         service.create(ADMIN, {
-          widgetKeyId: KEY_ID,
           question: '이미 있는 질문',
           prompt: '지침',
           expiresAt: null,
@@ -297,10 +270,9 @@ describe('SuggestedQuestionsAdminService', () => {
 
     it('leaves the notice link empty for an admin-authored question', async () => {
       const { service } = build({
-        findById: jest.fn(async () => ({
-          question: question({ noticeId: null, noticeTitle: null }),
-          widgetKeyName: 'GIST 위젯',
-        })),
+        findById: jest.fn(async () =>
+          question({ noticeId: null, noticeTitle: null }),
+        ),
       });
 
       const dto = await service.getDetail(QUESTION_ID);
@@ -310,13 +282,12 @@ describe('SuggestedQuestionsAdminService', () => {
 
     it('flags a question whose expiry has passed', async () => {
       const { service } = build({
-        findById: jest.fn(async () => ({
-          question: question({
+        findById: jest.fn(async () =>
+          question({
             status: 'APPROVED',
             expiresAt: new Date(PAST),
           }),
-          widgetKeyName: 'GIST 위젯',
-        })),
+        ),
       });
 
       const dto = await service.getDetail(QUESTION_ID);
@@ -347,8 +318,6 @@ describe('expiresAt validation', () => {
   }
 
   const create = {
-    // IsUUID는 버전 비트까지 보므로 위의 KEY_ID 대신 실제 v4 형식을 쓴다.
-    widgetKeyId: '1533ef9d-6554-46de-af6f-851c369958b3',
     question: '질문',
     prompt: '지침',
   };

@@ -12,8 +12,6 @@ import {
   RECENT_NOTICE_WINDOW,
 } from './notice-ingestion.service';
 
-const KEY = '00000000-0000-0000-0000-0000000000b1';
-
 function notice(
   id: number,
   summary: string | null = null,
@@ -31,8 +29,7 @@ function build(options: {
   ingested?: number[];
   generate?: (noticeId: number) => NoticeGenerationResult;
   generateThrows?: boolean;
-  widgetKeyIds?: string;
-  widgetKeyExists?: boolean;
+  enabled?: boolean;
 }) {
   const feed = {
     fetchRecent: jest.fn(async () => options.notices),
@@ -40,18 +37,15 @@ function build(options: {
 
   const ingested = options.ingested ?? [];
   const repo = {
-    findWidgetKeyName: jest.fn(async () =>
-      options.widgetKeyExists === false ? null : 'GIST 위젯',
-    ),
     ingestedNoticeIds: jest.fn(
-      async (_id: string, ids: number[]) =>
+      async (ids: number[]) =>
         new Set(ids.filter((id) => ingested.includes(id))),
     ),
     recordNotice: jest.fn(async () => undefined),
   } as unknown as SuggestedQuestionsRepository;
 
   const generator = {
-    generateForNotice: jest.fn(async (_key: string, n: ZiggleNoticeSummary) => {
+    generateForNotice: jest.fn(async (n: ZiggleNoticeSummary) => {
       if (options.generateThrows) throw new Error('LLM timeout');
       return (
         options.generate?.(n.id) ?? {
@@ -68,8 +62,7 @@ function build(options: {
     repo,
     generator,
     config({
-      SUGGESTED_QUESTIONS_ENABLED: true,
-      SUGGESTED_QUESTIONS_WIDGET_KEY_IDS: options.widgetKeyIds ?? KEY,
+      SUGGESTED_QUESTIONS_ENABLED: options.enabled ?? true,
     }),
   );
   return { service, repo, generator, feed };
@@ -83,16 +76,15 @@ describe('NoticeIngestionService', () => {
         ingested: [199290, 88],
       });
 
-      const [result] = await service.run();
+      const result = await service.run();
 
       expect(result.pending).toBe(1);
       expect(generator.generateForNotice).toHaveBeenCalledTimes(1);
       expect(generator.generateForNotice).toHaveBeenCalledWith(
-        KEY,
         expect.objectContaining({ id: 199293 }),
         undefined,
       );
-      expect(repo.recordNotice).toHaveBeenCalledWith(KEY, 199293);
+      expect(repo.recordNotice).toHaveBeenCalledWith(199293);
     });
 
     it('asks the feed for exactly the recent window', async () => {
@@ -120,23 +112,12 @@ describe('NoticeIngestionService', () => {
       const notices = [notice(5), notice(4), notice(3), notice(2)];
       const { service, repo } = build({ notices, ingested: [4, 2] });
 
-      const [result] = await service.run();
+      const result = await service.run();
 
       expect(
-        jest.mocked(repo.recordNotice).mock.calls.map((c) => c[1]),
+        jest.mocked(repo.recordNotice).mock.calls.map((c) => c[0]),
       ).toEqual([5, 3]);
       expect(result).toMatchObject({ pending: 2, processed: 2 });
-    });
-
-    it('skips widget keys that no longer exist', async () => {
-      const { service, repo, generator } = build({
-        notices: [notice(5)],
-        widgetKeyExists: false,
-      });
-
-      await expect(service.run()).resolves.toEqual([]);
-      expect(generator.generateForNotice).not.toHaveBeenCalled();
-      expect(repo.recordNotice).not.toHaveBeenCalled();
     });
   });
 
@@ -148,7 +129,7 @@ describe('NoticeIngestionService', () => {
         generateThrows: true,
       });
 
-      const [result] = await service.run();
+      const result = await service.run();
 
       expect(repo.recordNotice).not.toHaveBeenCalled();
       expect(result).toMatchObject({ processed: 0, saved: 0, failed: 1 });
@@ -164,10 +145,10 @@ describe('NoticeIngestionService', () => {
         },
       });
 
-      const [result] = await service.run();
+      const result = await service.run();
 
       expect(
-        jest.mocked(repo.recordNotice).mock.calls.map((c) => c[1]),
+        jest.mocked(repo.recordNotice).mock.calls.map((c) => c[0]),
       ).toEqual([5, 3]);
       expect(result).toMatchObject({ processed: 2, saved: 2, failed: 1 });
     });
@@ -179,9 +160,9 @@ describe('NoticeIngestionService', () => {
         generate: (id) => ({ noticeId: id, saved: 0, skipped: true }),
       });
 
-      const [result] = await service.run();
+      const result = await service.run();
 
-      expect(repo.recordNotice).toHaveBeenCalledWith(KEY, 5);
+      expect(repo.recordNotice).toHaveBeenCalledWith(5);
       expect(result).toMatchObject({ processed: 1, saved: 0, skipped: 1 });
     });
 
@@ -191,36 +172,19 @@ describe('NoticeIngestionService', () => {
         generate: (id) => ({ noticeId: id, saved: 0, skipped: false }),
       });
 
-      const [result] = await service.run();
+      const result = await service.run();
 
-      expect(repo.recordNotice).toHaveBeenCalledWith(KEY, 5);
+      expect(repo.recordNotice).toHaveBeenCalledWith(5);
       expect(result).toMatchObject({ processed: 1, saved: 0, failed: 0 });
     });
   });
 
   describe('isEnabled', () => {
-    it('is off when no widget key is configured', () => {
-      const { service } = build({
-        notices: [],
-        widgetKeyIds: '',
-      });
-
-      expect(service.isEnabled()).toBe(false);
-    });
-
-    it('refuses the * wildcard', () => {
-      const { service } = build({
-        notices: [],
-        widgetKeyIds: '*',
-      });
-
-      expect(service.isEnabled()).toBe(false);
-    });
-
-    it('is on for an explicit widget key', () => {
-      const { service } = build({ notices: [] });
-
-      expect(service.isEnabled()).toBe(true);
+    it('follows SUGGESTED_QUESTIONS_ENABLED', () => {
+      expect(build({ notices: [] }).service.isEnabled()).toBe(true);
+      expect(build({ notices: [], enabled: false }).service.isEnabled()).toBe(
+        false,
+      );
     });
   });
 });

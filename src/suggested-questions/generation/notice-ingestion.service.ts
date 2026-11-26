@@ -21,7 +21,6 @@ import { QuestionGenerationService } from './question-generation.service';
 export const RECENT_NOTICE_WINDOW = 10;
 
 export interface NoticeIngestionResult {
-  widgetKeyId: string;
   /** 수집된 공지 중 장부에 없던 수 */
   pending: number;
   /** 처리를 끝내고 장부에 기록한 공지 수 */
@@ -44,7 +43,6 @@ export interface NoticeIngestionResult {
 @Injectable()
 export class NoticeIngestionService {
   private readonly logger = new Logger(NoticeIngestionService.name);
-  private readonly widgetKeyIds: string[];
   private readonly enabled: boolean;
 
   constructor(
@@ -55,58 +53,31 @@ export class NoticeIngestionService {
   ) {
     this.enabled =
       configService.get<boolean>('SUGGESTED_QUESTIONS_ENABLED') === true;
-
-    // `*`는 받지 않는다. 모든 위젯에 질문을 뿌리는 건 의도일 수 없다.
-    this.widgetKeyIds = (
-      configService.get<string>('SUGGESTED_QUESTIONS_WIDGET_KEY_IDS') ?? ''
-    )
-      .split(',')
-      .map((id) => id.trim())
-      .filter((id) => id.length > 0 && id !== '*');
   }
 
-  /** 켜져 있고 대상 위젯 키가 지정됐는지 */
+  /** 주기 작업이 켜져 있는지 */
   isEnabled(): boolean {
-    return this.enabled && this.widgetKeyIds.length > 0;
+    return this.enabled;
   }
 
-  /**
-   * 한 주기 분량의 수집.
-   * 공지 목록은 한 번만 받아 와서 모든 위젯 키가 나눠 쓴다. 장부는 위젯 키마다 따로다.
-   */
+  /** 한 주기 분량의 수집. 장부에 없는 공지만 질문을 만든다. */
   async run(
     signal?: AbortSignal,
     limit: number = RECENT_NOTICE_WINDOW,
-  ): Promise<NoticeIngestionResult[]> {
+  ): Promise<NoticeIngestionResult> {
     const notices = await this.feed.fetchRecent(limit, signal);
     this.logger.log(
       `Ziggle에서 공지 ${notices.length}건 수집 (최신 id=${notices[0]?.id ?? '-'})`,
     );
-
-    const results: NoticeIngestionResult[] = [];
-    for (const widgetKeyId of this.widgetKeyIds) {
-      signal?.throwIfAborted();
-
-      const widgetKeyName = await this.repo.findWidgetKeyName(widgetKeyId);
-      if (!widgetKeyName) {
-        this.logger.warn(
-          `설정에 있는 위젯 키를 찾을 수 없어 건너뜁니다: ${widgetKeyId}`,
-        );
-        continue;
-      }
-      results.push(await this.runForWidgetKey(widgetKeyId, notices, signal));
-    }
-    return results;
+    return this.process(notices, signal);
   }
 
-  private async runForWidgetKey(
-    widgetKeyId: string,
+  private async process(
     notices: ZiggleNoticeSummary[],
     signal?: AbortSignal,
   ): Promise<NoticeIngestionResult> {
     // 피드가 이미 최신순으로 limit건만 주므로 여기서 더 자르지 않는다.
     const ingested = await this.repo.ingestedNoticeIds(
-      widgetKeyId,
       notices.map((notice) => notice.id),
     );
     const pending = notices.filter((notice) => !ingested.has(notice.id));
@@ -120,11 +91,7 @@ export class NoticeIngestionService {
       signal?.throwIfAborted();
 
       try {
-        const result = await this.generator.generateForNotice(
-          widgetKeyId,
-          notice,
-          signal,
-        );
+        const result = await this.generator.generateForNotice(notice, signal);
         saved += result.saved;
         if (result.skipped) skipped += 1;
       } catch (error) {
@@ -133,25 +100,24 @@ export class NoticeIngestionService {
         // 다시 집힌다. 뒤 공지는 계속 처리한다.
         failed += 1;
         this.logger.warn(
-          `[${widgetKeyId}] id=${notice.id} 질문 생성 실패, 다음 주기에 재시도: ` +
+          `id=${notice.id} 질문 생성 실패, 다음 주기에 재시도: ` +
             (error instanceof Error ? error.message : String(error)),
         );
         continue;
       }
 
-      await this.repo.recordNotice(widgetKeyId, notice.id);
+      await this.repo.recordNotice(notice.id);
       processed += 1;
     }
 
     this.logger.log(
-      `[${widgetKeyId}] 장부에 없는 공지 ${pending.length}건 → ` +
+      `장부에 없는 공지 ${pending.length}건 → ` +
         `처리 ${processed}건, 질문 ${saved}건 저장` +
         (skipped > 0 ? `, 본문 없음 ${skipped}건` : '') +
         (failed > 0 ? `, 실패 ${failed}건` : ''),
     );
 
     return {
-      widgetKeyId,
       pending: pending.length,
       processed,
       saved,

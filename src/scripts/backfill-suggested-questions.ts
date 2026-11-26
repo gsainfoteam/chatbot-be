@@ -54,18 +54,6 @@ async function main(): Promise<void> {
 
   const config = new ConfigService(process.env);
 
-  const widgetKeyIds = (
-    config.get<string>('SUGGESTED_QUESTIONS_WIDGET_KEY_IDS') ?? ''
-  )
-    .split(',')
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0 && id !== '*');
-  if (widgetKeyIds.length === 0) {
-    throw new Error(
-      'SUGGESTED_QUESTIONS_WIDGET_KEY_IDS 가 비어 있습니다. 대상 위젯 키를 지정하세요',
-    );
-  }
-
   const db = createDatabaseConnection({
     host: config.getOrThrow<string>('DB_HOST'),
     port: Number(config.getOrThrow('DB_PORT')),
@@ -92,27 +80,18 @@ async function main(): Promise<void> {
       config,
     );
 
+    console.log(`공지 ${count}건을 대상으로 백필을 시작합니다`);
+    const result = await ingestion.run(abort.signal, count);
+
     console.log(
-      `공지 ${count}건을 대상으로 백필을 시작합니다 (위젯 키 ${widgetKeyIds.length}개)`,
+      `장부에 없던 공지 ${result.pending}건 → ` +
+        `처리 ${result.processed}건, 질문 ${result.saved}건 저장(PENDING)` +
+        (result.skipped > 0 ? `, 본문 없음 ${result.skipped}건` : '') +
+        (result.failed > 0 ? `, 실패 ${result.failed}건` : ''),
     );
-    const results = await ingestion.run(abort.signal, count);
-
-    if (results.length === 0) {
-      console.warn('처리된 위젯 키가 없습니다. 위젯 키 id를 확인하세요');
-    }
-    for (const result of results) {
-      console.log(
-        `[${result.widgetKeyId}] 장부에 없던 공지 ${result.pending}건 → ` +
-          `처리 ${result.processed}건, 질문 ${result.saved}건 저장(PENDING)` +
-          (result.skipped > 0 ? `, 본문 없음 ${result.skipped}건` : '') +
-          (result.failed > 0 ? `, 실패 ${result.failed}건` : ''),
-      );
-    }
-
-    const failed = results.reduce((sum, r) => sum + r.failed, 0);
-    if (failed > 0) {
+    if (result.failed > 0) {
       console.warn(
-        `${failed}건은 생성에 실패해 장부에 기록하지 않았습니다. 다시 돌리면 재시도합니다`,
+        `${result.failed}건은 생성에 실패해 장부에 기록하지 않았습니다. 다시 돌리면 재시도합니다`,
       );
     }
     console.log('백필 완료');

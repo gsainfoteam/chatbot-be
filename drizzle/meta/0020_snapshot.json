@@ -1,5 +1,5 @@
 {
-  "id": "4cfbc6a6-4b5c-4a90-ad01-ce5ba5f5d2a1",
+  "id": "26f82567-7707-460b-88ff-28f3131684f6",
   "prevId": "1dbd8853-8097-445a-a90a-6881024c1fc5",
   "version": "7",
   "dialect": "postgresql",
@@ -1035,16 +1035,10 @@
       "name": "notice_question_ingestions",
       "schema": "",
       "columns": {
-        "widget_key_id": {
-          "name": "widget_key_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
         "notice_id": {
           "name": "notice_id",
           "type": "integer",
-          "primaryKey": false,
+          "primaryKey": true,
           "notNull": true
         },
         "created_at": {
@@ -1056,30 +1050,8 @@
         }
       },
       "indexes": {},
-      "foreignKeys": {
-        "notice_question_ingestions_widget_key_id_widget_keys_id_fk": {
-          "name": "notice_question_ingestions_widget_key_id_widget_keys_id_fk",
-          "tableFrom": "notice_question_ingestions",
-          "tableTo": "widget_keys",
-          "columnsFrom": [
-            "widget_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "notice_question_ingestions_pkey": {
-          "name": "notice_question_ingestions_pkey",
-          "columns": [
-            "widget_key_id",
-            "notice_id"
-          ]
-        }
-      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
       "checkConstraints": {},
@@ -1510,12 +1482,6 @@
           "notNull": true,
           "default": "gen_random_uuid()"
         },
-        "widget_key_id": {
-          "name": "widget_key_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
         "question": {
           "name": "question",
           "type": "text",
@@ -1602,15 +1568,9 @@
         }
       },
       "indexes": {
-        "suggested_questions_widget_key_id_normalized_question_unique": {
-          "name": "suggested_questions_widget_key_id_normalized_question_unique",
+        "suggested_questions_normalized_question_unique": {
+          "name": "suggested_questions_normalized_question_unique",
           "columns": [
-            {
-              "expression": "widget_key_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
             {
               "expression": "normalized_question",
               "isExpression": false,
@@ -1626,12 +1586,6 @@
         "suggested_questions_serving_idx": {
           "name": "suggested_questions_serving_idx",
           "columns": [
-            {
-              "expression": "widget_key_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
             {
               "expression": "status",
               "isExpression": false,
@@ -1666,21 +1620,7 @@
           "with": {}
         }
       },
-      "foreignKeys": {
-        "suggested_questions_widget_key_id_widget_keys_id_fk": {
-          "name": "suggested_questions_widget_key_id_widget_keys_id_fk",
-          "tableFrom": "suggested_questions",
-          "tableTo": "widget_keys",
-          "columnsFrom": [
-            "widget_key_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
+      "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

@@ -51,11 +51,7 @@ export class SuggestedQuestionsAdminController {
   })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'SUPER_ADMIN 아님' })
-  @ApiResponse({ status: 404, description: '위젯 키 없음' })
-  @ApiResponse({
-    status: 409,
-    description: '같은 위젯 키에 같은 질문이 이미 존재',
-  })
+  @ApiResponse({ status: 409, description: '같은 질문이 이미 존재' })
   create(
     @CurrentAdmin() admin: AdminContext,
     @Body() body: CreateSuggestedQuestionDto,
@@ -73,7 +69,6 @@ export class SuggestedQuestionsAdminController {
   @ApiResponse({ status: 400, description: '잘못된 쿼리 파라미터' })
   @ApiResponse({ status: 401, description: '인증 실패' })
   @ApiResponse({ status: 403, description: 'SUPER_ADMIN 아님' })
-  @ApiResponse({ status: 404, description: '위젯 키 없음' })
   list(
     @Query() query: ListAdminSuggestedQuestionsQueryDto,
   ): Promise<AdminSuggestedQuestionsResponseDto> {
@@ -111,7 +106,7 @@ export class SuggestedQuestionsAdminController {
   @ApiResponse({ status: 404, description: '질문 없음' })
   @ApiResponse({
     status: 409,
-    description: '같은 위젯 키에 같은 질문이 이미 존재',
+    description: '같은 질문이 이미 존재',
   })
   update(
     @CurrentAdmin() admin: AdminContext,

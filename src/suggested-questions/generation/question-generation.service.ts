@@ -84,7 +84,6 @@ export class QuestionGenerationService {
    * 정상이므로 예외가 아니다.
    */
   async generateForNotice(
-    widgetKeyId: string,
     notice: ZiggleNoticeSummary,
     signal?: AbortSignal,
   ): Promise<NoticeGenerationResult> {
@@ -136,7 +135,6 @@ export class QuestionGenerationService {
       }
 
       const row = await this.repo.create({
-        widgetKeyId,
         question: candidate.question,
         prompt: buildAnswerPrompt({
           noticeId: notice.id,

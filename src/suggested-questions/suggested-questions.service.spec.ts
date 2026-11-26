@@ -7,8 +7,6 @@ import type {
 import { SuggestedQuestionsService } from './suggested-questions.service';
 import { SUGGESTED_QUESTIONS_PER_SOURCE } from './dto/suggested-question.dto';
 
-const WIDGET_KEY_ID = '00000000-0000-0000-0000-0000000000b1';
-
 function row(
   id: string,
   source: SuggestedQuestionSource,
@@ -21,32 +19,22 @@ function service(
   bySource: Record<SuggestedQuestionSource, ActiveQuestionRecord[]>,
 ) {
   const pickActive = jest.fn<SuggestedQuestionsRepository['pickActive']>(
-    async (_key, source) => bySource[source],
+    async (source) => bySource[source],
   );
   const repository = { pickActive } as unknown as SuggestedQuestionsRepository;
   return { service: new SuggestedQuestionsService(repository), pickActive };
 }
 
 describe('SuggestedQuestionsService', () => {
-  it('picks two from each source for the session widget key', async () => {
+  it('picks two from each source', async () => {
     const { service: subject, pickActive } = service({ ADMIN: [], AI: [] });
 
-    await subject.listForWidget(WIDGET_KEY_ID);
+    await subject.listForWidget();
 
     expect(SUGGESTED_QUESTIONS_PER_SOURCE).toBe(2);
     expect(pickActive).toHaveBeenCalledTimes(2);
-    expect(pickActive).toHaveBeenCalledWith(
-      WIDGET_KEY_ID,
-      'ADMIN',
-      2,
-      expect.any(Date),
-    );
-    expect(pickActive).toHaveBeenCalledWith(
-      WIDGET_KEY_ID,
-      'AI',
-      2,
-      expect.any(Date),
-    );
+    expect(pickActive).toHaveBeenCalledWith('ADMIN', 2, expect.any(Date));
+    expect(pickActive).toHaveBeenCalledWith('AI', 2, expect.any(Date));
   });
 
   it('puts admin questions first so the top row is admin-written', async () => {
@@ -55,7 +43,7 @@ describe('SuggestedQuestionsService', () => {
       ADMIN: [row('m1', 'ADMIN'), row('m2', 'ADMIN')],
     });
 
-    const result = await subject.listForWidget(WIDGET_KEY_ID);
+    const result = await subject.listForWidget();
 
     expect(result.map((q) => q.source)).toEqual(['ADMIN', 'ADMIN', 'AI', 'AI']);
   });
@@ -66,7 +54,7 @@ describe('SuggestedQuestionsService', () => {
       AI: [],
     });
 
-    const result = await subject.listForWidget(WIDGET_KEY_ID);
+    const result = await subject.listForWidget();
 
     expect(result).toHaveLength(2);
     expect(result.every((q) => q.source === 'ADMIN')).toBe(true);
@@ -81,7 +69,7 @@ describe('SuggestedQuestionsService', () => {
     } as ActiveQuestionRecord;
     const { service: subject } = service({ ADMIN: [extra], AI: [] });
 
-    const result = await subject.listForWidget(WIDGET_KEY_ID);
+    const result = await subject.listForWidget();
 
     expect(result).toEqual([
       {
@@ -102,6 +90,6 @@ describe('SuggestedQuestionsService', () => {
   it('returns an empty list when nothing is active', async () => {
     const { service: subject } = service({ ADMIN: [], AI: [] });
 
-    await expect(subject.listForWidget(WIDGET_KEY_ID)).resolves.toEqual([]);
+    await expect(subject.listForWidget()).resolves.toEqual([]);
   });
 });

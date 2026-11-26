@@ -17,7 +17,6 @@ import {
   DB_CONNECTION,
   noticeQuestionIngestions,
   suggestedQuestions,
-  widgetKeys,
   type Database,
   type SuggestedQuestion,
   type SuggestedQuestionSource,
@@ -25,7 +24,7 @@ import {
 } from '../db';
 import { normalizeQuestion } from '../unanswered-questions/question-normalizer';
 
-/** 위젯에 내보내는 필드. 검수 정보(공지 제목·검수자 등)는 넣지 않는다. */
+/** 첫 화면에 내보내는 필드. 검수 정보(공지 제목·검수자 등)는 넣지 않는다. */
 export interface ActiveQuestionRecord {
   id: string;
   question: string;
@@ -42,14 +41,7 @@ function notExpired(now: Date): SQL {
   ) as SQL;
 }
 
-/** 관리자 화면용. 어느 위젯 키인지 이름까지 같이 보여준다. */
-export interface AdminQuestionRecord {
-  question: SuggestedQuestion;
-  widgetKeyName: string;
-}
-
 export interface AdminQuestionListQuery {
-  widgetKeyId?: string;
   page: number;
   size: number;
   status: SuggestedQuestionStatus | 'all';
@@ -58,7 +50,6 @@ export interface AdminQuestionListQuery {
 }
 
 export interface CreateSuggestedQuestionInput {
-  widgetKeyId: string;
   question: string;
   prompt: string | null;
   source: SuggestedQuestionSource;
@@ -88,16 +79,14 @@ export class SuggestedQuestionsRepository {
   constructor(@Inject(DB_CONNECTION) private readonly db: Database) {}
 
   /**
-   * 위젯 첫 화면에 띄울 질문을 한 출처에서 무작위로 고른다.
+   * 첫 화면에 띄울 질문을 한 출처에서 무작위로 고른다.
    *
    * - 승인(APPROVED)됐고 기한 전(또는 무기한)인 질문만. 검수 전·거절·기한 지난 질문은 보이지 않는다.
-   * - 위젯 키로 범위를 좁혀 다른 위젯의 질문이 섞이지 않게 한다.
    * - 필요한 열만 select 한다. 검수 정보가 위젯 응답으로 흘러가지 않게 조회 단계에서 막는다.
    * - 우선순위 없이 ORDER BY random()이다. 새로고침할 때마다 다른 질문이 뜨게 하려는 것.
-   *   위젯 키 하나에 활성 질문은 많아야 수십 건이라 random() 정렬 비용은 문제가 안 된다.
+   *   활성 질문은 많아야 수십 건이라 random() 정렬 비용은 문제가 안 된다.
    */
   async pickActive(
-    widgetKeyId: string,
     source: SuggestedQuestionSource,
     limit: number,
     now: Date = new Date(),
@@ -112,7 +101,6 @@ export class SuggestedQuestionsRepository {
       .from(suggestedQuestions)
       .where(
         and(
-          eq(suggestedQuestions.widgetKeyId, widgetKeyId),
           eq(suggestedQuestions.status, 'APPROVED'),
           eq(suggestedQuestions.source, source),
           notExpired(now),
@@ -123,7 +111,7 @@ export class SuggestedQuestionsRepository {
   }
 
   /**
-   * 질문 등록. 같은 위젯 키에 같은 질문이 이미 있으면 null을 돌려준다.
+   * 질문 등록. 같은 질문이 이미 있으면 null을 돌려준다.
    * 유니크 위반을 예외로 받지 않고 onConflictDoNothing으로 처리해,
    * 드라이버별 오류 코드에 기대지 않는다.
    */
@@ -133,7 +121,6 @@ export class SuggestedQuestionsRepository {
     const [row] = await this.db
       .insert(suggestedQuestions)
       .values({
-        widgetKeyId: input.widgetKeyId,
         question: input.question,
         normalizedQuestion: normalizeQuestion(input.question),
         prompt: input.prompt,
@@ -153,11 +140,8 @@ export class SuggestedQuestionsRepository {
 
   async list(
     options: AdminQuestionListQuery,
-  ): Promise<{ rows: AdminQuestionRecord[]; filteredTotal: number }> {
+  ): Promise<{ rows: SuggestedQuestion[]; filteredTotal: number }> {
     const filters: SQL[] = [];
-    if (options.widgetKeyId) {
-      filters.push(eq(suggestedQuestions.widgetKeyId, options.widgetKeyId));
-    }
     if (options.status !== 'all') {
       filters.push(eq(suggestedQuestions.status, options.status));
     }
@@ -174,15 +158,8 @@ export class SuggestedQuestionsRepository {
 
     const [rows, [total]] = await Promise.all([
       this.db
-        .select({
-          question: suggestedQuestions,
-          widgetKeyName: widgetKeys.name,
-        })
+        .select()
         .from(suggestedQuestions)
-        .innerJoin(
-          widgetKeys,
-          eq(suggestedQuestions.widgetKeyId, widgetKeys.id),
-        )
         .where(where)
         .orderBy(
           desc(suggestedQuestions.createdAt),
@@ -196,37 +173,21 @@ export class SuggestedQuestionsRepository {
     return { rows, filteredTotal: total?.value ?? 0 };
   }
 
-  async findById(id: string): Promise<AdminQuestionRecord | null> {
+  async findById(id: string): Promise<SuggestedQuestion | null> {
     const [row] = await this.db
-      .select({
-        question: suggestedQuestions,
-        widgetKeyName: widgetKeys.name,
-      })
+      .select()
       .from(suggestedQuestions)
-      .innerJoin(widgetKeys, eq(suggestedQuestions.widgetKeyId, widgetKeys.id))
       .where(eq(suggestedQuestions.id, id))
       .limit(1);
     return row ?? null;
   }
 
-  /** 위젯 키 이름. 없는 키면 null */
-  async findWidgetKeyName(widgetKeyId: string): Promise<string | null> {
-    const [row] = await this.db
-      .select({ name: widgetKeys.name })
-      .from(widgetKeys)
-      .where(eq(widgetKeys.id, widgetKeyId))
-      .limit(1);
-    return row?.name ?? null;
-  }
-
-  /** 같은 위젯 키에 같은 질문이 이미 있는지. excludeId는 자기 자신을 제외할 때 쓴다. */
+  /** 같은 질문이 이미 있는지. excludeId는 자기 자신을 제외할 때 쓴다. */
   async existsSameQuestion(
-    widgetKeyId: string,
     question: string,
     excludeId?: string,
   ): Promise<boolean> {
     const filters: SQL[] = [
-      eq(suggestedQuestions.widgetKeyId, widgetKeyId),
       eq(suggestedQuestions.normalizedQuestion, normalizeQuestion(question)),
     ];
     if (excludeId) filters.push(ne(suggestedQuestions.id, excludeId));
@@ -264,26 +225,17 @@ export class SuggestedQuestionsRepository {
   // ------------------------------------------------- 공지 처리 장부
 
   /**
-   * 이 위젯 키로 이미 처리한 공지 id. 주어진 후보 중에서만 찾는다.
+   * 이미 처리한 공지 id. 주어진 후보 중에서만 찾는다.
    *
-   * 커서(MAX(notice_id))는 쓰지 않는다. Ziggle 검색은 최신순이 아니라 오래된 공지도
-   * 섞여 오기 때문에, 커서 방식이면 한 주기 상한에 걸려 남은 공지가 커서에 추월당해
-   * 영영 집히지 않았다. 후보를 장부와 직접 맞춰 보면 그 문제가 생기지 않는다.
+   * 커서(MAX(notice_id))는 쓰지 않는다. 한 주기 상한에 걸려 남은 공지가 커서에 추월당해
+   * 영영 집히지 않는 문제가 있었다. 후보를 장부와 직접 맞춰 보면 그 문제가 생기지 않는다.
    */
-  async ingestedNoticeIds(
-    widgetKeyId: string,
-    noticeIds: number[],
-  ): Promise<Set<number>> {
+  async ingestedNoticeIds(noticeIds: number[]): Promise<Set<number>> {
     if (noticeIds.length === 0) return new Set();
     const rows = await this.db
       .select({ noticeId: noticeQuestionIngestions.noticeId })
       .from(noticeQuestionIngestions)
-      .where(
-        and(
-          eq(noticeQuestionIngestions.widgetKeyId, widgetKeyId),
-          inArray(noticeQuestionIngestions.noticeId, noticeIds),
-        ),
-      );
+      .where(inArray(noticeQuestionIngestions.noticeId, noticeIds));
     return new Set(rows.map((row) => row.noticeId));
   }
 
@@ -298,10 +250,10 @@ export class SuggestedQuestionsRepository {
    * 배포가 겹쳐 pod 두 대가 같은 공지를 동시에 처리하면 LLM이 두 번 돌 수 있다.
    * 기본키 충돌을 무시하므로 장부는 깨지지 않고, 중복 질문은 유니크 인덱스가 막는다.
    */
-  async recordNotice(widgetKeyId: string, noticeId: number): Promise<void> {
+  async recordNotice(noticeId: number): Promise<void> {
     await this.db
       .insert(noticeQuestionIngestions)
-      .values({ widgetKeyId, noticeId })
+      .values({ noticeId })
       .onConflictDoNothing();
   }
 }

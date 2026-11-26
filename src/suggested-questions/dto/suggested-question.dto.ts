@@ -8,7 +8,6 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
-  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -104,10 +103,6 @@ export class SuggestedQuestionDto {
 // ---------------------------------------------------------------- 관리자
 
 export class CreateSuggestedQuestionDto {
-  @ApiProperty({ description: '질문을 노출할 위젯 키 ID', format: 'uuid' })
-  @IsUUID()
-  widgetKeyId: string;
-
   @ApiProperty({
     description: '버튼에 표시할 질문',
     maxLength: SUGGESTED_QUESTION_MAX_LENGTH,
@@ -221,26 +216,12 @@ export class ListAdminSuggestedQuestionsQueryDto {
   @Transform(trimToDefault('all'))
   @IsIn(EXPIRY_FILTERS)
   expiry: SuggestedQuestionExpiryFilter = 'all';
-
-  @ApiPropertyOptional({
-    description: '특정 위젯 키로 제한 (접근 가능한 키만)',
-    format: 'uuid',
-  })
-  @IsOptional()
-  @IsUUID()
-  widgetKeyId?: string;
 }
 
 /** 관리자 화면용. 검수해야 하므로 prompt와 출처 공지까지 모두 내보낸다. */
 export class AdminSuggestedQuestionDto {
   @ApiProperty({ format: 'uuid' })
   id: string;
-
-  @ApiProperty({ format: 'uuid' })
-  widgetKeyId: string;
-
-  @ApiProperty()
-  widgetKeyName: string;
 
   @ApiProperty({ maxLength: SUGGESTED_QUESTION_MAX_LENGTH })
   question: string;

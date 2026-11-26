@@ -7,9 +7,9 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   SuggestedQuestionsRepository,
-  type AdminQuestionRecord,
   type UpdateSuggestedQuestionInput,
 } from './suggested-questions.repository';
+import type { SuggestedQuestion } from '../db';
 import {
   AdminSuggestedQuestionDto,
   AdminSuggestedQuestionsResponseDto,
@@ -41,9 +41,8 @@ export function parseExpiresAt(raw: string | null): Date | null {
 /**
  * 추천 질문 관리자 API.
  *
- * 호출자는 컨트롤러의 SuperAdminGuard를 통과한 SUPER_ADMIN뿐이라 위젯 키 범위를 따로
- * 좁히지 않는다. 위젯 키 발급은 서비스가 챗봇을 자기 페이지에 붙이기 위한 것이고,
- * 질문과 프롬프트는 챗봇이 학생에게 무엇을 말할지 정한다. 같은 권한으로 묶지 않는다.
+ * 호출자는 컨트롤러의 SuperAdminGuard를 통과한 SUPER_ADMIN뿐이다. 질문과 프롬프트는
+ * 챗봇이 학생에게 무엇을 말할지 정하는 것이라 위젯 키 소유자 권한과 묶지 않는다.
  */
 @Injectable()
 export class SuggestedQuestionsAdminService {
@@ -64,11 +63,9 @@ export class SuggestedQuestionsAdminService {
     dto: CreateSuggestedQuestionDto,
   ): Promise<AdminSuggestedQuestionDto> {
     const expiresAt = parseExpiresAt(dto.expiresAt);
-    const widgetKeyName = await this.requireWidgetKey(dto.widgetKeyId);
 
     const now = new Date();
     const row = await this.repo.create({
-      widgetKeyId: dto.widgetKeyId,
       question: dto.question,
       // 관리자 질문은 대개 학교 문서에 있는 내용이라 질문을 그대로 보내면 된다.
       prompt: dto.prompt ?? null,
@@ -83,21 +80,16 @@ export class SuggestedQuestionsAdminService {
     });
     if (!row) {
       throw new ConflictException(
-        'A suggested question with the same text already exists for this widget key',
+        'A suggested question with the same text already exists',
       );
     }
-    return this.toDto({ question: row, widgetKeyName });
+    return this.toDto(row);
   }
 
   async list(
     query: ListAdminSuggestedQuestionsQueryDto,
   ): Promise<AdminSuggestedQuestionsResponseDto> {
-    if (query.widgetKeyId) {
-      await this.requireWidgetKey(query.widgetKeyId);
-    }
-
     const { rows, filteredTotal } = await this.repo.list({
-      widgetKeyId: query.widgetKeyId,
       page: query.page,
       size: query.size,
       status: query.status,
@@ -149,18 +141,14 @@ export class SuggestedQuestionsAdminService {
     const expiresAt =
       dto.expiresAt === undefined ? undefined : parseExpiresAt(dto.expiresAt);
 
-    const record = await this.requireQuestion(id);
+    await this.requireQuestion(id);
 
     if (
       dto.question !== undefined &&
-      (await this.repo.existsSameQuestion(
-        record.question.widgetKeyId,
-        dto.question,
-        id,
-      ))
+      (await this.repo.existsSameQuestion(dto.question, id))
     ) {
       throw new ConflictException(
-        'A suggested question with the same text already exists for this widget key',
+        'A suggested question with the same text already exists',
       );
     }
 
@@ -179,10 +167,10 @@ export class SuggestedQuestionsAdminService {
     if (!row) {
       throw new NotFoundException('Suggested question not found');
     }
-    return this.toDto({ question: row, widgetKeyName: record.widgetKeyName });
+    return this.toDto(row);
   }
 
-  private async requireQuestion(id: string): Promise<AdminQuestionRecord> {
+  private async requireQuestion(id: string): Promise<SuggestedQuestion> {
     const record = await this.repo.findById(id);
     if (!record) {
       throw new NotFoundException('Suggested question not found');
@@ -190,21 +178,9 @@ export class SuggestedQuestionsAdminService {
     return record;
   }
 
-  /** 위젯 키가 실제로 있는지 확인하고 이름을 돌려준다. */
-  private async requireWidgetKey(widgetKeyId: string): Promise<string> {
-    const name = await this.repo.findWidgetKeyName(widgetKeyId);
-    if (!name) {
-      throw new NotFoundException('Widget key not found');
-    }
-    return name;
-  }
-
-  private toDto(record: AdminQuestionRecord): AdminSuggestedQuestionDto {
-    const q = record.question;
+  private toDto(q: SuggestedQuestion): AdminSuggestedQuestionDto {
     return {
       id: q.id,
-      widgetKeyId: q.widgetKeyId,
-      widgetKeyName: record.widgetKeyName,
       question: q.question,
       prompt: q.prompt,
       source: q.source,

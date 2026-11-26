@@ -53,18 +53,10 @@ export class SuggestedQuestionsWorker implements OnModuleDestroy {
 
   private async run(): Promise<void> {
     try {
-      const results = await this.ingestion.run(this.abort.signal);
-      const total = results.reduce(
-        (sum, result) => ({
-          processed: sum.processed + result.processed,
-          saved: sum.saved + result.saved,
-          failed: sum.failed + result.failed,
-        }),
-        { processed: 0, saved: 0, failed: 0 },
-      );
+      const result = await this.ingestion.run(this.abort.signal);
       this.logger.log(
-        `주기 작업 완료 — 위젯 키 ${results.length}개, ` +
-          `공지 ${total.processed}건 처리, 질문 ${total.saved}건 저장, 실패 ${total.failed}건`,
+        `주기 작업 완료 — 공지 ${result.processed}건 처리, ` +
+          `질문 ${result.saved}건 저장, 실패 ${result.failed}건`,
       );
     } catch (error) {
       if (this.abort.signal.aborted) return;

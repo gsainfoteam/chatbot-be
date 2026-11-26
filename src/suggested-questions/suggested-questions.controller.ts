@@ -6,8 +6,6 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { WidgetSessionGuard } from '../auth/guards/widget-session.guard';
-import { CurrentSession } from '../auth/decorators/current-session.decorator';
-import type { SessionPayload } from '../auth/decorators/current-session.decorator';
 import { SuggestedQuestionsService } from './suggested-questions.service';
 import { SuggestedQuestionDto } from './dto/suggested-question.dto';
 
@@ -22,7 +20,7 @@ export class SuggestedQuestionsController {
   @ApiOperation({
     summary: '추천 질문 목록',
     description: [
-      '위젯 첫 화면 카드(2×2)에 띄울 질문을 반환합니다. 세션의 위젯 키에서 승인됐고 기한이 지나지 않은 질문만 나옵니다.',
+      '첫 화면 카드(2×2)에 띄울 질문을 반환합니다. 승인됐고 기한이 지나지 않은 질문만 나옵니다. 위젯 키와 무관하게 같은 질문 풀에서 고릅니다.',
       '',
       '- 관리자가 직접 쓴 질문(`source: ADMIN`) 최대 2개, 지글 공지에서 만든 질문(`source: AI`) 최대 2개를 각각 무작위로 고릅니다. 요청마다 결과가 달라집니다.',
       '- 배열은 ADMIN이 먼저, AI가 뒤입니다. `source`로 위 칸·아래 칸을 나누면 됩니다.',
@@ -32,9 +30,7 @@ export class SuggestedQuestionsController {
   })
   @ApiResponse({ status: 200, type: [SuggestedQuestionDto] })
   @ApiResponse({ status: 401, description: '세션 없음 또는 만료' })
-  list(
-    @CurrentSession() session: SessionPayload,
-  ): Promise<SuggestedQuestionDto[]> {
-    return this.service.listForWidget(session.widgetKeyId);
+  list(): Promise<SuggestedQuestionDto[]> {
+    return this.service.listForWidget();
   }
 }

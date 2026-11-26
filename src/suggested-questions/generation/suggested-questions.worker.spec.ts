@@ -8,16 +8,13 @@ import {
 } from './suggested-questions.worker';
 
 function fixture({ enabled = true }: { enabled?: boolean } = {}) {
-  const run = jest.fn(async (_signal?: AbortSignal) => [
-    {
-      widgetKeyId: 'w1',
-      pending: 1,
-      processed: 1,
-      saved: 2,
-      skipped: 0,
-      failed: 0,
-    },
-  ]);
+  const run = jest.fn(async (_signal?: AbortSignal) => ({
+    pending: 1,
+    processed: 1,
+    saved: 2,
+    skipped: 0,
+    failed: 0,
+  }));
   const ingestion = {
     isEnabled: jest.fn(() => enabled),
     run,
@@ -69,7 +66,14 @@ describe('SuggestedQuestionsWorker', () => {
     jest.mocked(f.ingestion.run).mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          release = () => resolve([]);
+          release = () =>
+            resolve({
+              pending: 0,
+              processed: 0,
+              saved: 0,
+              skipped: 0,
+              failed: 0,
+            });
         }),
     );
 

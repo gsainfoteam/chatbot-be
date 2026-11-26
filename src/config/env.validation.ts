@@ -312,15 +312,6 @@ export class EnvironmentVariables {
   @Transform(parseBooleanEnv(false))
   SUGGESTED_QUESTIONS_ENABLED?: boolean;
 
-  /**
-   * 추천 질문을 만들 위젯 키 ID(쉼표 구분). 비우면 아무 데서도 돌지 않는다.
-   * 주기 작업에는 위젯 세션이 없어 ZiggleNoticeClient.isEnabledFor를 쓸 수 없고,
-   * `*`(모든 위젯)도 받지 않는다. 대상이 분명해야 한다.
-   */
-  @IsOptional()
-  @IsString()
-  SUGGESTED_QUESTIONS_WIDGET_KEY_IDS?: string;
-
   // 웹 검색 (에이전트 도구, Gemini 구글 검색 그라운딩). 실험 기능이라 기본값은 꺼짐.
 
   @IsOptional()

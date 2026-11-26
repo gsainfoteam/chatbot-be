@@ -18,7 +18,6 @@ ZIGGLE_NOTICE_URL_BASE=https://ziggle.gistory.me/notice/
 
 # 주기 작업. 기본은 꺼짐이고, 로컬에서 수집을 확인할 때만 켠다.
 SUGGESTED_QUESTIONS_ENABLED=false
-SUGGESTED_QUESTIONS_WIDGET_KEY_IDS=
 ```
 
 **로컬은 prod 지글을 본다.** staging에는 학생 단체가 직접 쓴 공지(하우스연합회·문화행사위원회
@@ -28,8 +27,8 @@ SUGGESTED_QUESTIONS_WIDGET_KEY_IDS=
 지글 데이터를 변경할 수단이 없다.
 
 **`ZIGGLE_NOTICE_URL_BASE`는 MCP와 짝을 맞춰야 한다.** 공지 id가 환경마다 따로 매겨지기
-때문이다(같은 공지가 staging `199306` / prod `200977`). 어긋나면 전혀 다른 공지가 열리고,
-그 링크가 질문의 `prompt`에 들어가 학생에게 나간다.
+때문이다(같은 공지가 staging `199306` / prod `200977`). 어긋나면 챗봇 답변과 관리자 검수
+화면의 공지 링크가 전혀 다른 공지를 연다.
 
 ```
 staging : api.stg.ziggle.gistory.me/mcp  <->  https://stg.ziggle.gistory.me/notice/
@@ -39,9 +38,9 @@ prod    : api.ziggle.gistory.me/mcp      <->  https://ziggle.gistory.me/notice/
 **배포 환경에서는 각자 자기 환경을 쓴다.** staging 배포본은 staging 지글을 보므로
 자치 공지가 없는 상태 그대로다. 그쪽에서 이 기능을 검증할 수는 없다.
 
-`SUGGESTED_QUESTIONS_WIDGET_KEY_IDS`에는 **위젯 키의 UUID**를 넣는다. 공개 `widgetKey` 문자열이 아니다. `*`는 받지 않는다. 비어 있으면 주기 작업이 돌지 않는다.
+추천 질문은 위젯 키와 묶지 않는다. 질문은 공지당 한 번만 만들고, 첫 화면 API는 어느 위젯에서 불러도 같은 질문 풀에서 고른다(chatbot.gistory.me 한 곳에서만 쓰기로 했다).
 
-설정 항목은 이 둘뿐이다. 실행 주기, 검색어, 모델 티어, 공지당 질문 수는 전부 코드 상수이고 왜 그 값인지는 해당 파일 주석에 적혀 있다.
+설정 항목은 `SUGGESTED_QUESTIONS_ENABLED` 하나뿐이다. 실행 주기, 검색어, 모델 티어, 공지당 질문 수는 전부 코드 상수이고 왜 그 값인지는 해당 파일 주석에 적혀 있다.
 
 ```sh
 bun run db:migrate
@@ -56,7 +55,7 @@ bun run start:dev
 # 질문 등록 (source=ADMIN, 바로 APPROVED)
 curl -X POST http://localhost:3000/api/v1/admin/suggested-questions \
   -H "Authorization: Bearer <admin JWT>" -H "Content-Type: application/json" \
-  -d '{"widgetKeyId":"<위젯 키 UUID>","question":"기숙사 언제 들어가요?","prompt":"입사 일정을 안내한다"}'
+  -d '{"question":"기숙사 언제 들어가요?","expiresAt":null}'
 
 # 검수 대기 목록 (AI가 만든 것만)
 curl "http://localhost:3000/api/v1/admin/suggested-questions?status=PENDING&source=AI" \
@@ -65,7 +64,7 @@ curl "http://localhost:3000/api/v1/admin/suggested-questions?status=PENDING&sour
 # 승인 / 거절
 curl -X PATCH http://localhost:3000/api/v1/admin/suggested-questions/<id> \
   -H "Authorization: Bearer <admin JWT>" -H "Content-Type: application/json" \
-  -d '{"status":"APPROVED"}'
+  -d '{"status":"APPROVED","expiresAt":"2026-12-31T23:59:59+09:00"}'
 ```
 
 관리자 API는 **SUPER_ADMIN만** 쓸 수 있다 (`AdminJwtGuard` + `SuperAdminGuard`).
@@ -79,20 +78,20 @@ curl -X POST http://localhost:3000/api/v1/widget/auth/session \
   -d '{"widgetKey":"<공개 widgetKey>","pageUrl":"https://<허용 도메인>/"}'
 
 # 추천 질문 조회
-curl "http://localhost:3000/api/v1/widget/suggested-questions?limit=5" \
+curl "http://localhost:3000/api/v1/widget/suggested-questions" \
   -H "Authorization: Bearer <세션 토큰>"
 ```
 
 확인할 것:
 
 - `PENDING`·`REJECTED` 질문은 위젯 응답에 나오지 않는다.
-- 위젯 응답에 `prompt`가 없다. `id`와 `question`뿐이다.
-- 다른 위젯 키의 질문이 섞이지 않는다. `widgetKeyId`는 쿼리가 아니라 세션에서 읽는다.
-- 접근 권한이 없는 질문·위젯 키는 403이 아니라 404로 응답한다. 존재 여부를 드러내지 않기 위함이다.
+- 기한이 지난 질문은 위젯 응답에 나오지 않는다.
+- 위젯 응답은 `{ id, question, prompt, source }`다. 관리자 질문 최대 2개 + 공지 질문 최대 2개, 요청마다 무작위.
+- 직접 작성·승인할 때 `expiresAt`이 빠지면 400이다(무기한은 `null`).
 
 ## 3. 주기 작업 확인
 
-`SUGGESTED_QUESTIONS_ENABLED=true`와 위젯 키를 넣고 앱을 다시 띄운다.
+`SUGGESTED_QUESTIONS_ENABLED=true`를 넣고 앱을 다시 띄운다.
 
 주기 작업은 **한국 시간 00·06·12·18시**에 돈다(`@Cron('0 0,6,12,18 * * *', { timeZone: 'Asia/Seoul' })`).
 기동 직후에 한 번 돌지 않으므로, 로컬에서 바로 보고 싶으면 아래 백필 스크립트를 쓴다.
@@ -100,8 +99,8 @@ curl "http://localhost:3000/api/v1/widget/suggested-questions?limit=5" \
 ```
 [NoticeFeedService]        최신 공지 10건 (id 199298~199307), 제목 확보 10건
 [QuestionGenerationService] id=199307 질문 1/1건 저장 (PENDING)
-[NoticeIngestionService]   [<위젯 키>] 장부에 없는 공지 10건 → 처리 9건, 질문 6건 저장, 본문 없음 1건
-[SuggestedQuestionsWorker] 주기 작업 완료 — 위젯 키 1개, 공지 9건 처리, 질문 6건 저장, 실패 0건
+[NoticeIngestionService]   장부에 없는 공지 10건 → 처리 9건, 질문 6건 저장, 본문 없음 1건
+[SuggestedQuestionsWorker] 주기 작업 완료 — 공지 9건 처리, 질문 6건 저장, 실패 0건
 ```
 
 확인할 것:
@@ -114,12 +113,10 @@ curl "http://localhost:3000/api/v1/widget/suggested-questions?limit=5" \
 
 ```sql
 DELETE FROM notice_question_ingestions
-WHERE widget_key_id = '<위젯 키 UUID>'
-  AND notice_id IN (
-    SELECT notice_id FROM notice_question_ingestions
-    WHERE widget_key_id = '<위젯 키 UUID>'
-    ORDER BY notice_id DESC LIMIT 3
-  );
+WHERE notice_id IN (
+  SELECT notice_id FROM notice_question_ingestions
+  ORDER BY notice_id DESC LIMIT 3
+);
 ```
 
 ## 4. 기존 공지 백필
@@ -155,9 +152,9 @@ node dist/backfill-suggested-questions.js --count 200
 **공지 id는 환경마다 따로 매겨진다.** staging과 prod가 각자 크롤러를 돌리는 별도
 인스턴스다. 1번의 `ZIGGLE_NOTICE_URL_BASE` 주의사항이 여기서 나온다.
 
-**요약이 없으면 본문을 받는다.** `summary`가 비어 있으면 `get_notice`로 본문(HTML)을 받아
-`htmlToPlainText`로 평문으로 바꾼 뒤 `maskPersonalInfo`를 적용한다. prod는 요약 보유율이
-68%인데 staging은 최신 구간이 0%라 거의 항상 본문을 받는다.
+**본문은 항상 받는다.** 요약이 있어도 `get_notice`로 본문(HTML)을 받아 `htmlToPlainText`로
+평문으로 바꾼 뒤 `maskPersonalInfo`를 적용한다. prompt에 넣는 검색어가 지글 검색이 보는
+본문(`plainBody`)에 그대로 있어야 해서, 요약에서 고른 단어로는 공지가 안 걸릴 수 있다.
 
 **장부 기록은 생성이 끝난 뒤에 한다.** 본문이 이미지뿐이거나 모델이 "물어볼 게 없다"고
 판단한 경우에도 기록한다. 다시 돌려도 결과가 같은 확정된 결론이기 때문이다. 반대로
@@ -179,8 +176,8 @@ bun run build
 실제 발화 시각을 계산해 서울 기준 00·06·12·18시인지 검증한다(UTC 컨테이너에서 9시간
 밀리는 사고를 막기 위함).
 
-실제 질문 품질은 `scratchpad/quality-run.ts`로 prod 지글을 **읽기만** 해서 잰다.
-결과는 `docs/cha3-21-sample-questions.md`에 있다.
+실제 질문 품질과 답변은 자동 테스트로 확인하지 않는다. 백필로 만든 질문의 `prompt`를 로컬
+챗봇에 보내 원 공지를 찾아 답하는지 직접 확인했고, 결과는 PR 본문에 있다.
 
 `bun run test:unit`을 돌리면 이 변경과 무관한 실패가 3건 있다. `development`에서도 동일하다.
 
@@ -189,9 +186,9 @@ bun run build
 
 ## 7. 이번 범위에 없는 것
 
-- **관리자 검수 화면과 위젯 첫 화면 버튼.** 둘 다 `chatbot-fe` 작업이다. 백엔드 API는
+- **관리자 검수 화면과 위젯 첫 화면 카드.** 둘 다 `chatbot-fe` 작업이다. 카드에는 `question`을
+  띄우고, 누르면 `prompt`를 일반 채팅 요청으로 보낸다(`null`이면 `question`). 백엔드 API는
   이 브랜치에 다 들어 있다(`suggested-questions-admin.controller.ts`, 위젯 `pickActive`).
-- 추천 질문을 눌렀을 때 매칭된 `prompt`로 답변하는 연결. 기존 채팅 경로 변경이 필요해 별도 이슈로 둔다. 지금은 질문 문구가 채팅 입력란에 들어가고 일반 답변 경로를 탄다.
 - 노출 순서 지정(`display_order`). 첫 화면은 우선순위 없이 출처별(관리자 2 + AI 2) 무작위로 고른다.
 
 > 질문 기한(`expires_at`)은 이 브랜치에 있다. 관리자가 직접 등록하거나 승인할 때 반드시 정하고

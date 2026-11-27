@@ -4,7 +4,7 @@ import {
   type NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import { ConfigService } from '@nestjs/config';
-import { ValidationPipe } from '@nestjs/common';
+import { HttpException, ValidationPipe } from '@nestjs/common';
 import multipart from '@fastify/multipart';
 import sharp from 'sharp';
 import { randomUUID } from 'node:crypto';
@@ -71,7 +71,7 @@ describe('Platform chat multipart and SSE', () => {
     createMessage: jest.Mock;
     getMessagesForContext: jest.Mock;
     getAnswerRegenerationTarget: jest.Mock;
-    getUserMessageCount: jest.Mock;
+    assertQuestionAllowed: jest.Mock;
   };
   let retrieval: { retrieveForPlatform: jest.Mock };
   let usage: { recordUsage: jest.Mock };
@@ -148,7 +148,7 @@ describe('Platform chat multipart and SSE', () => {
       ),
     };
     chat = {
-      getUserMessageCount: jest.fn(async () => 0),
+      assertQuestionAllowed: jest.fn(async () => {}),
       createMessage: jest.fn(async (_session, dto) => ({
         id: randomUUID(),
         ...dto,
@@ -523,14 +523,30 @@ describe('Platform chat multipart and SSE', () => {
     },
   );
 
-  it('retains the widget question cap for image uploads', async () => {
-    chat.getUserMessageCount.mockResolvedValueOnce(5);
+  it('enforces the configured widget question limit before processing image uploads', async () => {
+    chat.assertQuestionAllowed.mockRejectedValueOnce(
+      new HttpException(
+        {
+          statusCode: 429,
+          limit: 2,
+          windowSeconds: 3600,
+          retryAfterSeconds: 120,
+        },
+        429,
+      ),
+    );
     const response = await app.inject({
       method: 'POST',
       url: '/api/v1/widget/messages/chat/stream',
       ...form({ images: [{ id: imageId }] }, [{ id: imageId, bytes: png }]),
     });
     expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({
+      limit: 2,
+      windowSeconds: 3600,
+      retryAfterSeconds: 120,
+    });
+    expect(chat.assertQuestionAllowed).toHaveBeenCalledWith(widgetSession);
     expect(llm.callLLM).not.toHaveBeenCalled();
     expect(chat.createMessage).not.toHaveBeenCalled();
   });

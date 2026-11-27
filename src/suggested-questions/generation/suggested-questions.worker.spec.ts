@@ -34,7 +34,7 @@ describe('주기 설정', () => {
     let at = new Date('2026-11-24T00:00:00Z'); // 서울 기준 09:00
     const hours: number[] = [];
     for (let i = 0; i < 4; i += 1) {
-      const next = cron.getNextDateFrom(at);
+      const next = cron.getNextDateFrom(at, SUGGESTED_QUESTIONS_TIME_ZONE);
       hours.push(next.setZone(SUGGESTED_QUESTIONS_TIME_ZONE).hour);
       at = next.toJSDate();
     }

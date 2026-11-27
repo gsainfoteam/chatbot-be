@@ -1,6 +1,6 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 
-/** Process-local burst/concurrency guard. The database separately enforces five turns per session. */
+/** Process-local burst/concurrency guard. The database separately enforces each widget key's per-user question limit. */
 export class ChatAdmission {
   private readonly sessions = new Set<string>();
   private readonly clients = new Map<

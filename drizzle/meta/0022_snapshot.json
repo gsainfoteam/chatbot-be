@@ -1,6 +1,6 @@
 {
-  "id": "cccf4a6f-fae0-4dcf-8597-bc9f5ff6952b",
-  "prevId": "26f82567-7707-460b-88ff-28f3131684f6",
+  "id": "406eb4e2-3656-4636-b9fd-d2f58c64923b",
+  "prevId": "31c13656-b0a3-4a0e-b137-575d27a7e019",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -1388,6 +1388,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "end_user_key": {
+          "name": "end_user_key",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
         "expires_at": {
           "name": "expires_at",
           "type": "timestamp",
@@ -1444,6 +1450,22 @@
             }
           ],
           "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sessions_end_user_key_idx": {
+          "name": "sessions_end_user_key_idx",
+          "columns": [
+            {
+              "expression": "end_user_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"sessions\".\"end_user_key\" IS NOT NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -2353,6 +2375,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "question_limit": {
+          "name": "question_limit",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "question_limit_window_seconds": {
+          "name": "question_limit_window_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -2427,7 +2461,12 @@
         }
       },
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "widget_keys_question_limit_check": {
+          "name": "widget_keys_question_limit_check",
+          "value": "(\"widget_keys\".\"question_limit\" IS NULL AND \"widget_keys\".\"question_limit_window_seconds\" IS NULL) OR (\"widget_keys\".\"question_limit\" IS NOT NULL AND \"widget_keys\".\"question_limit_window_seconds\" IS NOT NULL AND \"widget_keys\".\"question_limit\" BETWEEN 1 AND 10000 AND \"widget_keys\".\"question_limit_window_seconds\" BETWEEN 60 AND 2592000)"
+        }
+      },
       "isRLSEnabled": false
     }
   },

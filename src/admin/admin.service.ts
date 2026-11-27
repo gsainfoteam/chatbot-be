@@ -19,6 +19,7 @@ import { RegisterDomainsDto } from '../common/dto/register-domains.dto';
 import { RegisterAppIdDto } from '../common/dto/register-app-id.dto';
 import { InviteCollaboratorDto } from '../common/dto/invite-collaborator.dto';
 import { WidgetKeyDto, WidgetKeyStatus } from '../common/dto/widget-key.dto';
+import { QuestionLimitDto } from '../common/dto/question-limit.dto';
 import { CollaboratorDto } from '../common/dto/collaborator.dto';
 import { Trace } from '@gsainfoteam/nest-observability';
 
@@ -100,6 +101,8 @@ export class AdminService {
         status: widgetKeys.status,
         allowedDomains: widgetKeys.allowedDomains,
         allowedAppIds: widgetKeys.allowedAppIds,
+        questionLimit: widgetKeys.questionLimit,
+        questionLimitWindowSeconds: widgetKeys.questionLimitWindowSeconds,
         createdAt: widgetKeys.createdAt,
       })
       .from(widgetKeyCollaborators)
@@ -123,6 +126,7 @@ export class AdminService {
         status: key.status as WidgetKeyStatus,
         allowedDomains: key.allowedDomains,
         allowedAppIds: key.allowedAppIds ?? [],
+        questionLimit: toQuestionLimit(key),
         createdAt: key.createdAt,
       })),
       ...sharedKeys.map((key) => ({
@@ -132,6 +136,7 @@ export class AdminService {
         status: key.status as WidgetKeyStatus,
         allowedDomains: key.allowedDomains,
         allowedAppIds: key.allowedAppIds ?? [],
+        questionLimit: toQuestionLimit(key),
         createdAt: key.createdAt,
       })),
     ];
@@ -195,6 +200,7 @@ export class AdminService {
       status: newKey.status as WidgetKeyStatus,
       allowedDomains: newKey.allowedDomains,
       allowedAppIds: newKey.allowedAppIds ?? [],
+      questionLimit: toQuestionLimit(newKey),
       createdAt: newKey.createdAt,
     };
   }
@@ -256,6 +262,7 @@ export class AdminService {
       status: updatedKey.status as WidgetKeyStatus,
       allowedDomains: updatedKey.allowedDomains,
       allowedAppIds: updatedKey.allowedAppIds ?? [],
+      questionLimit: toQuestionLimit(updatedKey),
       createdAt: updatedKey.createdAt,
     };
   }
@@ -298,6 +305,58 @@ export class AdminService {
       status: updatedKey.status as WidgetKeyStatus,
       allowedDomains: updatedKey.allowedDomains,
       allowedAppIds: updatedKey.allowedAppIds ?? [],
+      questionLimit: toQuestionLimit(updatedKey),
+      createdAt: updatedKey.createdAt,
+    };
+  }
+
+  /** 사용자별 질문 한도를 설정하거나 null로 해제한다. 키 소유자만 바꿀 수 있다. */
+  async setQuestionLimit(
+    widgetKeyId: string,
+    adminUuid: string,
+    limit: QuestionLimitDto | null,
+  ): Promise<WidgetKeyDto> {
+    const [existingKey] = await this.db
+      .select({
+        status: widgetKeys.status,
+        createdByIdpUuid: widgetKeys.createdByIdpUuid,
+      })
+      .from(widgetKeys)
+      .where(eq(widgetKeys.id, widgetKeyId))
+      .limit(1);
+
+    if (!existingKey) {
+      throw new NotFoundException('Widget key not found');
+    }
+    if (existingKey.createdByIdpUuid !== adminUuid) {
+      throw new ForbiddenException(
+        'You do not have permission to modify this widget key',
+      );
+    }
+    if (existingKey.status === 'REVOKED') {
+      throw new ForbiddenException(
+        'Cannot change the question limit of a revoked widget key',
+      );
+    }
+
+    const [updatedKey] = await this.db
+      .update(widgetKeys)
+      .set({
+        questionLimit: limit?.maxQuestions ?? null,
+        questionLimitWindowSeconds: limit?.windowSeconds ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(widgetKeys.id, widgetKeyId))
+      .returning();
+
+    return {
+      id: updatedKey.id,
+      name: updatedKey.name,
+      secretKey: updatedKey.secretKey,
+      status: updatedKey.status as WidgetKeyStatus,
+      allowedDomains: updatedKey.allowedDomains,
+      allowedAppIds: updatedKey.allowedAppIds ?? [],
+      questionLimit: toQuestionLimit(updatedKey),
       createdAt: updatedKey.createdAt,
     };
   }
@@ -350,6 +409,7 @@ export class AdminService {
         status: updatedKey.status as WidgetKeyStatus,
         allowedDomains: updatedKey.allowedDomains,
         allowedAppIds: updatedKey.allowedAppIds ?? [],
+        questionLimit: toQuestionLimit(updatedKey),
         createdAt: updatedKey.createdAt,
       };
     });
@@ -405,6 +465,7 @@ export class AdminService {
       status: updatedKey.status as WidgetKeyStatus,
       allowedDomains: updatedKey.allowedDomains,
       allowedAppIds: updatedKey.allowedAppIds ?? [],
+      questionLimit: toQuestionLimit(updatedKey),
       createdAt: updatedKey.createdAt,
     };
   }
@@ -457,6 +518,7 @@ export class AdminService {
         status: updatedKey.status as WidgetKeyStatus,
         allowedDomains: updatedKey.allowedDomains,
         allowedAppIds: updatedKey.allowedAppIds ?? [],
+        questionLimit: toQuestionLimit(updatedKey),
         createdAt: updatedKey.createdAt,
       };
     });
@@ -629,4 +691,16 @@ export class AdminService {
       .delete(widgetKeyCollaborators)
       .where(eq(widgetKeyCollaborators.id, inviteeId));
   }
+}
+
+function toQuestionLimit(key: {
+  questionLimit: number | null;
+  questionLimitWindowSeconds: number | null;
+}): QuestionLimitDto | null {
+  return key.questionLimit != null && key.questionLimitWindowSeconds != null
+    ? {
+        maxQuestions: key.questionLimit,
+        windowSeconds: key.questionLimitWindowSeconds,
+      }
+    : null;
 }

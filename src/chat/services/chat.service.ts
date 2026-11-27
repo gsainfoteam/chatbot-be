@@ -15,8 +15,9 @@ import {
   messageFeedbacks,
   messages,
   sessions,
+  widgetKeys,
 } from '../../db';
-import { eq, and, lt, lte, desc, count, sql } from 'drizzle-orm';
+import { eq, and, gt, lt, lte, desc, sql } from 'drizzle-orm';
 import { UsageService, computeBadAnswerDelta } from '../../usage/usage.service';
 import {
   ChatMessageInputDto,
@@ -29,7 +30,7 @@ import {
   MessageFeedbackDto,
   MessageFeedbackInputDto,
 } from '../../common/dto/message-feedback.dto';
-import { MAX_QUESTIONS_PER_SESSION } from '../constants';
+import { CONTEXT_MESSAGE_LIMIT } from '../constants';
 import { Trace } from '@gsainfoteam/nest-observability';
 
 export interface AnswerRegenerationTarget {
@@ -115,12 +116,77 @@ export class ChatService {
     return new Date(String(value));
   }
 
-  async getUserMessageCount(sessionId: string): Promise<number> {
-    const [row] = await this.db
-      .select({ count: count() })
+  /**
+   * 위젯 키에 설정된 사용자별 질문 한도(최근 windowSeconds초 동안 limit개)를 넘었으면 429를 던진다.
+   * 같은 endUserKey의 세션은 함께 세고, endUserKey가 없으면 현재 세션만 센다.
+   * tx를 넘기면 같은 사용자를 트랜잭션 잠금으로 직렬화한 뒤 세므로 동시 요청도 한도를 넘지 못한다.
+   */
+  async assertQuestionAllowed(
+    sessionId: string,
+    tx?: Parameters<Parameters<Database['transaction']>[0]>[0],
+  ): Promise<void> {
+    const db = tx ?? this.db;
+    const [session] = await db
+      .select({
+        widgetKeyId: sessions.widgetKeyId,
+        channel: sessions.channel,
+        endUserKey: sessions.endUserKey,
+        limit: widgetKeys.questionLimit,
+        windowSeconds: widgetKeys.questionLimitWindowSeconds,
+      })
+      .from(sessions)
+      .innerJoin(widgetKeys, eq(widgetKeys.id, sessions.widgetKeyId))
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (!session) throw new NotFoundException('Session not found');
+    // Browser-managed platform conversations keep their existing unlimited question policy.
+    if (session.channel === 'platform') return;
+    const { widgetKeyId, endUserKey, limit, windowSeconds } = session;
+    if (limit == null || windowSeconds == null) return;
+
+    if (tx) {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${endUserKey ?? sessionId}, 0))`,
+      );
+    }
+    // created_at은 DB 시계로 저장되므로 기간도 DB 시계로 잰다.
+    // 잠금을 기다린 뒤의 시각이어야 하므로 트랜잭션 시작 시각(localtimestamp) 대신 statement_timestamp()를 쓴다.
+    const [oldestCounted] = await db
+      .select({
+        retryAfterSeconds: sql<number>`ceil(extract(epoch from ${messages.createdAt} + make_interval(secs => ${windowSeconds}) - statement_timestamp()::timestamp))::int`,
+      })
       .from(messages)
-      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')));
-    return Number(row?.count ?? 0);
+      .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+      .where(
+        and(
+          endUserKey
+            ? and(
+                eq(sessions.widgetKeyId, widgetKeyId),
+                eq(sessions.endUserKey, endUserKey),
+              )
+            : eq(messages.sessionId, sessionId),
+          eq(messages.role, 'user'),
+          gt(
+            messages.createdAt,
+            sql`statement_timestamp()::timestamp - make_interval(secs => ${windowSeconds})`,
+          ),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .offset(limit - 1)
+      .limit(1);
+    if (!oldestCounted) return;
+
+    throw new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: '질문 한도를 모두 사용했습니다. 잠시 후 다시 질문해 주세요.',
+        limit,
+        windowSeconds,
+        retryAfterSeconds: oldestCounted.retryAfterSeconds,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
   }
 
   /**
@@ -133,7 +199,7 @@ export class ChatService {
     const result = await this.getMessages(
       sessionId,
       undefined,
-      MAX_QUESTIONS_PER_SESSION,
+      CONTEXT_MESSAGE_LIMIT,
       beforeCreatedAt,
     );
     return result.messages;
@@ -202,35 +268,10 @@ export class ChatService {
     sessionId: string,
     dto: ChatMessageInputDto,
   ): Promise<ChatMessageDto> {
-    // Lock the session before counting and inserting so concurrent requests cannot spend a sixth turn.
+    // Check the question limit and insert in one transaction so concurrent requests cannot exceed it.
     if (dto.role === MessageRole.USER) {
       return this.db.transaction(async (tx) => {
-        const [session] = await tx
-          .select({ id: sessions.id, channel: sessions.channel })
-          .from(sessions)
-          .where(eq(sessions.id, sessionId))
-          .for('update')
-          .limit(1);
-        if (!session) throw new NotFoundException('Session not found');
-        const [row] = await tx
-          .select({ count: count() })
-          .from(messages)
-          .where(
-            and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')),
-          );
-        if (
-          session.channel !== 'platform' &&
-          Number(row?.count ?? 0) >= MAX_QUESTIONS_PER_SESSION
-        ) {
-          throw new HttpException(
-            {
-              statusCode: 429,
-              message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
-              limit: MAX_QUESTIONS_PER_SESSION,
-            },
-            HttpStatus.TOO_MANY_REQUESTS,
-          );
-        }
+        await this.assertQuestionAllowed(sessionId, tx);
         const [message] = await tx
           .insert(messages)
           .values({
@@ -238,6 +279,8 @@ export class ChatService {
             role: dto.role,
             content: dto.content,
             metadata: dto.metadata ?? null,
+            // 한도 판정과 같은 기준으로, 잠금을 기다린 뒤의 시각에 저장한다(now()는 트랜잭션 시작 시각).
+            createdAt: sql`statement_timestamp()`,
           })
           .returning();
         return this.toMessageDto(message);

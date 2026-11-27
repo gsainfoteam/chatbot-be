@@ -705,6 +705,29 @@ describe('ChatService question limit', () => {
     windowSeconds: 3600,
   };
 
+  it('preserves unlimited questions for the stored platform channel', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ ...limited, channel: 'platform' }]);
+    await expect(
+      service.createMessage(sessionId, question),
+    ).resolves.toMatchObject({ role: 'user' });
+    expect(db.calls).toEqual(['select', 'insert']);
+  });
+
+  it('does not let message metadata bypass a configured widget limit', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ ...limited, channel: 'widget' }]);
+    db.queueSelect([]);
+    db.queueSelect([{ retryAfterSeconds: 120 }]);
+    await expect(
+      service.createMessage(sessionId, {
+        ...question,
+        metadata: { channel: 'platform' },
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(db.calls).not.toContain('insert');
+  });
+
   it('stores a question without locking or counting when the key has no limit', async () => {
     const { service, db } = createService();
     db.queueSelect([{ ...limited, limit: null, windowSeconds: null }]);

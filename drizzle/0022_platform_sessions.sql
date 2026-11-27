@@ -1,0 +1,2 @@
+ALTER TABLE "sessions" ADD COLUMN "channel" varchar(16) DEFAULT 'widget' NOT NULL;--> statement-breakpoint
+ALTER TABLE "sessions" ADD CONSTRAINT "sessions_channel_check" CHECK ("sessions"."channel" IN ('widget', 'platform'));

@@ -263,6 +263,7 @@ export const sessions = pgTable(
       .notNull()
       .references(() => widgetKeys.id, { onDelete: 'cascade' }),
     sessionToken: text('session_token').notNull().unique(),
+    channel: varchar('channel', { length: 16 }).notNull().default('widget'),
     pageUrl: varchar('page_url', { length: 2048 }).notNull(),
     // 위젯·앱이 보낸 clientId의 해시. 같은 값이면 세션이 달라도 같은 사용자로 센다
     endUserKey: varchar('end_user_key', { length: 64 }),
@@ -273,6 +274,10 @@ export const sessions = pgTable(
     sessionTokenIdx: index('sessions_session_token_idx').on(table.sessionToken),
     widgetKeyIdIdx: index('sessions_widget_key_id_idx').on(table.widgetKeyId),
     expiresAtIdx: index('sessions_expires_at_idx').on(table.expiresAt),
+    channelCheck: check(
+      'sessions_channel_check',
+      sql`${table.channel} IN ('widget', 'platform')`,
+    ),
     // clientId를 보낸 세션만 담는다. 해시에 위젯 키가 들어 있어 이 열만으로 찾을 수 있다.
     endUserKeyIdx: index('sessions_end_user_key_idx')
       .on(table.endUserKey)

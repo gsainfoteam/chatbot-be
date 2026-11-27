@@ -13,6 +13,7 @@ import {
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { PlatformChatService } from '../src/platform-chat/platform-chat.service';
 import { ChatController } from '../src/chat/chat.controller';
 import { ChatService } from '../src/chat/services/chat.service';
 import { ChatOrchestrationService } from '../src/chat/services/chat-orchestration.service';
@@ -60,6 +61,7 @@ describe('Chat feedback API (e2e)', () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
       providers: [
+        { provide: PlatformChatService, useValue: { stream: jest.fn() } },
         { provide: ChatService, useValue: chatService },
         {
           provide: ChatOrchestrationService,
@@ -206,6 +208,7 @@ describe('Chat feedback API (e2e)', () => {
     expect(chatService.getAnswerRegenerationTarget).toHaveBeenCalledWith(
       'session-1',
       messageId,
+      expect.any(Function),
     );
     expect(chatService.assertQuestionAllowed).not.toHaveBeenCalled();
     expect(

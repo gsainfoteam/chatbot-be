@@ -37,6 +37,7 @@ export interface AnswerRegenerationTarget {
   question: string;
   originalMessageId: string;
   historyBefore: Date;
+  userMetadata?: Record<string, unknown>;
 }
 
 @Trace()
@@ -128,6 +129,7 @@ export class ChatService {
     const [session] = await db
       .select({
         widgetKeyId: sessions.widgetKeyId,
+        channel: sessions.channel,
         endUserKey: sessions.endUserKey,
         limit: widgetKeys.questionLimit,
         windowSeconds: widgetKeys.questionLimitWindowSeconds,
@@ -137,6 +139,8 @@ export class ChatService {
       .where(eq(sessions.id, sessionId))
       .limit(1);
     if (!session) throw new NotFoundException('Session not found');
+    // Browser-managed platform conversations keep their existing unlimited question policy.
+    if (session.channel === 'platform') return;
     const { widgetKeyId, endUserKey, limit, windowSeconds } = session;
     if (limit == null || windowSeconds == null) return;
 
@@ -420,6 +424,7 @@ export class ChatService {
   async getAnswerRegenerationTarget(
     sessionId: string,
     messageId: string,
+    validateOriginal?: (metadata: Record<string, unknown> | null) => void,
   ): Promise<AnswerRegenerationTarget> {
     return this.db.transaction(async (tx) => {
       const target = this.firstRawRow(
@@ -479,7 +484,11 @@ export class ChatService {
         target.created_at ?? target.createdAt,
       );
       const [previousUserMessage] = await tx
-        .select({ content: messages.content, createdAt: messages.createdAt })
+        .select({
+          content: messages.content,
+          createdAt: messages.createdAt,
+          metadata: messages.metadata,
+        })
         .from(messages)
         .where(
           and(
@@ -495,6 +504,9 @@ export class ChatService {
         throw new NotFoundException('Original user question not found');
       }
 
+      const userMetadata = this.toMetadataRecord(previousUserMessage.metadata);
+      validateOriginal?.(userMetadata);
+
       await tx.execute(sql`
         UPDATE messages
         SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
@@ -508,6 +520,7 @@ export class ChatService {
         question: previousUserMessage.content,
         originalMessageId: messageId,
         historyBefore: previousUserMessage.createdAt,
+        ...(userMetadata ? { userMetadata } : {}),
       };
     });
   }

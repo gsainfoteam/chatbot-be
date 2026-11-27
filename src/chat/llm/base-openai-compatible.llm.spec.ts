@@ -33,6 +33,51 @@ const TOOL: LlmTool = {
 };
 
 describe('BaseOpenAiCompatibleLlm.callLLM', () => {
+  it('sends images unchanged and uses reasoning-model completion parameters', async () => {
+    const { service, post } = createService();
+    const messages = [
+      {
+        role: 'user' as const,
+        content: [
+          { type: 'text' as const, text: '설명해줘' },
+          {
+            type: 'image_url' as const,
+            image_url: { url: 'data:image/png;base64,AAAA' },
+          },
+        ],
+      },
+    ];
+    await service.callLLM(messages, 'gpt-5.4', {
+      max_tokens: 8000,
+      temperature: 0,
+    });
+    expect(post.mock.calls[0][1]).toMatchObject({
+      messages,
+      max_completion_tokens: 8000,
+    });
+    expect(post.mock.calls[0][1]).not.toHaveProperty('temperature');
+    expect(post.mock.calls[0][1]).not.toHaveProperty('max_tokens');
+    await service.generateFinalResponseStream(messages, [], 'gpt-6.1-sol', {
+      max_tokens: 8000,
+    });
+    expect(post.mock.calls[1][1]).toMatchObject({
+      messages,
+      max_completion_tokens: 8000,
+      stream: true,
+    });
+  });
+  it('redacts images from provider error responses before truncation', () => {
+    const { service } = createService();
+    const stringify = (
+      service as unknown as { safeStringify(value: unknown): string }
+    ).safeStringify.bind(service);
+    expect(
+      stringify({ message: 'data:image/png;base64,' + 'A'.repeat(4000) }),
+    ).toContain('[image omitted]');
+    expect(
+      stringify({ message: 'data:image/png;base64,' + 'A'.repeat(4000) }),
+    ).not.toContain('AAAA');
+  });
   it('preserves the provider timeout cause for bounded retries', async () => {
     const { service, post } = createService();
     const timeout = Object.assign(new Error('timeout'), {

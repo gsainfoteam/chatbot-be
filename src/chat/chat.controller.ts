@@ -13,6 +13,8 @@ import {
   Res,
   Logger,
   ParseUUIDPipe,
+  BadRequestException,
+  ValidationPipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -22,6 +24,7 @@ import {
   ApiQuery,
   ApiParam,
   ApiBearerAuth,
+  ApiConsumes,
 } from '@nestjs/swagger';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ChatService } from './services/chat.service';
@@ -34,6 +37,7 @@ import { ChatMessageInputDto } from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';
 import { ChatRequestDto } from './dto/chat-request.dto';
+import { PlatformChatService } from '../platform-chat/platform-chat.service';
 import {
   FeedbackRating,
   MessageFeedbackDto,
@@ -51,6 +55,7 @@ export class ChatController {
     private readonly chatService: ChatService,
     private readonly chatOrchestrationService: ChatOrchestrationService,
     private readonly mcpResourceService: McpResourceService,
+    private readonly imageChat: PlatformChatService,
   ) {}
 
   @Get()
@@ -159,6 +164,7 @@ export class ChatController {
   }
 
   @Post(':messageId/regenerate/stream')
+  @ApiConsumes('application/json', 'multipart/form-data')
   @ApiOperation({
     summary: 'BAD 피드백 답변 1회 재생성',
     description:
@@ -198,9 +204,21 @@ export class ChatController {
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
+    if (req.isMultipart?.()) {
+      return this.imageChat.stream(session, req, reply, messageId, 'widget');
+    }
     const target = await this.chatService.getAnswerRegenerationTarget(
       session.sessionId,
       messageId,
+      (metadata) => {
+        const images = (
+          metadata?.platform as { images?: unknown[] } | undefined
+        )?.images;
+        if (images?.length)
+          throw new BadRequestException(
+            'Reattach the original images with multipart/form-data',
+          );
+      },
     );
 
     return this.chatOrchestrationService.handleStreamingResponse(
@@ -221,10 +239,35 @@ export class ChatController {
   }
 
   @Post('chat/stream')
+  @ApiConsumes('application/json', 'multipart/form-data')
+  @ApiBody({
+    schema: {
+      oneOf: [
+        {
+          type: 'object',
+          required: ['question'],
+          properties: { question: { type: 'string', maxLength: 4000 } },
+        },
+        {
+          type: 'object',
+          required: ['payload'],
+          properties: {
+            payload: {
+              type: 'string',
+              description:
+                'JSON 문자열 {question?, images:[{id: UUID}]} — 첨부 ID별 image_<UUID> 파일 필드 필요',
+            },
+          },
+          additionalProperties: { type: 'string', format: 'binary' },
+        },
+      ],
+    },
+  })
   @ApiOperation({
     summary: '사용자 질문 처리 및 스트리밍 답변 생성',
     description: [
       '사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 스트리밍으로 생성합니다. Server-Sent Events (SSE) 형식으로 응답을 전송합니다.',
+      '모든 위젯에서 정적 JPEG·PNG·WebP를 첨부할 수 있습니다. multipart의 payload={question?, images:[{id}]}와 image_<id> 파일 필드를 사용하며, 이미지 한 장당 10MiB·요청당 최대 3장입니다. 별도 이미지 허용 설정은 없습니다.',
       '',
       '각 이벤트는 `data: <JSON>` 한 줄입니다.',
       '- `{"content": "..."}`: 답변 조각. 이어 붙이면 전체 답변이 됩니다.',
@@ -271,12 +314,23 @@ export class ChatController {
   })
   async chatStream(
     @CurrentSession() session: SessionPayload,
-    @Body() dto: ChatRequestDto,
+    @Body() body: unknown,
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
     // SSE가 시작되면 HTTP 429를 보낼 수 없으므로 스트리밍 전에 먼저 확인한다.
     await this.chatService.assertQuestionAllowed(session.sessionId);
+    if (req.isMultipart?.()) {
+      return this.imageChat.stream(session, req, reply, undefined, 'widget');
+    }
+    const dto = (await new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }).transform(body, {
+      type: 'body',
+      metatype: ChatRequestDto,
+    })) as ChatRequestDto;
     return this.chatOrchestrationService.handleStreamingResponse(
       session.sessionId,
       dto.question,

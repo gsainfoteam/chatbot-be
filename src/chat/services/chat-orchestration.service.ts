@@ -154,6 +154,40 @@ export class ChatOrchestrationService {
     );
   }
 
+  /** Shared retrieval; platform history comes from the browser, never from the session. */
+  async retrieveForPlatform(
+    question: string,
+    history: LlmMessage[],
+    usage: LlmUsage,
+    options: Pick<
+      ProcessUserQuestionStreamOptions,
+      'signal' | 'widgetKeyId' | 'onStep' | 'diagnostics'
+    >,
+  ) {
+    const catalog = await this.retrievalService.listCatalog();
+    const result = await this.gatherRelevantContent(
+      question,
+      history,
+      catalog,
+      usage,
+      options,
+    );
+    const resources: ResourceInfo[] = [];
+    const seen = new Set<string>(
+      (catalog.resources ?? [])
+        .filter((r) => r.sourceType === 'text')
+        .map((r) => r.path),
+    );
+    for (const resource of result.usedResources) {
+      this.resourceContentService.appendFePdfResourceEntryFromUsed(
+        resources,
+        seen,
+        resource,
+      );
+    }
+    return { ...result, resources };
+  }
+
   /** 미답변 질문 기록 실패가 채팅 응답을 막지 않도록 경고만 남긴다. */
   private async recordUnansweredQuestion(
     sessionId: string,

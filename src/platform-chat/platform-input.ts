@@ -52,14 +52,15 @@ function string(value: unknown, max: number): string {
 export function parsePlatformPayload(
   value: unknown,
   regeneration = false,
+  widgetSessionId?: string,
 ): PlatformChatInput {
-  const obj = object(value, [
-    'localConversationId',
-    'question',
-    'history',
-    'images',
-  ]);
-  const localConversationId = uuid(obj.localConversationId);
+  const obj = object(
+    value,
+    widgetSessionId
+      ? ['question', 'images']
+      : ['localConversationId', 'question', 'history', 'images'],
+  );
+  const localConversationId = widgetSessionId ?? uuid(obj.localConversationId);
   const question = string(obj.question ?? '', 4000).trim();
   if (regeneration && question)
     return bad('Regeneration uses the original question');
@@ -114,6 +115,7 @@ export function parsePlatformPayload(
 export async function readPlatformInput(
   req: FastifyRequest,
   regeneration = false,
+  widgetSessionId?: string,
 ): Promise<{
   input: PlatformChatInput;
   files: PlatformImageFile[];
@@ -178,7 +180,7 @@ export async function readPlatformInput(
           HttpStatus.PAYLOAD_TOO_LARGE,
         );
     }
-    const input = parsePlatformPayload(payload, regeneration);
+    const input = parsePlatformPayload(payload, regeneration, widgetSessionId);
     if (
       files.length !== input.images.length ||
       input.images.some((ref) => !files.some((f) => f.id === ref.id))

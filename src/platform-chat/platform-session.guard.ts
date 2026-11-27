@@ -9,7 +9,6 @@ import { JwtService } from '@nestjs/jwt';
 import { and, eq, gt } from 'drizzle-orm';
 import type { FastifyRequest } from 'fastify';
 import { DB_CONNECTION, type Database, sessions, widgetKeys } from '../db';
-import { PlatformAuthService } from './platform-auth.service';
 import type { SessionPayload } from '../auth/decorators/current-session.decorator';
 
 @Injectable()
@@ -17,11 +16,9 @@ export class PlatformSessionGuard implements CanActivate {
   constructor(
     @Inject(DB_CONNECTION) private readonly db: Database,
     private readonly jwt: JwtService,
-    private readonly auth: PlatformAuthService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const keyId = this.auth.requireEnabled();
     const req = context
       .switchToHttp()
       .getRequest<FastifyRequest & { session: SessionPayload }>();
@@ -34,7 +31,11 @@ export class PlatformSessionGuard implements CanActivate {
         widgetKeyId: string;
         channel: string;
       }>(match[1]);
-      if (payload.channel !== 'platform' || payload.widgetKeyId !== keyId)
+      if (
+        payload.channel !== 'platform' ||
+        !payload.widgetKeyId ||
+        !payload.sessionId
+      )
         throw new Error('Wrong channel');
       const [session] = await this.db
         .select({ id: sessions.id, widgetKeyId: sessions.widgetKeyId })
@@ -43,7 +44,7 @@ export class PlatformSessionGuard implements CanActivate {
         .where(
           and(
             eq(sessions.id, payload.sessionId),
-            eq(sessions.widgetKeyId, keyId),
+            eq(sessions.widgetKeyId, payload.widgetKeyId),
             eq(sessions.channel, 'platform'),
             eq(sessions.sessionToken, match[1]),
             gt(sessions.expiresAt, new Date()),

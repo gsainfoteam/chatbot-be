@@ -35,6 +35,14 @@ import { McpResourceService } from '../mcp/mcp-resource.service';
 
 class PlatformSessionRequestDto {
   @ApiProperty({
+    description: '발급받은 위젯 키 (widget_keys.id가 아닌 키 문자열)',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(512)
+  widgetKey: string;
+
+  @ApiProperty({
     description: '자체 플랫폼의 현재 페이지 URL',
     maxLength: 2048,
   })
@@ -106,7 +114,11 @@ export class PlatformAuthController {
   ) {
     const release = this.admission.acquire(req.ip, req.ip);
     try {
-      return await this.auth.createSession(body.pageUrl, req.headers.origin);
+      return await this.auth.createSession(
+        body.widgetKey,
+        body.pageUrl,
+        req.headers.origin,
+      );
     } finally {
       release();
     }

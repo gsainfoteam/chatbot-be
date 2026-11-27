@@ -21,6 +21,8 @@ import { UsageService } from '../src/usage/usage.service';
 import { UnansweredQuestionsRepository } from '../src/unanswered-questions/unanswered-questions.repository';
 import { PLATFORM_IMAGE_PROMPT } from '../src/platform-chat/platform-prompts';
 import { McpResourceService } from '../src/mcp/mcp-resource.service';
+import { ChatController } from '../src/chat/chat.controller';
+import { WidgetSessionGuard } from '../src/auth/guards/widget-session.guard';
 
 function form(
   payload: unknown,
@@ -69,6 +71,7 @@ describe('Platform chat multipart and SSE', () => {
     createMessage: jest.Mock;
     getMessagesForContext: jest.Mock;
     getAnswerRegenerationTarget: jest.Mock;
+    getUserMessageCount: jest.Mock;
   };
   let retrieval: { retrieveForPlatform: jest.Mock };
   let usage: { recordUsage: jest.Mock };
@@ -77,6 +80,8 @@ describe('Platform chat multipart and SSE', () => {
   let allowed: boolean;
   const conversation = randomUUID();
   const imageId = randomUUID();
+  const widgetSession = randomUUID();
+  let regenerationConversation: string;
 
   beforeAll(async () => {
     png = await sharp({
@@ -86,6 +91,7 @@ describe('Platform chat multipart and SSE', () => {
       .toBuffer();
   });
   beforeEach(async () => {
+    regenerationConversation = conversation;
     allowed = true;
     analysis = {
       summary: 'GIST 장학금 공지. 신청 기간은 이미지에 적혀 있습니다.',
@@ -142,6 +148,7 @@ describe('Platform chat multipart and SSE', () => {
       ),
     };
     chat = {
+      getUserMessageCount: jest.fn(async () => 0),
       createMessage: jest.fn(async (_session, dto) => ({
         id: randomUUID(),
         ...dto,
@@ -152,7 +159,7 @@ describe('Platform chat multipart and SSE', () => {
       getAnswerRegenerationTarget: jest.fn(async (_session, _id, validate) => {
         const metadata = {
           platform: {
-            localConversationId: conversation,
+            localConversationId: regenerationConversation,
             question: '공지 내용 설명',
             images: [{ id: imageId }],
           },
@@ -172,7 +179,7 @@ describe('Platform chat multipart and SSE', () => {
     usage = { recordUsage: jest.fn(async () => {}) };
     unanswered = { record: jest.fn(async () => {}) };
     const module = await Test.createTestingModule({
-      controllers: [PlatformChatController],
+      controllers: [PlatformChatController, ChatController],
       providers: [
         PlatformChatService,
         PlatformImageService,
@@ -204,6 +211,17 @@ describe('Platform chat multipart and SSE', () => {
           req.session = {
             sessionId: req.headers['x-test-session'] ?? 'session',
             widgetKeyId: 'key',
+          };
+          return true;
+        },
+      })
+      .overrideGuard(WidgetSessionGuard)
+      .useValue({
+        canActivate: (context) => {
+          const req = context.switchToHttp().getRequest();
+          req.session = {
+            sessionId: widgetSession,
+            widgetKeyId: req.headers['x-widget-key'] ?? 'widget-key-a',
           };
           return true;
         },
@@ -465,5 +483,97 @@ describe('Platform chat multipart and SSE', () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toBe('장학금 100% 안내.pdf');
     expect(response.headers['cache-control']).toBe('private, no-store');
+  });
+
+  it.each(['widget-key-a', 'widget-key-b'])(
+    'accepts images for %s without an image feature flag',
+    async (key) => {
+      analysis.needsSearch = true;
+      chat.getMessagesForContext.mockResolvedValueOnce([
+        { id: randomUUID(), role: 'user', content: 'GIST 장학금 관련 질문' },
+      ]);
+      const request = form(
+        { question: '이 공지 확인해 줘', images: [{ id: imageId }] },
+        [{ id: imageId, bytes: png }],
+      );
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/v1/widget/messages/chat/stream',
+        ...request,
+        headers: { ...request.headers, 'x-widget-key': key },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain('[DONE]');
+      expect(chat.getMessagesForContext).toHaveBeenCalledWith(
+        widgetSession,
+        undefined,
+      );
+      expect(retrieval.retrieveForPlatform).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining([
+          expect.objectContaining({ content: 'GIST 장학금 관련 질문' }),
+        ]),
+        expect.any(Object),
+        expect.objectContaining({ widgetKeyId: key }),
+      );
+      expect(chat.createMessage).toHaveBeenCalledWith(
+        widgetSession,
+        expect.objectContaining({ role: 'user' }),
+      );
+    },
+  );
+
+  it('retains the widget question cap for image uploads', async () => {
+    chat.getUserMessageCount.mockResolvedValueOnce(5);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/widget/messages/chat/stream',
+      ...form({ images: [{ id: imageId }] }, [{ id: imageId, bytes: png }]),
+    });
+    expect(response.statusCode).toBe(429);
+    expect(llm.callLLM).not.toHaveBeenCalled();
+    expect(chat.createMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not accept client-controlled history or conversation identity on widget uploads', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/widget/messages/chat/stream',
+      ...form(
+        {
+          localConversationId: conversation,
+          history: [],
+          images: [{ id: imageId }],
+        },
+        [{ id: imageId, bytes: png }],
+      ),
+    });
+    expect(response.statusCode).toBe(400);
+    expect(llm.callLLM).not.toHaveBeenCalled();
+  });
+
+  it('regenerates widget image answers using their original attachments and server history', async () => {
+    regenerationConversation = widgetSession;
+    chat.getMessagesForContext.mockResolvedValueOnce([]);
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/widget/messages/' + randomUUID() + '/regenerate/stream',
+      ...form({ images: [{ id: imageId }] }, [{ id: imageId, bytes: png }]),
+    });
+    expect(response.body).toContain('[DONE]');
+    expect(
+      chat.createMessage.mock.calls.every(
+        ([, dto]) => dto.role === 'assistant',
+      ),
+    ).toBe(true);
+  });
+
+  it('requires reattaching images even on the legacy widget regeneration route', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/v1/widget/messages/' + randomUUID() + '/regenerate/stream',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(llm.callLLM).not.toHaveBeenCalled();
   });
 });

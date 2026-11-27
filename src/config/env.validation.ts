@@ -12,7 +12,6 @@ import {
   IsOptional,
   IsInt,
   IsBase64,
-  IsUUID,
   Min,
   Max,
   MinLength,
@@ -66,17 +65,6 @@ function parseBooleanEnv(defaultValue: boolean) {
  * 애플리케이션 시작 시 필수 환경 변수와 형식을 검증합니다.
  */
 export class EnvironmentVariables {
-  @IsBoolean()
-  @Transform(parseBooleanEnv(false))
-  PLATFORM_CHAT_ENABLED: boolean = false;
-
-  @ValidateIf(
-    (o: EnvironmentVariables) =>
-      o.PLATFORM_CHAT_ENABLED || !!o.PLATFORM_WIDGET_KEY_ID,
-  )
-  @IsUUID()
-  PLATFORM_WIDGET_KEY_ID?: string;
-
   // Database Configuration
   @IsString()
   @IsNotEmpty()

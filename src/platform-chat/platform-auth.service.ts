@@ -3,9 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
-  NotFoundException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { eq } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
@@ -21,21 +19,10 @@ export const PLATFORM_SESSION_SECONDS = 1800;
 export class PlatformAuthService {
   constructor(
     @Inject(DB_CONNECTION) private readonly db: Database,
-    private readonly config: ConfigService,
     private readonly jwt: JwtService,
   ) {}
 
-  requireEnabled(): string {
-    const enabled = this.config.get<boolean | string>('PLATFORM_CHAT_ENABLED');
-    const key = this.config.get<string>('PLATFORM_WIDGET_KEY_ID');
-    if (!(enabled === true || enabled === 'true') || !key) {
-      throw new NotFoundException('Platform chat is not enabled');
-    }
-    return key;
-  }
-
-  async createSession(pageUrl: string, origin?: string) {
-    const keyId = this.requireEnabled();
+  async createSession(widgetKey: string, pageUrl: string, origin?: string) {
     let url: URL;
     try {
       url = new URL(pageUrl);
@@ -55,7 +42,7 @@ export class PlatformAuthService {
     const [key] = await this.db
       .select()
       .from(widgetKeys)
-      .where(eq(widgetKeys.id, keyId))
+      .where(eq(widgetKeys.secretKey, widgetKey))
       .limit(1);
     if (
       !key ||
@@ -64,6 +51,7 @@ export class PlatformAuthService {
     ) {
       throw new ForbiddenException('Platform is unavailable for this domain');
     }
+    const keyId = key.id;
     const id = randomUUID();
     const token = await this.jwt.signAsync(
       { sessionId: id, widgetKeyId: keyId, channel: 'platform' },

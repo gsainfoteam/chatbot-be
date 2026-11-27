@@ -25,7 +25,7 @@
 
 채팅 위젯의 **인증(Auth)** 및 **대화 내역 저장(History Storage)**을 담당하는 백엔드 API입니다.
 
-자체 플랫폼용 이미지 채팅 API와 브라우저 이력 연동은 [플랫폼 채팅 계약](docs/platform-chat-contract.md)을 참고하세요. 기본 비활성 상태이며, 사용 전 DB 마이그레이션과 환경 변수 설정이 필요합니다.
+모든 위젯의 이미지 채팅 API와 자체 플랫폼의 브라우저 이력 연동은 [플랫폼 채팅 계약](docs/platform-chat-contract.md)을 참고하세요. 이미지는 별도 허용 설정 없이 지원하며, 배포 전 DB 마이그레이션과 Vision 지원 모델 설정이 필요합니다.
 
 ## Tech Stack
 

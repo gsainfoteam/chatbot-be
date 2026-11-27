@@ -190,6 +190,7 @@ export class PlatformChatService {
     req: FastifyRequest,
     reply: FastifyReply,
     regenerateId?: string,
+    historySource: 'browser' | 'widget' = 'browser',
   ): Promise<void> {
     // Reserve before reading/decompressing up to 30 MiB of input.
     const release = this.admission.acquire(session.sessionId, req.ip);
@@ -209,7 +210,12 @@ export class PlatformChatService {
     let outcome = 'error';
     const started = Date.now();
     try {
-      const { input, files } = await readPlatformInput(req, !!regenerateId);
+      const { input, files } = await readPlatformInput(
+        req,
+        !!regenerateId,
+        historySource === 'widget' ? session.sessionId : undefined,
+      );
+      let historyBefore: Date | undefined;
       try {
         for (const file of files)
           normalized.push(await this.images.normalize(file, controller.signal));
@@ -248,6 +254,35 @@ export class PlatformChatService {
         );
         const platform = target.userMetadata?.platform as { question?: string };
         input.question = platform.question ?? target.question;
+        historyBefore = target.historyBefore;
+      }
+      if (historySource === 'widget') {
+        // Only the authenticated session supplies widget history. Clients cannot
+        // select another conversation or inject browser-provided history here.
+        const previous = await this.chat.getMessagesForContext(
+          session.sessionId,
+          historyBefore,
+        );
+        let remaining = 32000;
+        input.history = [];
+        for (const message of previous.slice(0, 20)) {
+          if (
+            message.role !== MessageRole.USER &&
+            message.role !== MessageRole.ASSISTANT
+          )
+            continue;
+          const summary = message.metadata?.platform?.imageSummary;
+          const content = (
+            message.content +
+            (typeof summary === 'string'
+              ? '\n[이전 이미지 요약]\n' + summary
+              : '')
+          ).slice(0, remaining);
+          if (!content) break;
+          remaining -= content.length;
+          input.history.push({ id: message.id, role: message.role, content });
+        }
+        input.history.reverse();
       }
       const user = regenerateId
         ? undefined

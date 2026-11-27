@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { EmbeddingBackfillModule } from './embedding/backfill/embedding-backfill.module';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { DbModule } from './db/db.module';
@@ -15,6 +16,9 @@ import { PdfProcessorModule } from './pdf-processor/pdf-processor.module';
 import { OrganizationsModule } from './organizations/organizations.module';
 import { UnansweredQuestionsAdminModule } from './unanswered-questions/unanswered-questions-admin.module';
 import { ReportsModule } from './reports/reports.module';
+import { SuggestedQuestionsModule } from './suggested-questions/suggested-questions.module';
+import { SuggestedQuestionsAdminModule } from './suggested-questions/suggested-questions-admin.module';
+import { SuggestedQuestionsGenerationModule } from './suggested-questions/generation/suggested-questions-generation.module';
 
 @Module({
   imports: [
@@ -23,6 +27,8 @@ import { ReportsModule } from './reports/reports.module';
       envFilePath: '.env',
       validate, // 환경 변수 검증 추가
     }),
+    // @Cron 데코레이터를 쓰기 위한 등록. 추천 질문 생성 주기 작업이 쓴다.
+    ScheduleModule.forRoot(),
     DbModule,
     AuthModule,
     WidgetAuthModule,
@@ -35,6 +41,9 @@ import { ReportsModule } from './reports/reports.module';
     EmbeddingBackfillModule,
     UnansweredQuestionsAdminModule,
     ReportsModule,
+    SuggestedQuestionsModule,
+    SuggestedQuestionsAdminModule,
+    SuggestedQuestionsGenerationModule,
   ],
   controllers: [AppController],
   providers: [AppService],

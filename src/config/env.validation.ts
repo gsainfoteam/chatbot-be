@@ -304,6 +304,14 @@ export class EnvironmentVariables {
   @IsString()
   ZIGGLE_NOTICE_URL_BASE?: string;
 
+  // 추천 질문 생성 주기 작업 (CHA3-21). Ziggle MCP 설정이 있어야 동작한다.
+
+  /** 주기 작업 on/off. 기본 꺼짐. 운영에서 명시적으로 켠다. */
+  @IsOptional()
+  @IsBoolean()
+  @Transform(parseBooleanEnv(false))
+  SUGGESTED_QUESTIONS_ENABLED?: boolean;
+
   // 웹 검색 (에이전트 도구, Gemini 구글 검색 그라운딩). 실험 기능이라 기본값은 꺼짐.
 
   @IsOptional()

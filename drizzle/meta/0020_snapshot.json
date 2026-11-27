@@ -1,5 +1,5 @@
 {
-  "id": "31c13656-b0a3-4a0e-b137-575d27a7e019",
+  "id": "26f82567-7707-460b-88ff-28f3131684f6",
   "prevId": "1dbd8853-8097-445a-a90a-6881024c1fc5",
   "version": "7",
   "dialect": "postgresql",
@@ -1031,6 +1031,32 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.notice_question_ingestions": {
+      "name": "notice_question_ingestions",
+      "schema": "",
+      "columns": {
+        "notice_id": {
+          "name": "notice_id",
+          "type": "integer",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.organization_memberships": {
       "name": "organization_memberships",
       "schema": "",
@@ -1355,12 +1381,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "end_user_key": {
-          "name": "end_user_key",
-          "type": "varchar(64)",
-          "primaryKey": false,
-          "notNull": false
-        },
         "expires_at": {
           "name": "expires_at",
           "type": "timestamp",
@@ -1420,22 +1440,6 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
-        },
-        "sessions_end_user_key_idx": {
-          "name": "sessions_end_user_key_idx",
-          "columns": [
-            {
-              "expression": "end_user_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"sessions\".\"end_user_key\" IS NOT NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
         }
       },
       "foreignKeys": {
@@ -1465,6 +1469,167 @@
       },
       "policies": {},
       "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.suggested_questions": {
+      "name": "suggested_questions",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "question": {
+          "name": "question",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "normalized_question": {
+          "name": "normalized_question",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "prompt": {
+          "name": "prompt",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "source": {
+          "name": "source",
+          "type": "suggested_question_source",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'ADMIN'"
+        },
+        "status": {
+          "name": "status",
+          "type": "suggested_question_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'PENDING'"
+        },
+        "notice_id": {
+          "name": "notice_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "notice_title": {
+          "name": "notice_title",
+          "type": "varchar(500)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by_idp_uuid": {
+          "name": "created_by_idp_uuid",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reviewed_by_idp_uuid": {
+          "name": "reviewed_by_idp_uuid",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reviewed_at": {
+          "name": "reviewed_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "suggested_questions_normalized_question_unique": {
+          "name": "suggested_questions_normalized_question_unique",
+          "columns": [
+            {
+              "expression": "normalized_question",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "suggested_questions_serving_idx": {
+          "name": "suggested_questions_serving_idx",
+          "columns": [
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "suggested_questions_notice_id_idx": {
+          "name": "suggested_questions_notice_id_idx",
+          "columns": [
+            {
+              "expression": "notice_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "suggested_questions_question_length": {
+          "name": "suggested_questions_question_length",
+          "value": "char_length(\"suggested_questions\".\"question\") BETWEEN 1 AND 100"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.unanswered_questions": {
@@ -2176,18 +2341,6 @@
           "primaryKey": false,
           "notNull": false
         },
-        "question_limit": {
-          "name": "question_limit",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "question_limit_window_seconds": {
-          "name": "question_limit_window_seconds",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -2262,12 +2415,7 @@
         }
       },
       "policies": {},
-      "checkConstraints": {
-        "widget_keys_question_limit_check": {
-          "name": "widget_keys_question_limit_check",
-          "value": "(\"widget_keys\".\"question_limit\" IS NULL AND \"widget_keys\".\"question_limit_window_seconds\" IS NULL) OR (\"widget_keys\".\"question_limit\" IS NOT NULL AND \"widget_keys\".\"question_limit_window_seconds\" IS NOT NULL AND \"widget_keys\".\"question_limit\" BETWEEN 1 AND 10000 AND \"widget_keys\".\"question_limit_window_seconds\" BETWEEN 60 AND 2592000)"
-        }
-      },
+      "checkConstraints": {},
       "isRLSEnabled": false
     }
   },
@@ -2344,6 +2492,23 @@
       "values": [
         "MANAGER",
         "MEMBER"
+      ]
+    },
+    "public.suggested_question_source": {
+      "name": "suggested_question_source",
+      "schema": "public",
+      "values": [
+        "ADMIN",
+        "AI"
+      ]
+    },
+    "public.suggested_question_status": {
+      "name": "suggested_question_status",
+      "schema": "public",
+      "values": [
+        "PENDING",
+        "APPROVED",
+        "REJECTED"
       ]
     },
     "public.unanswered_question_status": {

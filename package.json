@@ -36,9 +36,11 @@
     "db:migrate:safe": "bash scripts/migrate.sh",
     "db:backfill:answers": "bun src/scripts/backfill-usage-answers.ts",
     "db:backfill:embeddings": "bun src/scripts/backfill-chunk-embeddings.ts",
+    "db:backfill:questions": "bun src/scripts/backfill-suggested-questions.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:backfill:embeddings:prod": "bun dist/backfill-chunk-embeddings.js"
+    "db:backfill:embeddings:prod": "bun dist/backfill-chunk-embeddings.js",
+    "db:backfill:questions:prod": "node dist/backfill-suggested-questions.js"
   },
   "dependencies": {
     "@fastify/multipart": "^9.0.1",
@@ -55,6 +57,7 @@
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-fastify": "^11.1.11",
+    "@nestjs/schedule": "^12.0.4",
     "@nestjs/swagger": "^11.2.4",
     "axios": "^1.13.2",
     "class-transformer": "^0.5.1",
@@ -116,7 +119,7 @@
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "transformIgnorePatterns": [
-      "node_modules/(?!nanoid)"
+      "node_modules/(?!(nanoid|@nestjs/schedule))"
     ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"

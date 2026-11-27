@@ -11,8 +11,16 @@ env:
   IMAGE_TAG: prod${{ github.run_number }}
 
 jobs:
+  test:
+    name: Test
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+      packages: read
+
   build:
     name: Build Docker Image
+    needs: test
     runs-on: ubuntu-latest
 
     permissions:

@@ -2,10 +2,11 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 describe('OrganizationsRepository concurrency invariants', () => {
+  // Normalize CRLF checkouts (e.g. Windows autocrlf) so multi-line snippets match.
   const source = readFileSync(
     join(process.cwd(), 'src', 'organizations', 'organizations.repository.ts'),
     'utf8',
-  );
+  ).replace(/\r\n/g, '\n');
 
   it('serializes final-manager changes on the organization row', () => {
     expect(source).toContain(

@@ -1,4 +1,4 @@
 /**
- * 위젯 세션당 최대 질문 횟수 (rate limit)
+ * LLM 컨텍스트에 넣는 최근 대화 메시지 수
  */
-export const MAX_QUESTIONS_PER_SESSION = 5;
+export const CONTEXT_MESSAGE_LIMIT = 5;

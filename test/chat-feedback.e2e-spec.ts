@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ExecutionContext,
+  HttpException,
+  HttpStatus,
   NotFoundException,
   UnauthorizedException,
   ValidationPipe,
@@ -11,6 +13,7 @@ import {
   NestFastifyApplication,
 } from '@nestjs/platform-fastify';
 import type { FastifyReply, FastifyRequest } from 'fastify';
+import { PlatformChatService } from '../src/platform-chat/platform-chat.service';
 import { ChatController } from '../src/chat/chat.controller';
 import { ChatService } from '../src/chat/services/chat.service';
 import { ChatOrchestrationService } from '../src/chat/services/chat-orchestration.service';
@@ -46,7 +49,7 @@ describe('Chat feedback API (e2e)', () => {
   const chatService = {
     getMessages: jest.fn(),
     createMessage: jest.fn(),
-    getUserMessageCount: jest.fn(),
+    assertQuestionAllowed: jest.fn(),
     upsertMessageFeedback: jest.fn(),
     getAnswerRegenerationTarget: jest.fn(),
   };
@@ -58,6 +61,7 @@ describe('Chat feedback API (e2e)', () => {
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
       providers: [
+        { provide: PlatformChatService, useValue: { stream: jest.fn() } },
         { provide: ChatService, useValue: chatService },
         {
           provide: ChatOrchestrationService,
@@ -204,8 +208,9 @@ describe('Chat feedback API (e2e)', () => {
     expect(chatService.getAnswerRegenerationTarget).toHaveBeenCalledWith(
       'session-1',
       messageId,
+      expect.any(Function),
     );
-    expect(chatService.getUserMessageCount).not.toHaveBeenCalled();
+    expect(chatService.assertQuestionAllowed).not.toHaveBeenCalled();
     expect(
       chatOrchestrationService.handleStreamingResponse,
     ).toHaveBeenCalledWith(
@@ -216,6 +221,7 @@ describe('Chat feedback API (e2e)', () => {
       {
         persistUserMessage: false,
         historyBefore: createdAt,
+        widgetKeyId: 'widget-key-1',
         assistantMetadata: {
           regeneratedFromMessageId: messageId,
           regeneratedFromFeedback: FeedbackRating.BAD,
@@ -229,6 +235,36 @@ describe('Chat feedback API (e2e)', () => {
 
     expect(response.statusCode).toBe(400);
     expect(chatService.getAnswerRegenerationTarget).not.toHaveBeenCalled();
+    expect(
+      chatOrchestrationService.handleStreamingResponse,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('returns the question limit as HTTP 429 before the stream starts', async () => {
+    const body = {
+      statusCode: 429,
+      message: 'question limit reached',
+      limit: 20,
+      windowSeconds: 86400,
+      retryAfterSeconds: 60,
+    };
+    chatService.assertQuestionAllowed.mockRejectedValueOnce(
+      new HttpException(body, HttpStatus.TOO_MANY_REQUESTS),
+    );
+
+    const response = await app!
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: '/api/v1/widget/messages/chat/stream',
+        headers: { authorization: 'Bearer test' },
+        payload: { question: 'question' },
+      });
+
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toEqual(body);
+    expect(chatService.assertQuestionAllowed).toHaveBeenCalledWith('session-1');
     expect(
       chatOrchestrationService.handleStreamingResponse,
     ).not.toHaveBeenCalled();

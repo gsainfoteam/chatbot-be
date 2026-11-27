@@ -39,6 +39,7 @@ function createWorker(options: {
     sortOrder: number;
   }>;
   processPdfError?: Error;
+  processPdfImpl?: (...args: unknown[]) => Promise<unknown>;
   uploadDocumentsError?: Error;
   heartbeatOwned?: boolean;
   markFailed?: boolean;
@@ -77,11 +78,17 @@ function createWorker(options: {
     heartbeatProcessing: jest.fn<
       (id: string, processingToken: string) => Promise<boolean>
     >(() => Promise.resolve(options.heartbeatOwned ?? true)),
+    failRepeatedlyStuck: jest.fn<
+      () => Promise<{ id: string; resourceName: string }[]>
+    >(() => Promise.resolve([])),
     requeueStaleProcessing: jest.fn(() => Promise.resolve(0)),
     claimQueued: jest.fn(() => Promise.resolve([])),
   };
   const gcs = {
     downloadPdf: jest.fn(() => Promise.resolve(Buffer.from('%PDF-test'))),
+    uploadPageImage: jest.fn<
+      (resourceName: string, page: number, png: Buffer) => Promise<void>
+    >(() => Promise.resolve()),
     uploadDocuments: options.uploadDocumentsError
       ? jest.fn(() => Promise.reject(options.uploadDocumentsError!))
       : jest.fn(() => Promise.resolve()),
@@ -105,9 +112,11 @@ function createWorker(options: {
     chunks,
   };
   const pipeline = {
-    processPdf: options.processPdfError
-      ? jest.fn(() => Promise.reject(options.processPdfError!))
-      : jest.fn(() => Promise.resolve(pipelineResult)),
+    processPdf:
+      options.processPdfImpl ??
+      (options.processPdfError
+        ? jest.fn(() => Promise.reject(options.processPdfError!))
+        : jest.fn(() => Promise.resolve(pipelineResult))),
     processMarkdown: jest.fn<
       (markdown: string, resourceName: string) => Promise<unknown>
     >(() => Promise.resolve(pipelineResult)),
@@ -134,6 +143,99 @@ function createWorker(options: {
     embeddingService,
   };
 }
+
+describe('PdfProcessorWorker page images', () => {
+  type ImageSink = (page: number, png: Buffer) => Promise<void>;
+  const callable = (worker: PdfProcessorWorker) =>
+    worker as unknown as { processDocument(doc: Document): Promise<void> };
+
+  it('stores page images the pipeline reports under the document', async () => {
+    const png = Buffer.from('png');
+    const { worker, gcs } = createWorker({
+      completeProcessing: true,
+      processPdfImpl: async (...args) => {
+        await (args[2] as ImageSink)(3, png);
+        return {
+          documents: {},
+          metadata: { description: '', chunks: [] },
+          summary: '',
+          chunks: [
+            { path: 'test', description: '', content: '# t', sortOrder: 0 },
+          ],
+        };
+      },
+    });
+
+    await callable(worker).processDocument(processingDocument());
+
+    expect(gcs.uploadPageImage).toHaveBeenCalledWith('test', 3, png);
+  });
+
+  it('stores nothing once the document is no longer ours', async () => {
+    let storing: Promise<void> | undefined;
+    const { worker, gcs } = createWorker({
+      completeProcessing: true,
+      heartbeatOwned: false,
+      processPdfImpl: async (...args) => {
+        storing = (args[2] as ImageSink)(3, Buffer.from('png'));
+        await storing.catch(() => undefined);
+        return {
+          documents: {},
+          metadata: { description: '', chunks: [] },
+          summary: '',
+          chunks: [
+            { path: 'test', description: '', content: '# t', sortOrder: 0 },
+          ],
+        };
+      },
+    });
+
+    await callable(worker).processDocument(processingDocument());
+
+    await expect(storing).rejects.toThrow('ownership');
+    expect(gcs.uploadPageImage).not.toHaveBeenCalled();
+  });
+
+  it('cleans up stored images when the pipeline fails afterwards', async () => {
+    const { worker, gcs } = createWorker({
+      completeProcessing: true,
+      processPdfImpl: async (...args) => {
+        await (args[2] as ImageSink)(1, Buffer.from('png'));
+        throw new Error('pipeline failed');
+      },
+    });
+
+    await callable(worker).processDocument(processingDocument());
+
+    expect(gcs.deleteProcessedArtifacts).toHaveBeenCalledWith('test');
+  });
+});
+
+describe('PdfProcessorWorker stale documents', () => {
+  const callable = (worker: PdfProcessorWorker) =>
+    worker as unknown as { requeueStale(): Promise<void> };
+
+  it('cleans up after a document stuck twice and requeues the rest', async () => {
+    const { worker, repo, gcs } = createWorker({ completeProcessing: true });
+    repo.failRepeatedlyStuck.mockResolvedValue([
+      { id: 'stuck-doc', resourceName: 'stuck' },
+    ]);
+
+    await callable(worker).requeueStale();
+
+    expect(gcs.deleteProcessedArtifacts).toHaveBeenCalledWith('stuck');
+    expect(repo.requeueStaleProcessing).toHaveBeenCalled();
+  });
+
+  it('touches no artifacts when nothing is stuck twice', async () => {
+    const { worker, repo, gcs } = createWorker({ completeProcessing: true });
+
+    await callable(worker).requeueStale();
+
+    expect(gcs.deleteProcessedArtifacts).not.toHaveBeenCalled();
+    expect(repo.requeueStaleProcessing).toHaveBeenCalled();
+  });
+});
 
 describe('PdfProcessorWorker attempt ownership', () => {
   it('does not delete shared artifacts when completion loses ownership', async () => {

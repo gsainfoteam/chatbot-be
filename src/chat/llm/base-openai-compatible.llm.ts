@@ -8,9 +8,12 @@ import type { Readable } from 'stream';
 import { inspect } from 'node:util';
 import type { LlmClient, LlmCallOptions } from './llm-client.interface';
 import type {
+  GoogleSearchGrounding,
+  GroundedSearchResponse,
   LlmMessage,
   LlmModelType,
   LlmRequest,
+  LlmRequestMessage,
   LlmResponse,
   LlmToolResult,
 } from '../types/llm.types';
@@ -70,7 +73,7 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   }
 
   async callLLM(
-    messages: LlmMessage[],
+    messages: LlmRequestMessage[],
     model?: string,
     options?: LlmCallOptions,
   ): Promise<LlmResponse> {
@@ -80,12 +83,22 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       temperature: options?.temperature ?? 0.7,
       max_tokens: options?.max_tokens ?? 2000,
     };
+    if (options?.tools?.length) {
+      request.tools = options.tools;
+      if (options.tool_choice) request.tool_choice = options.tool_choice;
+      if (options.parallel_tool_calls != null) {
+        request.parallel_tool_calls = options.parallel_tool_calls;
+      }
+    }
+
+    this.applyModelParameters(request);
 
     const requestLogSummary = {
       model: request.model,
       stream: false,
       temperature: request.temperature,
       max_tokens: request.max_tokens,
+      tools: request.tools?.map((tool) => tool.function.name),
       messages: this.summarizeMessages(messages),
     };
 
@@ -95,12 +108,14 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
           .post<LlmResponse>(`${this.baseUrl}/chat/completions`, request, {
             headers: this.buildHeaders(),
             timeout: options?.timeoutMs ?? 15000,
+            signal: options?.signal,
           })
           .pipe(
             catchError((error: AxiosError) => {
               this.logApiError(error, requestLogSummary);
               throw new InternalServerErrorException(
                 `Failed to call ${this.providerLabel} API: ${error.message}`,
+                { cause: error },
               );
             }),
           ),
@@ -114,10 +129,13 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   }
 
   async generateFinalResponseStream(
-    messages: LlmMessage[],
+    messages: LlmRequestMessage[],
     toolResults: LlmToolResult[],
     model?: string,
-    options?: { temperature?: number },
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'signal' | 'max_tokens' | 'timeoutMs'
+    >,
   ): Promise<Readable> {
     const toolMessages: LlmMessage[] = toolResults.map((result) => ({
       role: 'tool',
@@ -132,11 +150,12 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       model: model || this.defaultModel,
       messages: updatedMessages,
       temperature: options?.temperature ?? 0.7,
-      max_tokens: 2000,
+      max_tokens: options?.max_tokens ?? 2000,
       stream: true,
       stream_options: { include_usage: true },
     };
 
+    this.applyModelParameters(request);
     const requestLogSummary = {
       model: request.model,
       stream: request.stream,
@@ -156,7 +175,8 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
           .post<Readable>(`${this.baseUrl}/chat/completions`, request, {
             headers: this.buildHeaders(),
             responseType: 'stream',
-            timeout: 15000,
+            timeout: options?.timeoutMs ?? 15000,
+            signal: options?.signal,
           })
           .pipe(
             catchError((error: AxiosError) => {
@@ -175,6 +195,54 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
     }
   }
 
+  async searchWithGoogle(
+    messages: LlmMessage[],
+    model: string,
+    options?: Pick<
+      LlmCallOptions,
+      'temperature' | 'max_tokens' | 'timeoutMs' | 'signal'
+    >,
+  ): Promise<GroundedSearchResponse> {
+    const request = {
+      model,
+      messages,
+      tools: [{ googleSearch: {} }],
+      temperature: options?.temperature ?? 0,
+      max_tokens: options?.max_tokens ?? 1500,
+    };
+
+    const response = await firstValueFrom(
+      this.httpService
+        .post<LlmResponse & { vertex_ai_grounding_metadata?: unknown }>(
+          `${this.baseUrl}/chat/completions`,
+          request,
+          {
+            headers: this.buildHeaders(),
+            timeout: options?.timeoutMs ?? 15000,
+          },
+        )
+        .pipe(
+          catchError((error: AxiosError) => {
+            this.logApiError(error, {
+              model,
+              googleSearch: true,
+              messages: this.summarizeMessages(messages),
+            });
+            throw new InternalServerErrorException(
+              `Failed to call ${this.providerLabel} API: ${error.message}`,
+            );
+          }),
+        ),
+    );
+
+    const data = response.data;
+    return {
+      content: data.choices?.[0]?.message?.content ?? '',
+      grounding: parseGoogleSearchGrounding(data.vertex_ai_grounding_metadata),
+      usage: data.usage,
+    };
+  }
+
   protected buildHeaders(): Record<string, string> {
     return {
       Authorization: `Bearer ${this.apiKey}`,
@@ -187,11 +255,14 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   protected logApiError(error: AxiosError, requestLogSummary: unknown): void {
     const statusCode = error.response?.status;
     const responseData = error.response?.data;
+    const hasImages = (
+      requestLogSummary as { messages?: { imageCount?: number } }
+    )?.messages?.imageCount;
     this.logger.error(
       `${this.providerLabel} API error (status ${statusCode}): ${error.message}`,
       error instanceof Error ? error.stack : undefined,
     );
-    if (responseData != null) {
+    if (responseData != null && !hasImages) {
       this.logger.error(
         `${this.providerLabel} error response body: ${this.safeStringify(responseData)}`,
       );
@@ -202,43 +273,67 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
   }
 
   protected safeStringify(value: unknown, maxLen: number = 2000): string {
+    const redact = (text: string) =>
+      text.replace(
+        /data:image\/[^;,\s]+;base64,[A-Za-z0-9+/=_-]+/g,
+        '[image omitted]',
+      );
     try {
       if (typeof value === 'string') {
-        return value.length > maxLen
-          ? value.slice(0, maxLen) + '...(truncated)'
-          : value;
+        value = redact(value);
+        return (value as string).length > maxLen
+          ? (value as string).slice(0, maxLen) + '...(truncated)'
+          : (value as string);
       }
 
       if (typeof Buffer !== 'undefined' && Buffer.isBuffer(value as Buffer)) {
-        const str = (value as Buffer).toString('utf8');
+        const str = redact((value as Buffer).toString('utf8'));
         return str.length > maxLen
           ? str.slice(0, maxLen) + '...(truncated)'
           : str;
       }
 
-      const str = JSON.stringify(value, null, 2);
+      const str =
+        JSON.stringify(
+          value,
+          (_key, item: unknown) =>
+            typeof item === 'string' ? redact(item) : item,
+          2,
+        ) ?? '';
       return str.length > maxLen
         ? str.slice(0, maxLen) + '...(truncated)'
         : str;
     } catch {
-      const str = inspect(value, {
-        depth: 5,
-        maxArrayLength: 50,
-        breakLength: 120,
-      });
+      const str = redact(
+        inspect(value, {
+          depth: 5,
+          maxArrayLength: 50,
+          breakLength: 120,
+        }),
+      );
       return str.length > maxLen
         ? str.slice(0, maxLen) + '...(truncated)'
         : str;
     }
   }
 
-  protected summarizeMessages(messages: LlmMessage[]) {
+  /** Reasoning-model Chat Completions uses a completion budget and no temperature. */
+  private applyModelParameters(request: LlmRequest): void {
+    if (/^(?:openai\/)?gpt-(?:5|6)(?:[.-]|$)/i.test(request.model)) {
+      request.max_completion_tokens = request.max_tokens;
+      delete request.max_tokens;
+      delete request.temperature;
+    }
+  }
+
+  protected summarizeMessages(messages: LlmRequestMessage[]) {
     const roleCounts: Record<string, number> = {};
     let assistantToolCalls = 0;
     let toolRoleMessages = 0;
     let toolRoleHasNameField = 0;
     let contentNullCount = 0;
     let contentCharsSum = 0;
+    let imageCount = 0;
 
     for (const m of messages) {
       roleCounts[m.role] = (roleCounts[m.role] ?? 0) + 1;
@@ -253,6 +348,15 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       }
       if (m.content === null) contentNullCount += 1;
       if (typeof m.content === 'string') contentCharsSum += m.content.length;
+      if (Array.isArray(m.content)) {
+        imageCount += m.content.filter(
+          (part) => part.type === 'image_url',
+        ).length;
+        contentCharsSum += m.content.reduce(
+          (sum, part) => sum + (part.type === 'text' ? part.text.length : 0),
+          0,
+        );
+      }
     }
 
     return {
@@ -263,6 +367,65 @@ export abstract class BaseOpenAiCompatibleLlm implements LlmClient {
       toolRoleHasNameField,
       contentNullCount,
       contentCharsSum,
+      imageCount,
     };
   }
+}
+
+/**
+ * LiteLLM이 Vertex AI 응답에서 옮겨 주는 그라운딩 메타데이터를 읽는다.
+ * 후보(candidate)별 배열로 오므로 첫 번째만 쓴다. 검색을 하지 않았으면 빈 배열이다.
+ */
+export function parseGoogleSearchGrounding(
+  raw: unknown,
+): GoogleSearchGrounding | null {
+  const meta = (Array.isArray(raw) ? raw[0] : raw) as
+    | Record<string, unknown>
+    | undefined;
+  if (!meta || typeof meta !== 'object') return null;
+
+  const chunks = (
+    Array.isArray(meta.groundingChunks) ? meta.groundingChunks : []
+  ).map((chunk: unknown) => {
+    const web = (chunk as { web?: { uri?: unknown; title?: unknown } })?.web;
+    return {
+      uri: typeof web?.uri === 'string' ? web.uri : '',
+      title: typeof web?.title === 'string' ? web.title : '',
+    };
+  });
+  const supports = (
+    Array.isArray(meta.groundingSupports) ? meta.groundingSupports : []
+  ).flatMap((support: unknown) => {
+    const { segment, groundingChunkIndices } = (support ?? {}) as {
+      segment?: { text?: unknown };
+      groundingChunkIndices?: unknown;
+    };
+    if (typeof segment?.text !== 'string' || !segment.text.trim()) return [];
+    const chunkIndices = Array.isArray(groundingChunkIndices)
+      ? groundingChunkIndices.filter(
+          (index): index is number =>
+            Number.isInteger(index) && index >= 0 && index < chunks.length,
+        )
+      : [];
+    return [{ text: segment.text.trim(), chunkIndices }];
+  });
+  const queries = Array.isArray(meta.webSearchQueries)
+    ? meta.webSearchQueries.filter(
+        (query): query is string => typeof query === 'string',
+      )
+    : [];
+  const entryPoint = (meta.searchEntryPoint as { renderedContent?: unknown })
+    ?.renderedContent;
+
+  if (chunks.length === 0 && supports.length === 0 && queries.length === 0) {
+    return null;
+  }
+  return {
+    queries,
+    chunks,
+    supports,
+    ...(typeof entryPoint === 'string' && entryPoint
+      ? { searchEntryPointHtml: entryPoint }
+      : {}),
+  };
 }

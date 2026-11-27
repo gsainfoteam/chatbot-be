@@ -38,6 +38,7 @@ export class WidgetSessionGuard implements CanActivate {
           and(
             eq(sessions.id, payload.sessionId),
             gt(sessions.expiresAt, new Date()),
+            eq(sessions.channel, 'widget'),
           ),
         )
         .limit(1);

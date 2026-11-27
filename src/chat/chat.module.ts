@@ -15,6 +15,21 @@ import { UsageModule } from '../usage/usage.module';
 import { UnansweredQuestionsModule } from '../unanswered-questions/unanswered-questions.module';
 import { LLM_CLIENT } from './llm/llm-client.interface';
 import { llmClientProvider } from './llm/llm-client.provider';
+import { AgentLoopService } from './agent/agent-loop.service';
+import { SearchDocumentsTool } from './agent/tools/search-documents.tool';
+import { ZiggleNoticeClient } from './agent/tools/ziggle/ziggle-notice.client';
+import { SearchNoticesTool } from './agent/tools/ziggle/search-notices.tool';
+import { GetNoticeTool } from './agent/tools/ziggle/get-notice.tool';
+import { WebSearchClient } from './agent/tools/web/web-search.client';
+import {
+  PlatformAuthController,
+  PlatformChatController,
+} from '../platform-chat/platform.controller';
+import { PlatformAuthService } from '../platform-chat/platform-auth.service';
+import { PlatformSessionGuard } from '../platform-chat/platform-session.guard';
+import { PlatformChatService } from '../platform-chat/platform-chat.service';
+import { PlatformImageService } from '../platform-chat/platform-image.service';
+import { SearchWebTool } from './agent/tools/web/search-web.tool';
 
 @Module({
   imports: [
@@ -26,7 +41,7 @@ import { llmClientProvider } from './llm/llm-client.provider';
     UsageModule,
     UnansweredQuestionsModule,
   ],
-  controllers: [ChatController],
+  controllers: [ChatController, PlatformAuthController, PlatformChatController],
   providers: [
     ChatService,
     llmClientProvider,
@@ -34,7 +49,18 @@ import { llmClientProvider } from './llm/llm-client.provider';
     VectorChunkSelectionService,
     ResourceContentService,
     ChatStreamTransport,
+    SearchDocumentsTool,
+    ZiggleNoticeClient,
+    SearchNoticesTool,
+    GetNoticeTool,
+    WebSearchClient,
+    SearchWebTool,
+    AgentLoopService,
     ChatOrchestrationService,
+    PlatformAuthService,
+    PlatformSessionGuard,
+    PlatformChatService,
+    PlatformImageService,
   ],
   exports: [LLM_CLIENT],
 })

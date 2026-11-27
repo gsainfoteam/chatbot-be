@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   InternalServerErrorException,
   NotFoundException,
 } from '@nestjs/common';
@@ -44,6 +45,10 @@ class SelectBuilder<Row> implements PromiseLike<Row[]> {
   }
 
   orderBy(_order: unknown): this {
+    return this;
+  }
+
+  offset(_offset: number): this {
     return this;
   }
 
@@ -98,6 +103,7 @@ class InsertBuilder {
 
 class FakeDb {
   readonly feedbackRows: MessageFeedback[] = [];
+  readonly calls: string[] = [];
   executeCalls = 0;
   insertError: Error | null = null;
   returnEmptyFeedbackInsert = false;
@@ -109,10 +115,12 @@ class FakeDb {
   }
 
   select(_selection?: unknown): SelectBuilder<unknown> {
+    this.calls.push('select');
     return new SelectBuilder(this.selectQueue.shift() ?? []);
   }
 
   execute(_query: unknown): Promise<unknown[]> {
+    this.calls.push('execute');
     this.executeCalls += 1;
     return Promise.resolve(this.selectQueue.shift() ?? []);
   }
@@ -122,6 +130,7 @@ class FakeDb {
   }
 
   insert(table: unknown): InsertBuilder {
+    this.calls.push('insert');
     return new InsertBuilder(this, table);
   }
 
@@ -616,8 +625,10 @@ describe('ChatService assistant answer aggregation', () => {
   });
 
   it('does not touch total_answers for user messages', async () => {
-    const { service, usageService } = createService();
-
+    const { service, db, usageService } = createService();
+    db.queueSelect([
+      { widgetKeyId, endUserKey: null, limit: null, windowSeconds: null },
+    ]);
     await service.createMessage(sessionId, {
       role: MessageRole.USER,
       content: 'question',
@@ -681,5 +692,103 @@ describe('ChatService assistant answer aggregation', () => {
     ).rejects.toBeInstanceOf(InternalServerErrorException);
 
     expect(usageService.incrementTotalAnswers).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatService question limit', () => {
+  const sessionId = 'session-1';
+  const question = { role: MessageRole.USER, content: 'question' };
+  const limited = {
+    widgetKeyId: 'widget-key-1',
+    endUserKey: 'end-user-hash',
+    limit: 2,
+    windowSeconds: 3600,
+  };
+
+  it('preserves unlimited questions for the stored platform channel', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ ...limited, channel: 'platform' }]);
+    await expect(
+      service.createMessage(sessionId, question),
+    ).resolves.toMatchObject({ role: 'user' });
+    expect(db.calls).toEqual(['select', 'insert']);
+  });
+
+  it('does not let message metadata bypass a configured widget limit', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ ...limited, channel: 'widget' }]);
+    db.queueSelect([]);
+    db.queueSelect([{ retryAfterSeconds: 120 }]);
+    await expect(
+      service.createMessage(sessionId, {
+        ...question,
+        metadata: { channel: 'platform' },
+      }),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(db.calls).not.toContain('insert');
+  });
+
+  it('stores a question without locking or counting when the key has no limit', async () => {
+    const { service, db } = createService();
+    db.queueSelect([{ ...limited, limit: null, windowSeconds: null }]);
+
+    await expect(
+      service.createMessage(sessionId, question),
+    ).resolves.toMatchObject({ role: 'user' });
+    expect(db.calls).toEqual(['select', 'insert']);
+  });
+
+  it('locks the user before counting and stores a question under the limit', async () => {
+    const { service, db } = createService();
+    db.queueSelect([limited]);
+    db.queueSelect([]); // advisory lock
+    db.queueSelect([]); // fewer recent questions than the limit
+
+    await expect(
+      service.createMessage(sessionId, question),
+    ).resolves.toMatchObject({ role: 'user' });
+    expect(db.calls).toEqual(['select', 'execute', 'select', 'insert']);
+  });
+
+  it('rejects a question at the limit with the wait time from the database', async () => {
+    const { service, db } = createService();
+    db.queueSelect([limited]);
+    db.queueSelect([]);
+    db.queueSelect([{ retryAfterSeconds: 120 }]);
+
+    const error = await service
+      .createMessage(sessionId, question)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(HttpException);
+    expect((error as HttpException).getStatus()).toBe(429);
+    expect((error as HttpException).getResponse()).toEqual({
+      statusCode: 429,
+      message: expect.any(String),
+      limit: 2,
+      windowSeconds: 3600,
+      retryAfterSeconds: 120,
+    });
+    expect(db.calls).not.toContain('insert');
+  });
+
+  it('pre-checks without taking the transaction lock', async () => {
+    const { service, db } = createService();
+    db.queueSelect([limited]);
+    db.queueSelect([{ retryAfterSeconds: 5 }]);
+
+    await expect(
+      service.assertQuestionAllowed(sessionId),
+    ).rejects.toMatchObject({ status: 429 });
+    expect(db.calls).toEqual(['select', 'select']);
+  });
+
+  it('rejects a question for a missing session', async () => {
+    const { service, db } = createService();
+    db.queueSelect([]);
+
+    await expect(
+      service.createMessage(sessionId, question),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 });

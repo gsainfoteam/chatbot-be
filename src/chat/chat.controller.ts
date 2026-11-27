@@ -12,9 +12,9 @@ import {
   DefaultValuePipe,
   Res,
   Logger,
-  HttpException,
-  HttpStatus,
   ParseUUIDPipe,
+  BadRequestException,
+  ValidationPipe,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -24,6 +24,7 @@ import {
   ApiQuery,
   ApiParam,
   ApiBearerAuth,
+  ApiConsumes,
 } from '@nestjs/swagger';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ChatService } from './services/chat.service';
@@ -32,14 +33,11 @@ import { McpResourceService } from '../mcp/mcp-resource.service';
 import { WidgetSessionGuard } from '../auth/guards/widget-session.guard';
 import { CurrentSession } from '../auth/decorators/current-session.decorator';
 import type { SessionPayload } from '../auth/decorators/current-session.decorator';
-import {
-  ChatMessageInputDto,
-  MessageRole,
-} from '../common/dto/chat-message-input.dto';
+import { ChatMessageInputDto } from '../common/dto/chat-message-input.dto';
 import { ChatMessageDto } from '../common/dto/chat-message.dto';
 import { PaginatedMessagesDto } from '../common/dto/paginated-messages.dto';
 import { ChatRequestDto } from './dto/chat-request.dto';
-import { MAX_QUESTIONS_PER_SESSION } from './constants';
+import { PlatformChatService } from '../platform-chat/platform-chat.service';
 import {
   FeedbackRating,
   MessageFeedbackDto,
@@ -57,6 +55,7 @@ export class ChatController {
     private readonly chatService: ChatService,
     private readonly chatOrchestrationService: ChatOrchestrationService,
     private readonly mcpResourceService: McpResourceService,
+    private readonly imageChat: PlatformChatService,
   ) {}
 
   @Get()
@@ -110,27 +109,14 @@ export class ChatController {
   })
   @ApiResponse({
     status: 429,
-    description: '세션당 질문 횟수 초과 (user 메시지 최대 5회)',
+    description:
+      '사용자별 질문 한도 초과 (위젯 키에 한도를 설정한 경우). 본문: statusCode, message, limit, windowSeconds, retryAfterSeconds',
   })
   async createMessage(
     @CurrentSession() session: SessionPayload,
     @Body() dto: ChatMessageInputDto,
   ): Promise<ChatMessageDto> {
-    if (dto.role === MessageRole.USER) {
-      const userMessageCount = await this.chatService.getUserMessageCount(
-        session.sessionId,
-      );
-      if (userMessageCount > MAX_QUESTIONS_PER_SESSION) {
-        throw new HttpException(
-          {
-            statusCode: HttpStatus.TOO_MANY_REQUESTS,
-            message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
-            limit: MAX_QUESTIONS_PER_SESSION,
-          },
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-    }
+    // 질문 한도는 createMessage가 저장과 같은 트랜잭션에서 확인한다.
     return this.chatService.createMessage(session.sessionId, dto);
   }
 
@@ -178,10 +164,11 @@ export class ChatController {
   }
 
   @Post(':messageId/regenerate/stream')
+  @ApiConsumes('application/json', 'multipart/form-data')
   @ApiOperation({
     summary: 'BAD 피드백 답변 1회 재생성',
     description:
-      'BAD 피드백이 저장된 assistant 답변에 대해 직전 사용자 질문으로 답변을 한 번만 재생성합니다. 재생성은 세션 질문 횟수 제한에 포함되지 않습니다.',
+      'BAD 피드백이 저장된 assistant 답변에 대해 직전 사용자 질문으로 답변을 한 번만 재생성합니다. 재생성은 질문 한도에 포함되지 않습니다. SSE 이벤트 형식은 `POST chat/stream`과 같습니다.',
   })
   @ApiParam({
     name: 'messageId',
@@ -208,7 +195,8 @@ export class ChatController {
   })
   @ApiResponse({
     status: 404,
-    description: '현재 세션에서 접근 가능한 메시지 또는 원본 질문을 찾을 수 없음',
+    description:
+      '현재 세션에서 접근 가능한 메시지 또는 원본 질문을 찾을 수 없음',
   })
   async regenerateBadFeedbackAnswer(
     @CurrentSession() session: SessionPayload,
@@ -216,9 +204,21 @@ export class ChatController {
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
+    if (req.isMultipart?.()) {
+      return this.imageChat.stream(session, req, reply, messageId, 'widget');
+    }
     const target = await this.chatService.getAnswerRegenerationTarget(
       session.sessionId,
       messageId,
+      (metadata) => {
+        const images = (
+          metadata?.platform as { images?: unknown[] } | undefined
+        )?.images;
+        if (images?.length)
+          throw new BadRequestException(
+            'Reattach the original images with multipart/form-data',
+          );
+      },
     );
 
     return this.chatOrchestrationService.handleStreamingResponse(
@@ -229,6 +229,7 @@ export class ChatController {
       {
         persistUserMessage: false,
         historyBefore: target.historyBefore,
+        widgetKeyId: session.widgetKeyId,
         assistantMetadata: {
           regeneratedFromMessageId: target.originalMessageId,
           regeneratedFromFeedback: FeedbackRating.BAD,
@@ -238,10 +239,47 @@ export class ChatController {
   }
 
   @Post('chat/stream')
+  @ApiConsumes('application/json', 'multipart/form-data')
+  @ApiBody({
+    schema: {
+      oneOf: [
+        {
+          type: 'object',
+          required: ['question'],
+          properties: { question: { type: 'string', maxLength: 4000 } },
+        },
+        {
+          type: 'object',
+          required: ['payload'],
+          properties: {
+            payload: {
+              type: 'string',
+              description:
+                'JSON 문자열 {question?, images:[{id: UUID}]} — 첨부 ID별 image_<UUID> 파일 필드 필요',
+            },
+          },
+          additionalProperties: { type: 'string', format: 'binary' },
+        },
+      ],
+    },
+  })
   @ApiOperation({
     summary: '사용자 질문 처리 및 스트리밍 답변 생성',
-    description:
+    description: [
       '사용자 질문을 받아 LLM과 MCP Tool을 조합하여 답변을 스트리밍으로 생성합니다. Server-Sent Events (SSE) 형식으로 응답을 전송합니다.',
+      '모든 위젯에서 정적 JPEG·PNG·WebP를 첨부할 수 있습니다. multipart의 payload={question?, images:[{id}]}와 image_<id> 파일 필드를 사용하며, 이미지 한 장당 10MiB·요청당 최대 3장입니다. 별도 이미지 허용 설정은 없습니다.',
+      '',
+      '각 이벤트는 `data: <JSON>` 한 줄입니다.',
+      '- `{"content": "..."}`: 답변 조각. 이어 붙이면 전체 답변이 됩니다.',
+      '- `{"type": "step", "id", "kind", "label", "status", "thought"?, "resultCount"?}`: 첫 검색이 비었거나 약해 자료를 다시 찾을 때만 답변 전에 옵니다. 같은 `id`가 `running` → `done`/`failed`로 다시 오면 상태를 갱신합니다. `kind`는 `research`(조사 전체) 또는 도구 이름, `label`은 서버가 만든 진행 문구, `thought`는 모델이 남긴 짧은 설명입니다.',
+      '- `{"type": "resources", "resources": [...]}`: 참조 문서. 답변 뒤에 옵니다.',
+      '- `{"type": "sources", "sources": [{"kind": "notice", "id", "title", "url"}]}`: 리소스 센터 밖의 출처(Ziggle 공지). `url`은 그대로 여는 외부 링크입니다. 답변 뒤에 옵니다.',
+      '- `{"type": "web_sources", "sources": [{"kind": "web", "id", "title", "url", "official"}]}`: 웹 검색 결과 출처. `title`은 도메인, `official`은 학교 공식 도메인 여부입니다. 답변 뒤에 옵니다.',
+      '- `{"error": "..."}`: 오류. 스트림이 끝납니다.',
+      '- `[DONE]`: 정상 종료.',
+      '',
+      '`step`·`sources`·`web_sources` 이벤트에는 `content`·`error` 키가 없어 이를 모르는 클라이언트는 무시합니다. 완료된 단계와 출처는 assistant 메시지 `metadata.steps`, `metadata.sources`, `metadata.webSources`에도 저장됩니다.',
+    ].join('\n'),
   })
   @ApiResponse({
     status: 200,
@@ -267,7 +305,8 @@ export class ChatController {
   })
   @ApiResponse({
     status: 429,
-    description: '세션당 질문 횟수 초과 (최대 5회)',
+    description:
+      '사용자별 질문 한도 초과 (위젯 키에 한도를 설정한 경우, 본문에 limit 포함) 또는 일시적 요청 과다 (limit 없음)',
   })
   @ApiResponse({
     status: 500,
@@ -275,28 +314,29 @@ export class ChatController {
   })
   async chatStream(
     @CurrentSession() session: SessionPayload,
-    @Body() dto: ChatRequestDto,
+    @Body() body: unknown,
     @Req() req: FastifyRequest,
     @Res() reply: FastifyReply,
   ): Promise<void> {
-    const userMessageCount = await this.chatService.getUserMessageCount(
-      session.sessionId,
-    );
-    if (userMessageCount > MAX_QUESTIONS_PER_SESSION) {
-      throw new HttpException(
-        {
-          statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          message: `이 세션에서는 최대 ${MAX_QUESTIONS_PER_SESSION}개의 질문만 가능합니다.`,
-          limit: MAX_QUESTIONS_PER_SESSION,
-        },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+    // SSE가 시작되면 HTTP 429를 보낼 수 없으므로 스트리밍 전에 먼저 확인한다.
+    await this.chatService.assertQuestionAllowed(session.sessionId);
+    if (req.isMultipart?.()) {
+      return this.imageChat.stream(session, req, reply, undefined, 'widget');
     }
+    const dto = (await new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }).transform(body, {
+      type: 'body',
+      metatype: ChatRequestDto,
+    })) as ChatRequestDto;
     return this.chatOrchestrationService.handleStreamingResponse(
       session.sessionId,
       dto.question,
       reply,
       req,
+      { widgetKeyId: session.widgetKeyId },
     );
   }
 

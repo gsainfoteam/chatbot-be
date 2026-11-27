@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Inject,
   InternalServerErrorException,
@@ -13,8 +15,9 @@ import {
   messageFeedbacks,
   messages,
   sessions,
+  widgetKeys,
 } from '../../db';
-import { eq, and, lt, lte, desc, count, sql } from 'drizzle-orm';
+import { eq, and, gt, lt, lte, desc, sql } from 'drizzle-orm';
 import { UsageService, computeBadAnswerDelta } from '../../usage/usage.service';
 import {
   ChatMessageInputDto,
@@ -27,13 +30,14 @@ import {
   MessageFeedbackDto,
   MessageFeedbackInputDto,
 } from '../../common/dto/message-feedback.dto';
-import { MAX_QUESTIONS_PER_SESSION } from '../constants';
+import { CONTEXT_MESSAGE_LIMIT } from '../constants';
 import { Trace } from '@gsainfoteam/nest-observability';
 
 export interface AnswerRegenerationTarget {
   question: string;
   originalMessageId: string;
   historyBefore: Date;
+  userMetadata?: Record<string, unknown>;
 }
 
 @Trace()
@@ -112,12 +116,77 @@ export class ChatService {
     return new Date(String(value));
   }
 
-  async getUserMessageCount(sessionId: string): Promise<number> {
-    const [row] = await this.db
-      .select({ count: count() })
+  /**
+   * 위젯 키에 설정된 사용자별 질문 한도(최근 windowSeconds초 동안 limit개)를 넘었으면 429를 던진다.
+   * 같은 endUserKey의 세션은 함께 세고, endUserKey가 없으면 현재 세션만 센다.
+   * tx를 넘기면 같은 사용자를 트랜잭션 잠금으로 직렬화한 뒤 세므로 동시 요청도 한도를 넘지 못한다.
+   */
+  async assertQuestionAllowed(
+    sessionId: string,
+    tx?: Parameters<Parameters<Database['transaction']>[0]>[0],
+  ): Promise<void> {
+    const db = tx ?? this.db;
+    const [session] = await db
+      .select({
+        widgetKeyId: sessions.widgetKeyId,
+        channel: sessions.channel,
+        endUserKey: sessions.endUserKey,
+        limit: widgetKeys.questionLimit,
+        windowSeconds: widgetKeys.questionLimitWindowSeconds,
+      })
+      .from(sessions)
+      .innerJoin(widgetKeys, eq(widgetKeys.id, sessions.widgetKeyId))
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
+    if (!session) throw new NotFoundException('Session not found');
+    // Browser-managed platform conversations keep their existing unlimited question policy.
+    if (session.channel === 'platform') return;
+    const { widgetKeyId, endUserKey, limit, windowSeconds } = session;
+    if (limit == null || windowSeconds == null) return;
+
+    if (tx) {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${endUserKey ?? sessionId}, 0))`,
+      );
+    }
+    // created_at은 DB 시계로 저장되므로 기간도 DB 시계로 잰다.
+    // 잠금을 기다린 뒤의 시각이어야 하므로 트랜잭션 시작 시각(localtimestamp) 대신 statement_timestamp()를 쓴다.
+    const [oldestCounted] = await db
+      .select({
+        retryAfterSeconds: sql<number>`ceil(extract(epoch from ${messages.createdAt} + make_interval(secs => ${windowSeconds}) - statement_timestamp()::timestamp))::int`,
+      })
       .from(messages)
-      .where(and(eq(messages.sessionId, sessionId), eq(messages.role, 'user')));
-    return Number(row?.count ?? 0);
+      .innerJoin(sessions, eq(sessions.id, messages.sessionId))
+      .where(
+        and(
+          endUserKey
+            ? and(
+                eq(sessions.widgetKeyId, widgetKeyId),
+                eq(sessions.endUserKey, endUserKey),
+              )
+            : eq(messages.sessionId, sessionId),
+          eq(messages.role, 'user'),
+          gt(
+            messages.createdAt,
+            sql`statement_timestamp()::timestamp - make_interval(secs => ${windowSeconds})`,
+          ),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .offset(limit - 1)
+      .limit(1);
+    if (!oldestCounted) return;
+
+    throw new HttpException(
+      {
+        statusCode: HttpStatus.TOO_MANY_REQUESTS,
+        message: '질문 한도를 모두 사용했습니다. 잠시 후 다시 질문해 주세요.',
+        limit,
+        windowSeconds,
+        retryAfterSeconds: oldestCounted.retryAfterSeconds,
+      },
+      HttpStatus.TOO_MANY_REQUESTS,
+    );
   }
 
   /**
@@ -130,7 +199,7 @@ export class ChatService {
     const result = await this.getMessages(
       sessionId,
       undefined,
-      MAX_QUESTIONS_PER_SESSION,
+      CONTEXT_MESSAGE_LIMIT,
       beforeCreatedAt,
     );
     return result.messages;
@@ -199,6 +268,24 @@ export class ChatService {
     sessionId: string,
     dto: ChatMessageInputDto,
   ): Promise<ChatMessageDto> {
+    // Check the question limit and insert in one transaction so concurrent requests cannot exceed it.
+    if (dto.role === MessageRole.USER) {
+      return this.db.transaction(async (tx) => {
+        await this.assertQuestionAllowed(sessionId, tx);
+        const [message] = await tx
+          .insert(messages)
+          .values({
+            sessionId,
+            role: dto.role,
+            content: dto.content,
+            metadata: dto.metadata ?? null,
+            // 한도 판정과 같은 기준으로, 잠금을 기다린 뒤의 시각에 저장한다(now()는 트랜잭션 시작 시각).
+            createdAt: sql`statement_timestamp()`,
+          })
+          .returning();
+        return this.toMessageDto(message);
+      });
+    }
     // user 메시지는 total_answers 집계 대상이 아니므로 단순 insert.
     if (dto.role !== MessageRole.ASSISTANT) {
       const [newMessage] = await this.db
@@ -337,6 +424,7 @@ export class ChatService {
   async getAnswerRegenerationTarget(
     sessionId: string,
     messageId: string,
+    validateOriginal?: (metadata: Record<string, unknown> | null) => void,
   ): Promise<AnswerRegenerationTarget> {
     return this.db.transaction(async (tx) => {
       const target = this.firstRawRow(
@@ -396,7 +484,11 @@ export class ChatService {
         target.created_at ?? target.createdAt,
       );
       const [previousUserMessage] = await tx
-        .select({ content: messages.content, createdAt: messages.createdAt })
+        .select({
+          content: messages.content,
+          createdAt: messages.createdAt,
+          metadata: messages.metadata,
+        })
         .from(messages)
         .where(
           and(
@@ -412,6 +504,9 @@ export class ChatService {
         throw new NotFoundException('Original user question not found');
       }
 
+      const userMetadata = this.toMetadataRecord(previousUserMessage.metadata);
+      validateOriginal?.(userMetadata);
+
       await tx.execute(sql`
         UPDATE messages
         SET metadata = coalesce(metadata, '{}'::jsonb) || jsonb_build_object(
@@ -425,6 +520,7 @@ export class ChatService {
         question: previousUserMessage.content,
         originalMessageId: messageId,
         historyBefore: previousUserMessage.createdAt,
+        ...(userMetadata ? { userMetadata } : {}),
       };
     });
   }

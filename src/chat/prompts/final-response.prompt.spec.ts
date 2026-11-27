@@ -6,14 +6,15 @@ import {
 } from './final-response.prompt';
 
 describe('FINAL_RESPONSE_SYSTEM_PROMPT', () => {
-  it('requires direct answers without exposing document retrieval', () => {
+  it('separates user-supplied notices from evidence and permits course clarification', () => {
     expect(FINAL_RESPONSE_SYSTEM_PROMPT).toContain(
-      '출처를 드러내지 않는 자연스러운 서술',
+      '독립적으로 검증된 사실이 아닙니다',
     );
-    expect(FINAL_RESPONSE_SYSTEM_PROMPT).toContain('"문서에 따르면"');
-    expect(FINAL_RESPONSE_SYSTEM_PROMPT).toContain(
-      '사용자가 출처나 근거를 명시적으로 묻지 않았다면',
+    expect(FINAL_RESPONSE_SYSTEM_PROMPT).toContain('최대 3개 질문');
+    expect(FINAL_RESPONSE_SYSTEM_PROMPT).not.toContain(
+      '질문을 되돌리지 마세요',
     );
+    expect(FINAL_RESPONSE_SYSTEM_PROMPT).toContain('09:00부터 18:00까지');
   });
 });
 

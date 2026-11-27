@@ -29,6 +29,7 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "test:unit": "jest --testPathIgnorePatterns=e2e",
+    "test:chat:smoke": "node scripts/chat-smoke.mjs",
     "test:all": "bun run test:unit && bun run test:e2e",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
@@ -46,6 +47,7 @@
     "@gsainfoteam/nest-observability": "^0.0.9",
     "@kubiks/otel-drizzle": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.25.2",
+    "@napi-rs/canvas": "^1.0.0",
     "@nestjs/axios": "^4.0.1",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
@@ -53,6 +55,7 @@
     "@nestjs/jwt": "^10.2.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-fastify": "^11.1.11",
+    "@nestjs/schedule": "^12.0.4",
     "@nestjs/swagger": "^11.2.4",
     "axios": "^1.13.2",
     "class-transformer": "^0.5.1",
@@ -69,7 +72,8 @@
     "pg": "^8.16.3",
     "postgres": "^3.4.8",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1"
+    "rxjs": "^7.8.1",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
@@ -114,7 +118,7 @@
       "^.+\\.(t|j)s$": "ts-jest"
     },
     "transformIgnorePatterns": [
-      "node_modules/(?!nanoid)"
+      "node_modules/(?!(nanoid|@nestjs/schedule))"
     ],
     "collectCoverageFrom": [
       "**/*.(t|j)s"

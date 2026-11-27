@@ -22,7 +22,6 @@ export const SUGGESTED_QUESTIONS_TIME_ZONE = 'Asia/Seoul';
  * 시점에 묶여 재배포마다 밀린다. cron 표현식은 절대 시각이라 그 문제가 없다.
  *
  * 기존 공지를 한 번에 채우는 일은 이 작업이 하지 않는다. 최신 창만 본다.
- * 그쪽은 `src/scripts/backfill-suggested-questions.ts`를 따로 돌린다.
  */
 @Injectable()
 export class SuggestedQuestionsWorker implements OnModuleDestroy {

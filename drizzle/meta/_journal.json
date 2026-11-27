@@ -145,8 +145,15 @@
     {
       "idx": 20,
       "version": "7",
-      "when": 1795073438304,
-      "tag": "0020_platform_sessions",
+      "when": 1795679297667,
+      "tag": "0020_suggested_questions",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795765769933,
+      "tag": "0021_platform_sessions",
       "breakpoints": true
     }
   ]
